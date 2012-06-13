@@ -47,7 +47,8 @@ COMMON_SUBDIRS= \
 	lintdump \
 	protocmp \
 	protolist \
-	scripts
+	scripts \
+	git
 
 #
 #  special versions of commands for use only in build
