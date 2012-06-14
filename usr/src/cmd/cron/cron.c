@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -72,6 +74,7 @@
 #include <libzoneinfo.h>
 
 #include "cron.h"
+#include "cron_scf.h"
 
 /*
  * #define	DEBUG
@@ -146,6 +149,9 @@ error for each of your commands."
 #define	PIDERR		"unexpected pid returned %d (ignored)"
 #define	CRONTABERR	"Subject: Your crontab file has an error in it\n\n"
 #define	CRONOUT		"Subject: Output from \"cron\" command\n\n"
+#define	CRONOUTNEW	"Subject: Cron <%s@%s> %s\n\n"
+#define	ATOUT		"Subject: Output from \"at\" job\n\n"
+#define	ATOUTNEW	"Subject: At <%s@%s> %s\n\n"
 #define	MALLOCERR	"out of space, cannot create new string\n"
 
 #define	DIDFORK didfork
@@ -355,6 +361,12 @@ static int reset_needed; /* set to 1 when cron(1M) needs to re-initialize */
 
 static int		refresh;
 static sigset_t		defmask, sigmask;
+
+/*
+ * Configuration from smf(5)
+ */
+static int legacy_subject;
+static int extra_headers;
 
 /*
  * BSM hooks
@@ -675,6 +687,7 @@ initialize(int firstpass)
 	(void) fprintf(stderr, "in initialize\n");
 #endif
 	if (firstpass) {
+		int val;
 		/* for mail(1), make sure messages come from root */
 		if (putenv("LOGNAME=root") != 0) {
 			crabort("cannot expand env variable",
@@ -704,6 +717,27 @@ initialize(int firstpass)
 				 */
 			}
 			crabort("cannot start cron; FIFO exists", CONSOLE_MSG);
+		}
+		switch (init_scf()) {
+		case 0:
+			val = get_config_boolean("legacy_subject");
+			legacy_subject = (val < 0 ? 0 : val);
+			val = get_config_boolean("extra_headers");
+			extra_headers = (val < 0 ? 1 : val);
+			fini_scf();
+			break;
+		case -2:
+			/*
+			 * Even if we aren't running under smf(5) allow
+			 * the user to invoke /usr/sbin/cron directly, but
+			 * assume that the new behaviour is what they want.
+			 */
+			legacy_subject = 0;
+			extra_headers = 1;
+			break;
+		default:
+			crabort("could not initialise libscf",
+			    REMOVE_FIFO|CONSOLE_MSG);
 		}
 	}
 
@@ -2724,30 +2758,45 @@ mail_result(struct usr *p, struct runinfo *pr, size_t filesize)
 	if (mailpipe == NULL)
 		exit(127);
 	(void) fprintf(mailpipe, "To: %s\n", p->name);
-	if (pr->jobtype == CRONEVENT) {
+	if (extra_headers) {
+		(void) fprintf(mailpipe, "Auto-Submitted: auto-generated\n");
+		(void) fprintf(mailpipe, "X-Mailer: cron (%s %s)\n",
+		    name.sysname, name.release);
+		(void) fprintf(mailpipe, "X-Cron-User: %s\n", p->name);
+		(void) fprintf(mailpipe, "X-Cron-Host: %s\n", name.nodename);
+		(void) fprintf(mailpipe, "X-Cron-Job-Name: %s\n", pr->jobname);
+		(void) fprintf(mailpipe, "X-Cron-Job-Type: %s\n",
+		    (pr->jobtype == CRONEVENT ? "cron" : "at"));
+	}
+	if (legacy_subject && pr->jobtype == CRONEVENT) {
 		(void) fprintf(mailpipe, CRONOUT);
 		(void) fprintf(mailpipe, "Your \"cron\" job on %s\n",
 		    name.nodename);
 		if (pr->jobname != NULL) {
 			(void) fprintf(mailpipe, "%s\n\n", pr->jobname);
 		}
-	} else {
-		(void) fprintf(mailpipe, "Subject: Output from \"at\" job\n\n");
+	} else if (legacy_subject) {
+		(void) fprintf(mailpipe, ATOUT);
 		(void) fprintf(mailpipe, "Your \"at\" job on %s\n",
 		    name.nodename);
 		if (pr->jobname != NULL) {
 			(void) fprintf(mailpipe, "\"%s\"\n\n", pr->jobname);
 		}
+	} else {
+		char *fmt = (pr->jobtype == CRONEVENT ? CRONOUTNEW : ATOUTNEW);
+		(void) fprintf(mailpipe, fmt, p->name, name.nodename,
+		    pr->jobname);
 	}
 	/* Tmp. file is fopen'ed w/ "r",  secure open */
 	if (filesize > 0 &&
 	    (st = fopen(pr->outfile, "r")) != NULL) {
-		(void) fprintf(mailpipe,
-		    "produced the following output:\n\n");
+		if (legacy_subject)
+			(void) fprintf(mailpipe,
+			    "produced the following output:\n\n");
 		while ((nbytes = fread(iobuf, sizeof (char), BUFSIZ, st)) != 0)
 			(void) fwrite(iobuf, sizeof (char), nbytes, mailpipe);
 		(void) fclose(st);
-	} else {
+	} else if (legacy_subject) {
 		(void) fprintf(mailpipe, "completed.\n");
 	}
 	(void) pclose(mailpipe);

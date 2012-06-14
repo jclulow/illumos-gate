@@ -97,6 +97,15 @@
 			value='solaris.smf.manage.cron' />
 	</property_group>
 
+	<property_group name='config' type='application'>
+		<!-- use legacy (static) subject string in mail? -->
+		<propval name='legacy_subject' type='boolean'
+			value='false' />
+		<!-- include X-Mailer, X-Cron-* headers in mail? -->
+		<propval name='extra_headers' type='boolean'
+			value='true' />
+	</property_group>
+
 	<instance name='default' enabled='false' />
 
 	<stability value='Unstable' />

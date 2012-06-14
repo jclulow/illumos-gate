@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
+#
 
 DEFAULTFILES =	cron.dfl
 
@@ -72,7 +74,7 @@ GETRESPOBJ=	getresponse.o
 COMMONOBJ1=	permit.o
 COMMONOBJ2=	funcs.o
 COMMONOBJS=	$(COMMONOBJ1) $(COMMONOBJ2)
-CRONOBJS=	cron.o elm.o
+CRONOBJS=	cron.o elm.o cron_scf.o
 ATOBJS=		at.o att1.o att2.o
 XPG4OBJS=	values-xpg4.o
 ATRMOBJS1=	atrm.o
@@ -129,7 +131,7 @@ at :=		LDLIBS += -lproject -lsecdb
 at.xpg4 :=	LDLIBS += -lproject -lsecdb
 atq :=		LDLIBS += -lsecdb
 atrm :=		LDLIBS += -lsecdb
-cron :=		LDLIBS += -lpam -lproject -lcontract -lzoneinfo
+cron :=		LDLIBS += -lpam -lproject -lcontract -lzoneinfo -lscf
 crontab :=	LDLIBS += -lsecdb -lpam -lzoneinfo
 crontab.xpg6 :=	LDLIBS += -lsecdb -lpam -lzoneinfo
 crontab.xpg4 :=	LDLIBS += -lsecdb -lpam -lzoneinfo
