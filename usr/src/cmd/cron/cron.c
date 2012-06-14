@@ -72,6 +72,7 @@
 #include <libzoneinfo.h>
 
 #include "cron.h"
+#include "cron_scf.h"
 
 /*
  * #define	DEBUG
@@ -146,6 +147,7 @@ error for each of your commands."
 #define	PIDERR		"unexpected pid returned %d (ignored)"
 #define	CRONTABERR	"Subject: Your crontab file has an error in it\n\n"
 #define	CRONOUT		"Subject: Output from \"cron\" command\n\n"
+#define	CRONOUTNEW	"Subject: Cron <%s@%s>: %s\n\n"
 #define	MALLOCERR	"out of space, cannot create new string\n"
 
 #define	DIDFORK didfork
@@ -355,6 +357,12 @@ static int reset_needed; /* set to 1 when cron(1M) needs to re-initialize */
 
 static int		refresh;
 static sigset_t		defmask, sigmask;
+
+/*
+ * Configuration from smf(5)
+ */
+static int legacy_subject;
+static int extra_headers;
 
 /*
  * BSM hooks
@@ -675,6 +683,7 @@ initialize(int firstpass)
 	(void) fprintf(stderr, "in initialize\n");
 #endif
 	if (firstpass) {
+		int val;
 		/* for mail(1), make sure messages come from root */
 		if (putenv("LOGNAME=root") != 0) {
 			crabort("cannot expand env variable",
@@ -704,6 +713,21 @@ initialize(int firstpass)
 				 */
 			}
 			crabort("cannot start cron; FIFO exists", CONSOLE_MSG);
+		}
+		switch (init_scf()) {
+		case 0:
+			val = get_config_boolean("legacy_subject");
+			legacy_subject = (val < 0 ? 0 : val);
+			val = get_config_boolean("extra_headers");
+			extra_headers = (val < 0 ? 1 : val);
+			break;
+		case -2:
+			crabort("cron not running under smf(5)",
+			    REMOVE_FIFO|CONSOLE_MSG);
+			break;
+		default:
+			crabort("could not initialise libscf",
+			    REMOVE_FIFO|CONSOLE_MSG);
 		}
 	}
 
@@ -2724,8 +2748,21 @@ mail_result(struct usr *p, struct runinfo *pr, size_t filesize)
 	if (mailpipe == NULL)
 		exit(127);
 	(void) fprintf(mailpipe, "To: %s\n", p->name);
+	if (extra_headers) {
+		(void) fprintf(mailpipe, "X-Mailer: cron (%s %s)\n",
+		    name.sysname, name.release);
+		(void) fprintf(mailpipe, "X-Cron-User: %s\n", p->name);
+		(void) fprintf(mailpipe, "X-Cron-Host: %s\n", name.nodename);
+		(void) fprintf(mailpipe, "X-Cron-Job-Name: %s\n", pr->jobname);
+		(void) fprintf(mailpipe, "X-Cron-Job-Type: %s\n",
+		    (pr->jobtype == CRONEVENT ? "cron" : "at"));
+	}
 	if (pr->jobtype == CRONEVENT) {
-		(void) fprintf(mailpipe, CRONOUT);
+		if (legacy_subject)
+			(void) fprintf(mailpipe, CRONOUT);
+		else
+			(void) fprintf(mailpipe, CRONOUTNEW,
+			    p->name, name.nodename, pr->jobname);
 		(void) fprintf(mailpipe, "Your \"cron\" job on %s\n",
 		    name.nodename);
 		if (pr->jobname != NULL) {
