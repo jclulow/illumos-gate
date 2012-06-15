@@ -1,0 +1,105 @@
+<?xml version="1.0"?>
+<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
+<!--
+ Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
+
+ CDDL HEADER START
+
+ The contents of this file are subject to the terms of the
+ Common Development and Distribution License (the "License").
+ You may not use this file except in compliance with the License.
+
+ You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+ or http://www.opensolaris.org/os/licensing.
+ See the License for the specific language governing permissions
+ and limitations under the License.
+
+ When distributing Covered Code, include this CDDL HEADER in each
+ file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+ If applicable, add the following below this CDDL HEADER, with the
+ fields enclosed by brackets "[]" replaced with your own identifying
+ information: Portions Copyright [yyyy] [name of copyright owner]
+
+ CDDL HEADER END
+
+	NOTE:  This service manifest is not editable; its contents will
+	be overwritten by package or patch operations, including
+	operating system upgrade.  Make customizations in a different
+	file.
+-->
+
+<service_bundle type='manifest' name='crypto-ca-certificates:certsdir'>
+
+<service
+	name='system/certsdir'
+	type='service'
+	version='1'>
+
+	<create_default_instance enabled='true' />
+
+	<single_instance />
+
+	<dependency
+		name='filesystem-minimal'
+		type='service'
+		grouping='require_all'
+		restart_on='none'>
+		<service_fmri value='svc:/system/filesystem/minimal' />
+	</dependency>
+
+	<exec_method
+		type='method'
+		name='start'
+		exec='/usr/lib/certsdir'
+		timeout_seconds='60' />
+
+	<exec_method
+		type='method'
+		name='stop'
+		exec=':true'
+		timeout_seconds='0' />
+
+	<exec_method
+		type='method'
+		name='refresh'
+		exec='/usr/lib/certsdir'
+		timeout_seconds='60' />
+
+	<property_group name='startd' type='framework'>
+		<propval name='duration' type='astring' value='transient' />
+	</property_group>
+
+	<property_group name='config' type='application'>
+		<propval name='verbose' type='boolean' value='false' />
+		<!-- remove symlinks from the link directory that
+		     point to non-existent files: -->
+		<propval name='remove_dangling' type='boolean' value='true' />
+		<!-- remove symlinks from the link directory that
+		     point to files from somewhere outside the CA file directory -->
+		<propval name='remove_unknown' type='boolean' value='false' />
+		<!-- create symlinks to files from the CA file directory that
+		     are missing from the link directory -->
+		<propval name='create_missing' type='boolean' value='true' />
+		<!-- recreate symlinks for files from the CA file directory that
+		     are linked with an incorrect hash in the link directory -->
+		<propval name='correct_wrong' type='boolean' value='true' />
+		<!-- the directory with CA certificate files -->
+		<propval name='certs_file_dir' type='astring' value='/etc/certs/CA' />
+		<!-- the directory with OpenSSL certificate hash symlinks -->
+		<propval name='certs_link_dir' type='astring' value='/etc/openssl/certs' />
+		<!-- the OpenSSL binary to use -->
+		<propval name='openssl' type='astring' value='/usr/bin/openssl' />
+	</property_group>
+
+	<stability value='Unstable' />
+
+	<template>
+		<common_name>
+			<loctext xml:lang='C'>
+certsdir: OpenSSL certificates directory symlink populator
+			</loctext>
+		</common_name>
+	</template>
+</service>
+
+</service_bundle>
