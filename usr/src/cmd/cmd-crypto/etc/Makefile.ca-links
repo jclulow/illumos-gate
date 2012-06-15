@@ -176,10 +176,4 @@ CAFILES = ABAecom_sub.,_Am._Bankers_Assn._Root_CA.pem	\
 IETCCAFILES +=		$(CAFILES:%=$(ROOTETCCADIR)/%)
 
 $(ROOTETCCADIR)/%:    $(CASRCDIR)/%
-	$(INS.file); \
-	ROOTCALINK=$(ROOTETCCALINKDIR)/`$(OPENSSL) x509 -noout -hash -in $<`.0; \
-	$(RM) $$ROOTCALINK; \
-	$(LN) -s $(CATARGDIR)/$(@F) $$ROOTCALINK
-	-ROOTCALINK=$(ROOTETCCALINKDIR)/`$(OPENSSL) x509 -noout -subject_hash_old -in $< 2>/dev/null`.0; \
-	test "$$ROOTCALINK" = "$(ROOTETCCALINKDIR)/.0" || $(RM) $$ROOTCALINK; \
-	test "$$ROOTCALINK" = "$(ROOTETCCALINKDIR)/.0" || $(LN) -s $(CATARGDIR)/$(@F) $$ROOTCALINK
+	$(INS.file)
