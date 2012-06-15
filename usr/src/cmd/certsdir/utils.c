@@ -99,7 +99,7 @@ xreadlink(char *path)
 	int len;
 
 	len = readlink(path, tmp, sizeof (tmp) - 1);
-	if (len == -1 || len >= (int) sizeof (tmp))
+	if (len == -1 || len >= (int)sizeof (tmp))
 		err(SMF_EXIT_ERR_FATAL, _("readlink failure on path: %s"),
 		    path);
 	tmp[len] = '\0'; /* NUL-terminate what readlink gives us */
@@ -118,8 +118,8 @@ xrealpath(char *path)
 		if (errno == ENOENT)
 			return (xstrdup(path));
 		else
-			err(SMF_EXIT_ERR_FATAL, _("realpath failure on path: %s"),
-			    path);
+			err(SMF_EXIT_ERR_FATAL, _("realpath failure on"
+			    " path: %s"), path);
 	}
 
 	return (xstrdup(tmp));
