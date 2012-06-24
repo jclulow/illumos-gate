@@ -46,7 +46,8 @@ SHFILES= \
 	webrev \
 	which_scm \
 	ws \
-	xref
+	xref \
+	buildstamp
 
 PERLFILES= \
 	check_rtime \
