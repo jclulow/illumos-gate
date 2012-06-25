@@ -734,7 +734,7 @@ dtrace_canload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 			return (1);
 
 		if ((p = curthread->t_procp) != NULL && DTRACE_INRANGE(addr,
-		    sz, curthread->t_procp, sizeof (proc_t))) {
+		    sz, p, sizeof (proc_t))) {
 			return (1);
 		}
 
