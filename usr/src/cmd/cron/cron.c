@@ -148,6 +148,8 @@ error for each of your commands."
 #define	CRONTABERR	"Subject: Your crontab file has an error in it\n\n"
 #define	CRONOUT		"Subject: Output from \"cron\" command\n\n"
 #define	CRONOUTNEW	"Subject: Cron <%s@%s>: %s\n\n"
+#define	ATOUT		"Subject: Output from \"at\" job\n\n"
+#define	ATOUTNEW	"Subject: At <%s@%s>: %s\n\n"
 #define	MALLOCERR	"out of space, cannot create new string\n"
 
 #define	DIDFORK didfork
@@ -2757,34 +2759,35 @@ mail_result(struct usr *p, struct runinfo *pr, size_t filesize)
 		(void) fprintf(mailpipe, "X-Cron-Job-Type: %s\n",
 		    (pr->jobtype == CRONEVENT ? "cron" : "at"));
 	}
-	if (pr->jobtype == CRONEVENT) {
-		if (legacy_subject)
-			(void) fprintf(mailpipe, CRONOUT);
-		else
-			(void) fprintf(mailpipe, CRONOUTNEW,
-			    p->name, name.nodename, pr->jobname);
+	if (legacy_subject && pr->jobtype == CRONEVENT) {
+		(void) fprintf(mailpipe, CRONOUT);
 		(void) fprintf(mailpipe, "Your \"cron\" job on %s\n",
 		    name.nodename);
 		if (pr->jobname != NULL) {
 			(void) fprintf(mailpipe, "%s\n\n", pr->jobname);
 		}
-	} else {
-		(void) fprintf(mailpipe, "Subject: Output from \"at\" job\n\n");
+	} else if (legacy_subject) {
+		(void) fprintf(mailpipe, ATOUT);
 		(void) fprintf(mailpipe, "Your \"at\" job on %s\n",
 		    name.nodename);
 		if (pr->jobname != NULL) {
 			(void) fprintf(mailpipe, "\"%s\"\n\n", pr->jobname);
 		}
+	} else {
+		char *fmt = (pr->jobtype == CRONEVENT ? CRONOUTNEW : ATOUTNEW);
+		(void) fprintf(mailpipe, fmt, p->name, name.nodename,
+		    pr->jobname);
 	}
 	/* Tmp. file is fopen'ed w/ "r",  secure open */
 	if (filesize > 0 &&
 	    (st = fopen(pr->outfile, "r")) != NULL) {
-		(void) fprintf(mailpipe,
-		    "produced the following output:\n\n");
+		if (legacy_subject)
+			(void) fprintf(mailpipe,
+			    "produced the following output:\n\n");
 		while ((nbytes = fread(iobuf, sizeof (char), BUFSIZ, st)) != 0)
 			(void) fwrite(iobuf, sizeof (char), nbytes, mailpipe);
 		(void) fclose(st);
-	} else {
+	} else if (legacy_subject) {
 		(void) fprintf(mailpipe, "completed.\n");
 	}
 	(void) pclose(mailpipe);
