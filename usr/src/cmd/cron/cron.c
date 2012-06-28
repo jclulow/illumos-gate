@@ -2751,6 +2751,7 @@ mail_result(struct usr *p, struct runinfo *pr, size_t filesize)
 		exit(127);
 	(void) fprintf(mailpipe, "To: %s\n", p->name);
 	if (extra_headers) {
+		(void) fprintf(mailpipe, "Auto-Submitted: auto-generated\n");
 		(void) fprintf(mailpipe, "X-Mailer: cron (%s %s)\n",
 		    name.sysname, name.release);
 		(void) fprintf(mailpipe, "X-Cron-User: %s\n", p->name);
