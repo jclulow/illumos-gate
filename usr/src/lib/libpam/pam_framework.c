@@ -1024,7 +1024,7 @@ run_stack(pam_handle_t *pamh, int flags, int type, int def_err, int ind,
 	}
 
 	/* read initial entries from /etc/pam.d/<service> */
-	if (asprintf(&service_file, "%s%s", PAM_CONFIG_DIR, service) == -1)
+	if (asprintf(&service_file, "%s%s", PAM_CONFIG_DIR, service) < 0)
 		return (PAM_SYSTEM_ERR);
 	if ((err = read_pam_conf(pamh, service_file, service, shardfile))
 	    != PAM_SUCCESS) {
@@ -2021,6 +2021,7 @@ read_pam_conf(pam_handle_t *pamh, char *config, char *service, int shardfile)
 	pamtab_t	*tpament;
 	int		error;
 	int		i = pamh->include_depth;	/* include depth */
+	int		j;
 	/*
 	 * service types:
 	 * error (-1), "auth" (0), "account" (1), "session" (2), "password" (3)
@@ -2140,6 +2141,44 @@ read_pam_conf(pam_handle_t *pamh, char *config, char *service, int shardfile)
 			free_pamconf(pamentp);
 		}
 	}
+
+	/*
+	 * If this is a shard file and we have no entries for this
+	 * module type (e.g. "account"), then generate a single
+	 * "include" rule for the shard file "other" as a fallback.
+	 */
+	if (shardfile && strcasecmp(service, "other") != 0) {
+		for (j = 0; j < PAM_NUM_MODULE_TYPES; j++) {
+			if (service_found[j + 1] == 0 &&
+			    pamh->pam_conf_info[i][j] == NULL) {
+				pamtab_t *pe = calloc(1, sizeof (pamtab_t));
+
+				pam_trace(PAM_DEBUG_CONF, "read_pam_conf(%p):"
+				    "falling back to \"other\" for module "
+				    "type \"%s\" in service \"%s\"",
+				    (void *)pamh, pam_snames[j], service);
+				if (pe == NULL) {
+					error = PAM_SYSTEM_ERR;
+					__pam_log(LOG_AUTH | LOG_ERR,
+					    "calloc: out of memory");
+					goto out;
+				}
+				pe->pam_service = strdup(service);
+				pe->pam_type = j;
+				pe->pam_flag = PAM_INCLUDE;
+				if (asprintf(&pe->module_path, "%s%s",
+				    PAM_CONFIG_DIR, "other") < 0) {
+					free(pe);
+					error = PAM_SYSTEM_ERR;
+					__pam_log(LOG_AUTH | LOG_ERR,
+					    "asprintf: out of memory");
+					goto out;
+				}
+				pamh->pam_conf_info[i][j] = pe;
+			}
+		}
+	}
+
 out:
 	(void) close_pam_conf(pam_fh);
 	if (error != PAM_SUCCESS)
@@ -2271,28 +2310,26 @@ getpath:
 		goto out;
 	}
 	if (arg[0] != '/') {
-		size_t len;
+		int ret;
 		/*
 		 * If module path does not start with "/", then
 		 * prepend PAM_LIB_DIR (/usr/lib/security/).
 		 */
-		/* sizeof (PAM_LIB_DIR) has room for '\0' */
-		len = sizeof (PAM_LIB_DIR) + sizeof (PAM_ISA_DIR) + strlen(arg);
-		if (((*pam)->module_path = malloc(len)) == NULL) {
-			__pam_log(LOG_AUTH | LOG_ERR, "strdup: out of memory");
-			goto out;
-		}
 		if ((*pam)->pam_flag & PAM_INCLUDE) {
 			/*
 			 * If this is an /etc/pam.d shard, we want to get
 			 * included files from /etc/pam.d rather than
 			 * /usr/lib/security.
 			 */
-			(void) snprintf((*pam)->module_path, len, "%s%s",
+			ret = asprintf(&(*pam)->module_path, "%s%s",
 			    (shardfile ? PAM_CONFIG_DIR : PAM_LIB_DIR), arg);
 		} else {
-			(void) snprintf((*pam)->module_path, len, "%s%s%s",
+			ret = asprintf(&(*pam)->module_path, "%s%s%s",
 			    PAM_LIB_DIR, PAM_ISA_DIR, arg);
+		}
+		if (ret < 0) {
+			__pam_log(LOG_AUTH | LOG_ERR, "asprintf: out of memory");
+			goto out;
 		}
 	} else {
 		/* Full path provided for module */
