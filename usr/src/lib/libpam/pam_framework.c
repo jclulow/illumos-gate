@@ -80,11 +80,11 @@ static void 	*open_module(pam_handle_t *, char *);
 static int	load_function(void *, char *, int (**func)());
 
 /* functions to read and store the pam.conf configuration file */
-static int	open_pam_conf(struct pam_fh **, pam_handle_t *, char *);
+static int	open_pam_conf(struct pam_fh **, pam_handle_t *, char *, int);
 static void	close_pam_conf(struct pam_fh *);
-static int	read_pam_conf(pam_handle_t *, char *);
+static int	read_pam_conf(pam_handle_t *, char *, char *, int);
 static int 	get_pam_conf_entry(struct pam_fh *, pam_handle_t *,
-    pamtab_t **);
+    pamtab_t **, char *, int);
 static char	*read_next_token(char **);
 static char	*nextline(struct pam_fh *, pam_handle_t *, int *);
 static int	verify_pam_conf(pamtab_t *, char *);
@@ -1010,14 +1010,37 @@ run_stack(pam_handle_t *pamh, int flags, int type, int def_err, int ind,
 	int	success = 0;
 	pamtab_t *modulep;
 	int	(*sm_func)();
+	char	*service;
+	char	*service_file;
+	int	shardfile = 1;
 
 	if (pamh == NULL)
 		return (PAM_SYSTEM_ERR);
 
-	/* read initial entries from pam.conf */
-	if ((err = read_pam_conf(pamh, PAM_CONFIG)) != PAM_SUCCESS) {
-		return (err);
+	(void) pam_get_item(pamh, PAM_SERVICE, (void **)&service);
+	if (service == NULL || *service == '\0') {
+		__pam_log(LOG_AUTH | LOG_ERR, "No service name");
+		return (PAM_SYSTEM_ERR);
 	}
+
+	/* read initial entries from /etc/pam.d/<service> */
+	if (asprintf(&service_file, "%s%s", PAM_CONFIG_DIR, service) == -1)
+		return (PAM_SYSTEM_ERR);
+	if ((err = read_pam_conf(pamh, service_file, service, shardfile))
+	    != PAM_SUCCESS) {
+		shardfile = 0;
+		pam_trace(PAM_DEBUG_CONF, "run_stack[%d:%s]: can't read "
+		    "service-specific conf %s", pamh->include_depth,
+		    pam_trace_cname(pamh), modulep->module_path, service_file);
+
+		/* fall back to reading initial entries from pam.conf */
+		if ((err = read_pam_conf(pamh, PAM_CONFIG, service, shardfile))
+		    != PAM_SUCCESS) {
+			return (err);
+		}
+	}
+	free(service_file);
+	service_file = NULL;
 
 	if ((modulep =
 	    pamh->pam_conf_info[pamh->include_depth][type]) == NULL) {
@@ -1053,7 +1076,8 @@ include:
 				goto exit_return;
 			}
 			if ((err = read_pam_conf(pamh,
-			    modulep->module_path)) != PAM_SUCCESS) {
+			    modulep->module_path, service, shardfile))
+			    != PAM_SUCCESS) {
 				__pam_log(LOG_AUTH | LOG_ERR,
 				    "run_stack[%d:%s]: can't read included "
 				    "conf %s", pamh->include_depth,
@@ -1911,16 +1935,18 @@ load_function(void *lfd, char *name, int (**func)())
  */
 
 static int
-open_pam_conf(struct pam_fh **pam_fh, pam_handle_t *pamh, char *config)
+open_pam_conf(struct pam_fh **pam_fh, pam_handle_t *pamh, char *config,
+    int shardfile)
 {
 	struct stat64	stb;
 	int		fd;
 
 	if ((fd = open(config, O_RDONLY)) == -1) {
-		__pam_log(LOG_AUTH | LOG_ALERT,
-		    "open_pam_conf[%d:%s]: open(%s) failed: %s",
-		    pamh->include_depth, pam_trace_cname(pamh), config,
-		    strerror(errno));
+		if (!shardfile)
+			__pam_log(LOG_AUTH | LOG_ALERT,
+			    "open_pam_conf[%d:%s]: open(%s) failed: %s",
+			    pamh->include_depth, pam_trace_cname(pamh), config,
+			    strerror(errno));
 		return (0);
 	}
 	/* Check the ownership and file modes */
@@ -1988,12 +2014,11 @@ close_pam_conf(struct pam_fh *pam_fh)
  */
 
 static int
-read_pam_conf(pam_handle_t *pamh, char *config)
+read_pam_conf(pam_handle_t *pamh, char *config, char *service, int shardfile)
 {
 	struct pam_fh	*pam_fh;
 	pamtab_t	*pamentp;
 	pamtab_t	*tpament;
-	char		*service;
 	int		error;
 	int		i = pamh->include_depth;	/* include depth */
 	/*
@@ -2002,22 +2027,16 @@ read_pam_conf(pam_handle_t *pamh, char *config)
 	 */
 	int service_found[PAM_NUM_MODULE_TYPES+1] = {0, 0, 0, 0, 0};
 
-	(void) pam_get_item(pamh, PAM_SERVICE, (void **)&service);
-	if (service == NULL || *service == '\0') {
-		__pam_log(LOG_AUTH | LOG_ERR, "No service name");
-		return (PAM_SYSTEM_ERR);
-	}
-
 	pamh->pam_conf_name[i] = strdup(config);
 	pam_trace(PAM_DEBUG_CONF, "read_pam_conf[%d:%s](%p) open(%s)",
 	    i, pam_trace_cname(pamh), (void *)pamh, config);
-	if (open_pam_conf(&pam_fh, pamh, config) == 0) {
+	if (open_pam_conf(&pam_fh, pamh, config, shardfile) == 0) {
 		return (PAM_SYSTEM_ERR);
 	}
 
 	while ((error =
-	    get_pam_conf_entry(pam_fh, pamh, &pamentp)) == PAM_SUCCESS &&
-	    pamentp) {
+	    get_pam_conf_entry(pam_fh, pamh, &pamentp, service, shardfile))
+	    == PAM_SUCCESS && pamentp) {
 
 		/* See if entry is this service and valid */
 		if (verify_pam_conf(pamentp, service)) {
@@ -2133,7 +2152,8 @@ out:
  */
 
 static int
-get_pam_conf_entry(struct pam_fh *pam_fh, pam_handle_t *pamh, pamtab_t **pam)
+get_pam_conf_entry(struct pam_fh *pam_fh, pam_handle_t *pamh, pamtab_t **pam,
+    char *service, int shardfile)
 {
 	char		*cp, *arg;
 	int		argc;
@@ -2165,16 +2185,27 @@ get_pam_conf_entry(struct pam_fh *pam_fh, pam_handle_t *pamh, pamtab_t **pam)
 	pam_trace(PAM_DEBUG_CONF,
 	    "pam.conf[%s] entry:\t%s", pam_trace_cname(pamh), current_line);
 
-	/* get service name (e.g. login, su, passwd) */
-	if ((arg = read_next_token(&cp)) == 0) {
-		__pam_log(LOG_AUTH | LOG_CRIT,
-		    "illegal pam.conf[%s] entry: %s: missing SERVICE NAME",
-		    pam_trace_cname(pamh), current_line);
-		goto out;
-	}
-	if (((*pam)->pam_service = strdup(arg)) == 0) {
-		__pam_log(LOG_AUTH | LOG_ERR, "strdup: out of memory");
-		goto out;
+	if (shardfile) {
+		/*
+		 * If this is an /etc/pam.d shard file, then the service name
+		 * comes from the file name of the shard.
+		 */
+		if (((*pam)->pam_service = strdup(service)) == 0) {
+			__pam_log(LOG_AUTH | LOG_ERR, "strdup: out of memory");
+			goto out;
+		}
+	} else {
+		/* get service name (e.g. login, su, passwd) */
+		if ((arg = read_next_token(&cp)) == 0) {
+			__pam_log(LOG_AUTH | LOG_CRIT,
+			    "illegal pam.conf[%s] entry: %s: missing SERVICE "
+			    "NAME", pam_trace_cname(pamh), current_line);
+			goto out;
+		}
+		if (((*pam)->pam_service = strdup(arg)) == 0) {
+			__pam_log(LOG_AUTH | LOG_ERR, "strdup: out of memory");
+			goto out;
+		}
 	}
 
 	/* get module type (e.g. authentication, acct mgmt) */
@@ -2252,8 +2283,13 @@ getpath:
 			goto out;
 		}
 		if ((*pam)->pam_flag & PAM_INCLUDE) {
+			/*
+			 * If this is an /etc/pam.d shard, we want to get
+			 * included files from /etc/pam.d rather than
+			 * /usr/lib/security.
+			 */
 			(void) snprintf((*pam)->module_path, len, "%s%s",
-			    PAM_LIB_DIR, arg);
+			    (shardfile ? PAM_CONFIG_DIR : PAM_LIB_DIR), arg);
 		} else {
 			(void) snprintf((*pam)->module_path, len, "%s%s%s",
 			    PAM_LIB_DIR, PAM_ISA_DIR, arg);
