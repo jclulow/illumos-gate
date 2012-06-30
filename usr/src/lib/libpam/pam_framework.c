@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #include <syslog.h>
@@ -2328,7 +2330,8 @@ getpath:
 			    PAM_LIB_DIR, PAM_ISA_DIR, arg);
 		}
 		if (ret < 0) {
-			__pam_log(LOG_AUTH | LOG_ERR, "asprintf: out of memory");
+			__pam_log(LOG_AUTH | LOG_ERR,
+			    "asprintf: out of memory");
 			goto out;
 		}
 	} else {

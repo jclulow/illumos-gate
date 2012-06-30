@@ -38,9 +38,9 @@
 #define	PAM_CONFIG_DIR	"/etc/pam.d"
 
 #define	SENTINEL0	" CDDL HEADER END"
-#define SENTINEL1	" present in this file in previous releases are " \
+#define	SENTINEL1	" present in this file in previous releases are " \
 			"still acceptable."
-#define SENTINEL2	" Authentication management"
+#define	SENTINEL2	" Authentication management"
 
 #define	LEGACY_CONTENTS	"#\n" \
 			"# Legacy PAM Configuration\n" \
@@ -259,7 +259,7 @@ find_lines(void)
 	boolean_t prelimwhitespace = B_FALSE;
 
 	t->copyfrom = f;
- 	for (pos = f; pos < f + flen; pos++) {
+	for (pos = f; pos < f + flen; pos++) {
 		switch (state) {
 		case 0:
 			switch (*pos) {
