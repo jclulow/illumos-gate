@@ -236,6 +236,7 @@ MANSOFILES =	addresses.4			\
 		md.cf.4				\
 		mdi_ib_cache.4			\
 		mdi_scsi_vhci_cache.4		\
+		pam.d.4				\
 		pci_unitaddr_persistent.4	\
 		pcie.4				\
 		qop.4				\
@@ -276,6 +277,8 @@ fbtab.4				:= SOSRC = man4/logindevperm.4
 md.cf.4				:= SOSRC = man4/md.tab.4
 
 qop.4				:= SOSRC = man4/mech.4
+
+pam.d.4				:= SOSRC = man4/pam.conf.4
 
 pcie.4				:= SOSRC = man4/pci.4
 

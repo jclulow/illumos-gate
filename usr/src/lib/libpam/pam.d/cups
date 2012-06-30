@@ -1,0 +1,4 @@
+#
+# cups service (explicit because of non-usage of pam_roles.so.1)
+#
+cups	account	required	pam_unix_account.so.1

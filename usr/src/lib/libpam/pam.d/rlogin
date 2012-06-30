@@ -1,0 +1,8 @@
+#
+# rlogin service (explicit because of pam_rhost_auth)
+#
+rlogin	auth sufficient		pam_rhosts_auth.so.1
+rlogin	auth requisite		pam_authtok_get.so.1
+rlogin	auth required		pam_dhkeys.so.1
+rlogin	auth required		pam_unix_cred.so.1
+rlogin	auth required		pam_unix_auth.so.1

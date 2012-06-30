@@ -1,0 +1,5 @@
+#
+# Kerberized rsh service
+#
+krsh	auth required		pam_unix_cred.so.1
+krsh	auth required		pam_krb5.so.1

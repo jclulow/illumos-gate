@@ -37,7 +37,19 @@ ROOTHDRDIR=	$(ROOT)/usr/include/security
 HDRDIR=		.
 
 # install pam.conf
-ETCFILES=	pam.conf
+ETCFILES=	pam.conf \
+		pam.d/cron \
+		pam.d/cups \
+		pam.d/gdm-autologin \
+		pam.d/krlogin \
+		pam.d/krsh \
+		pam.d/ktelnet \
+		pam.d/login \
+		pam.d/other \
+		pam.d/passwd \
+		pam.d/ppp \
+		pam.d/rlogin \
+		pam.d/rsh
 ROOTETC=	$(ROOT)/etc
 IETCFILES=	$(ETCFILES:%=$(ROOTETC)/%)
 

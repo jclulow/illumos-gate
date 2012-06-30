@@ -1,0 +1,20 @@
+#
+# Default definitions
+#
+# Used when a module type (e.g. "auth") is not explicitly configured for a
+# particular service (e.g. "sudo").
+#
+other	auth requisite		pam_authtok_get.so.1
+other	auth required		pam_dhkeys.so.1
+other	auth required		pam_unix_cred.so.1
+other	auth required		pam_unix_auth.so.1
+#
+other	account requisite	pam_roles.so.1
+other	account required	pam_unix_account.so.1
+#
+other	session required	pam_unix_session.so.1
+#
+other	password required	pam_dhkeys.so.1
+other	password requisite	pam_authtok_get.so.1
+other	password requisite	pam_authtok_check.so.1
+other	password required	pam_authtok_store.so.1

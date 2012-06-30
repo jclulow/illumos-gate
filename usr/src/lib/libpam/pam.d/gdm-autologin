@@ -1,0 +1,10 @@
+#
+# GDM Autologin (explicit because of pam_allow).  These need to be
+# here as historically there has been no mechanism for packages to
+# amend pam.conf as they are installed.  It will continue to be
+# shipped until downstream distributions pick it up instead.
+#
+gdm-autologin auth  required    pam_unix_cred.so.1
+gdm-autologin auth  sufficient  pam_allow.so.1
+#
+gdm-autologin account  sufficient  pam_allow.so.1
