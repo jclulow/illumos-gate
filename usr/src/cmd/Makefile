@@ -289,6 +289,7 @@ COMMON_SUBDIRS=		\
 	od		\
 	pack		\
 	pagesize	\
+	pamconv		\
 	passmgmt	\
 	passwd		\
 	pathchk		\
