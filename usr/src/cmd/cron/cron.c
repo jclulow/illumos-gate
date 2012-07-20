@@ -731,6 +731,7 @@ initialize(int firstpass)
 			crabort("could not initialise libscf",
 			    REMOVE_FIFO|CONSOLE_MSG);
 		}
+		fini_scf();
 	}
 
 	if ((msgfd = open(FIFO, O_RDWR)) < 0) {

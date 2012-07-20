@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <err.h>
+#include <assert.h>
 
 #include <libscf.h>
 
@@ -141,6 +142,8 @@ get_config_boolean(char *name)
 	scf_value_t *val = NULL;
 	uint8_t out;
 	int rc = -1;
+
+	assert(scf != NULL);
 
 	prop = scf_property_create(scf);
 	val = scf_value_create(scf);
