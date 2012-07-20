@@ -147,9 +147,9 @@ error for each of your commands."
 #define	PIDERR		"unexpected pid returned %d (ignored)"
 #define	CRONTABERR	"Subject: Your crontab file has an error in it\n\n"
 #define	CRONOUT		"Subject: Output from \"cron\" command\n\n"
-#define	CRONOUTNEW	"Subject: Cron <%s@%s>: %s\n\n"
+#define	CRONOUTNEW	"Subject: Cron <%s@%s> %s\n\n"
 #define	ATOUT		"Subject: Output from \"at\" job\n\n"
-#define	ATOUTNEW	"Subject: At <%s@%s>: %s\n\n"
+#define	ATOUTNEW	"Subject: At <%s@%s> %s\n\n"
 #define	MALLOCERR	"out of space, cannot create new string\n"
 
 #define	DIDFORK didfork
