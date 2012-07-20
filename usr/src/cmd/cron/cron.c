@@ -724,16 +724,21 @@ initialize(int firstpass)
 			legacy_subject = (val < 0 ? 0 : val);
 			val = get_config_boolean("extra_headers");
 			extra_headers = (val < 0 ? 1 : val);
+			fini_scf();
 			break;
 		case -2:
-			crabort("cron not running under smf(5)",
-			    REMOVE_FIFO|CONSOLE_MSG);
+			/*
+			 * Even if we aren't running under smf(5) allow
+			 * the user to invoke /usr/sbin/cron directly, but
+			 * assume that the new behaviour is what they want.
+			 */
+			legacy_subject = 0;
+			extra_headers = 1;
 			break;
 		default:
 			crabort("could not initialise libscf",
 			    REMOVE_FIFO|CONSOLE_MSG);
 		}
-		fini_scf();
 	}
 
 	if ((msgfd = open(FIFO, O_RDWR)) < 0) {
