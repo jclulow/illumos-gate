@@ -38,7 +38,6 @@ extern void *xmalloc(size_t); /* from funcs.c */
 static char *fmri;
 static scf_handle_t *scf;
 static scf_instance_t *inst;
-static scf_propertygroup_t *pg;
 
 /*
  * Initialise our connection to smf(5).  Returns:
@@ -51,6 +50,8 @@ init_scf(void)
 {
 	int rc = -1;
 	size_t fmrisz;
+
+	assert(scf == NULL);
 
 	scf = scf_handle_create(SCF_VERSION);
 	if (scf == NULL)
@@ -80,35 +81,25 @@ init_scf(void)
 
 have_fmri:
 
-	if ((inst = scf_instance_create(scf)) == NULL ||
-	    (pg = scf_pg_create(scf)) == NULL)
-		goto cleanup3;
+	if ((inst = scf_instance_create(scf)) == NULL)
+		goto cleanup2;
 
 	if (scf_handle_decode_fmri(scf, fmri, NULL, NULL, inst,
 	    NULL, NULL, SCF_DECODE_FMRI_EXACT) != 0)
 		goto cleanup3;
 
-	if (scf_instance_get_pg_composed(inst, NULL, "config", pg) != 0)
-		goto cleanup3;
-
 	return (0);
 
 cleanup3:
-	if (pg != NULL) {
-		scf_pg_destroy(pg);
-		pg = NULL;
-	}
-	if (inst != NULL) {
-		scf_instance_destroy(inst);
-		inst = NULL;
-	}
+	scf_instance_destroy(inst);
+	inst = NULL;
 cleanup2:
 	free(fmri);
 	fmri = NULL;
 cleanup1:
 	(void) scf_handle_unbind(scf);
 cleanup0:
-	(void) scf_handle_destroy(scf);
+	scf_handle_destroy(scf);
 	scf = NULL;
 	return (rc);
 }
@@ -116,8 +107,8 @@ cleanup0:
 void
 fini_scf(void)
 {
-	(void) scf_pg_destroy(pg);
-	pg = NULL;
+	assert(scf != NULL);
+
 	(void) scf_instance_destroy(inst);
 	inst = NULL;
 	free(fmri);
@@ -138,12 +129,16 @@ fini_scf(void)
 int
 get_config_boolean(char *name)
 {
+	static scf_propertygroup_t *pg = NULL;
 	scf_property_t *prop = NULL;
 	scf_value_t *val = NULL;
 	uint8_t out;
 	int rc = -1;
 
 	assert(scf != NULL);
+
+	if (scf_instance_get_pg_composed(inst, NULL, "config", pg) != 0)
+		goto cleanup0;
 
 	prop = scf_property_create(scf);
 	val = scf_value_create(scf);
@@ -169,6 +164,8 @@ cleanup0:
 		scf_value_destroy(val);
 	if (prop != NULL)
 		scf_property_destroy(prop);
+	if (pg != NULL)
+		scf_pg_destroy(pg);
 
 	return (rc);
 }
