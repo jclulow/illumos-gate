@@ -109,12 +109,12 @@ fini_scf(void)
 {
 	assert(scf != NULL);
 
-	(void) scf_instance_destroy(inst);
+	scf_instance_destroy(inst);
 	inst = NULL;
 	free(fmri);
 	fmri = NULL;
 	(void) scf_handle_unbind(scf);
-	(void) scf_handle_destroy(scf);
+	scf_handle_destroy(scf);
 	scf = NULL;
 }
 
@@ -136,6 +136,9 @@ get_config_boolean(char *name)
 	int rc = -1;
 
 	assert(scf != NULL);
+
+	if ((pg = scf_pg_create(scf)) != NULL)
+		goto cleanup0;
 
 	if (scf_instance_get_pg_composed(inst, NULL, "config", pg) != 0)
 		goto cleanup0;
