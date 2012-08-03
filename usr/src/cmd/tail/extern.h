@@ -27,6 +27,17 @@
  * SUCH DAMAGE.
  *
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc. All Rights Reserved.
+ */
+
+
+#ifndef	EXTERN_H
+#define	EXTERN_H
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <port.h>
 
 
 #define	WR(p, size) do { \
@@ -48,6 +59,7 @@ struct file_info {
 	FILE *fp;
 	char *file_name;
 	struct stat st;
+	file_obj_t fobj;
 };
 
 typedef struct file_info file_info_t;
@@ -67,3 +79,5 @@ int mapprint(struct mapinfo *, off_t, off_t);
 int maparound(struct mapinfo *, off_t);
 
 extern int Fflag, fflag, qflag, rflag, rval, no_files;
+
+#endif	/* EXTERN_H */
