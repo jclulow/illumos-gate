@@ -12,7 +12,7 @@ ldi_ev_register_callbacks \- add a notify and/or finalize callback
 #include <sys/sunldi.h>
 
 \fBint\fR \fBldi_ev_get_cookie\fR(\fIldi_handle_t lh\fR, \fIldi_ev_cookie_t *cookie\fR,
-      \fIldi_ev_callback_t *callb\fR, \fBvoid\fR \fI*arg\fR, \fIldi_ev_callback_id_t *id\fR);
+      \fIldi_ev_callback_t *callb\fR, \fBvoid\fR \fI*arg\fR, \fIldi_callback_id_t *id\fR);
 .fi
 
 .SH INTERFACE LEVEL
@@ -116,7 +116,7 @@ A pointer to opaque caller private data.
 .sp
 .ne 2
 .na
-\fB\fBldi_ev_callback_id_t *id\fR\fR
+\fB\fBldi_callback_id_t *id\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -322,7 +322,7 @@ and \fBldi_ev_finalize\fR(9F)).
 .sp
 .LP
 Once the registration of the callback(s) is successful, an opaque
-\fIldi_ev_callback_id_t\fR structure is returned which may be used to
+\fIldi_callback_id_t\fR structure is returned which may be used to
 unregister the callback(s) later.
 .SH RETURN VALUES
 .sp
@@ -385,7 +385,7 @@ event_register(void)
 }
 
 static void
-event_unregister(ldi_ev_callback_id_t id)
+event_unregister(ldi_callback_id_t id)
 {
         ldi_ev_remove_callbacks(id);
 }
@@ -495,7 +495,7 @@ event_register(void)
 }
 
 static void
-event_unregister(ldi_ev_callback_id_t id)
+event_unregister(ldi_callback_id_t id)
 {
         ldi_ev_remove_callbacks(id);
 }

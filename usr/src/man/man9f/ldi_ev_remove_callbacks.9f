@@ -11,7 +11,7 @@ ldi_ev_remove_callbacks \- remove all callbacks for a given callback ID
 .nf
 #include <sys/sunldi.h>
 
-\fBvoid\fR \fBldi_ev_remove_callbacks\fR(\fIldi_ev_callback_id_t id\fR);
+\fBvoid\fR \fBldi_ev_remove_callbacks\fR(\fIldi_callback_id_t id\fR);
 .fi
 
 .SH INTERFACE LEVEL
@@ -22,7 +22,7 @@ Solaris DDI specific (Solaris DDI)
 .sp
 .ne 2
 .na
-\fB\fIldi_ev_callback_id_t id\fR\fR
+\fB\fIldi_callback_id_t id\fR\fR
 .ad
 .sp .6
 .RS 4n
