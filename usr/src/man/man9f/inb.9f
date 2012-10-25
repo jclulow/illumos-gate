@@ -49,9 +49,9 @@ inb, inw, inl, repinsb, repinsw, repinsd \- read from an I/O port
 .LP
 The functions described here are obsolete. For the \fBinb()\fR, \fBinw()\fR,
 and \fBinl()\fR functions, use, respectively, \fBddi_get8\fR(9F),
-\fBddi_get8\fR(9F), and \fBddi_get8\fR(9F) instead. For \fBrepinsb()\fR,
+\fBddi_get16\fR(9F), and \fBddi_get32\fR(9F) instead. For \fBrepinsb()\fR,
 \fBrepinsw()\fR, and\fBrepinsl()\fR, use, respectively, \fBddi_rep_get8\fR(9F),
-\fBddi_rep_get8\fR(9F), and \fBddi_rep_get8\fR(9F) instead.
+\fBddi_rep_get16\fR(9F), and \fBddi_rep_get32\fR(9F) instead.
 .SH PARAMETERS
 .sp
 .ne 2
@@ -126,9 +126,9 @@ Stability Level	 Obsolete
 .SH SEE ALSO
 .sp
 .LP
-\fBisa\fR(4), \fBattributes\fR(5), \fBddi_get8\fR(9F), \fBddi_get8\fR(9F),
-\fBddi_get8\fR(9F), \fBddi_rep_get8\fR(9F), \fBddi_rep_get8\fR(9F),
-\fBddi_rep_get8\fR(9F), \fBoutb\fR(9F)
+\fBisa\fR(4), \fBattributes\fR(5), \fBddi_get8\fR(9F), \fBddi_get16\fR(9F),
+\fBddi_get32\fR(9F), \fBddi_rep_get8\fR(9F), \fBddi_rep_get16\fR(9F),
+\fBddi_rep_get32\fR(9F), \fBoutb\fR(9F)
 .sp
 .LP
 \fIWriting Device Drivers\fR

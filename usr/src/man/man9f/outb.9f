@@ -45,9 +45,9 @@ outb, outw, outl, repoutsb, repoutsw, repoutsd \- write to an I/O port
 .LP
 The functions described here are obsolete. For the \fBoutb()\fR, \fBoutw()\fR,
 and \fBoutl()\fR functions use, respectively, \fBddi_put8\fR(9F),
-\fBddi_put8\fR(9F), and \fBddi_put8\fR(9F) instead. For \fBrepoutsb()\fR,
+\fBddi_put16\fR(9F), and \fBddi_put32\fR(9F) instead. For \fBrepoutsb()\fR,
 \fBrepoutsw()\fR, and\fBrepoutsl()\fR, use, respectively,
-\fBddi_rep_put8\fR(9F), \fBddi_rep_put8\fR(9F), and \fBddi_rep_put8\fR(9F)
+\fBddi_rep_put8\fR(9F), \fBddi_rep_put16\fR(9F), and \fBddi_rep_put32\fR(9F)
 instead.
 .SH PARAMETERS
 .sp
@@ -127,9 +127,9 @@ Interface Stability 	Obsolete
 .SH SEE ALSO
 .sp
 .LP
-\fBisa\fR(4), \fBattributes\fR(5), \fBddi_put8\fR(9F), \fBddi_put8\fR(9F),
-\fBddi_put8\fR(9F), \fBddi_rep_put8\fR(9F), \fBddi_rep_put8\fR(9F),
-\fBddi_rep_put8\fR(9F), \fBinb\fR(9F)
+\fBisa\fR(4), \fBattributes\fR(5), \fBddi_put8\fR(9F), \fBddi_put16\fR(9F),
+\fBddi_put32\fR(9F), \fBddi_rep_put8\fR(9F), \fBddi_rep_put16\fR(9F),
+\fBddi_rep_put32\fR(9F), \fBinb\fR(9F)
 .sp
 .LP
 \fIWriting Device Drivers\fR
