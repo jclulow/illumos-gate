@@ -50,10 +50,10 @@ COMDIR=		$(SRC)/lib/libdisasm/common
 # Architecture-dependent files common to both versions of libdisasm
 #
 #OBJECTS_common_i386 = dis_i386.o dis_tables.o
-#OBJECTS_common_sparc = dis_sparc.o instr.o dis_sparc_fmt.o
+#OBJECTS_common_sparc = dis_sparc.o dis_sparc_instr.o dis_sparc_fmt.o
 
 #SRCS_common_i386 = $(COMDIR)/dis_i386.c $(SRC)/common/dis/i386/dis_tables.c
-#SRCS_common_sparc = $(COMDIR)/dis_sparc.c $(COMDIR)/instr.c \
+#SRCS_common_sparc = $(COMDIR)/dis_sparc.c $(COMDIR)/dis_sparc_instr.c \
 #	$(COMDIR)/dis_sparc_fmt.c
 #SRCS_common_i386= $(SRC)/common/dis/i386/dis_tables.c
 #SRCS_common_sparc=
@@ -61,16 +61,16 @@ COMDIR=		$(SRC)/lib/libdisasm/common
 #
 # Architecture-independent files common to both version of libdisasm
 #
-OBJECTS_common_common = libdisasm.o dis_i386.o dis_sparc.o instr.o \
+OBJECTS_common_common = libdisasm.o dis_i386.o dis_sparc.o dis_sparc_instr.o \
 	dis_sparc_fmt.o
 SRC_common_common = $(OBJECTS_common_common:%.o=$(COMDIR)/%.c) \
 	$(SRC)/common/dis/i386/dis_tables.c
 
 SRC_files = $(COMDIR)/libdisasm.c $(COMDIR)/dis_i386.c \
 		$(COMDIR)/dis_sparc.c $(COMDIR)/dis_sparc_fmt.c \
-		$(COMDIR)/instr.c \
+		$(COMDIR)/dis_sparc_instr.c \
 		$(SRC)/common/dis/i386/dis_tables.c
-OBJECTS = libdisasm.o dis_i386.o dis_sparc.o instr.o dis_sparc_fmt.o \
+OBJECTS = libdisasm.o dis_i386.o dis_sparc.o dis_sparc_instr.o dis_sparc_fmt.o \
 		dis_tables.o
 
 
