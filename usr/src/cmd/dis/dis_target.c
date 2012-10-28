@@ -710,17 +710,6 @@ dis_tgt_lookup(dis_tgt_t *tgt, uint64_t addr, off_t *offset, int cache_result,
 }
 
 /*
- * For a fixed-size instruction platform, return the size of an
- * instruction.  Otherwise, return DIS_TGT_INSN_SIZE_VARIABLE.
- */
-size_t
-dis_tgt_insn_size(dis_tgt_t *tgt)
-{
-
-	return (DIS_TGT_INSN_SIZE_VARIABLE);
-}
-
-/*
  * Given an address, return the starting offset of the next symbol in the file.
  * Only needed on variable length instruction architectures.
  */
