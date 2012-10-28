@@ -97,7 +97,8 @@ getsymname(uint64_t addr, const char *symbol, off_t offset, char *buf,
 }
 
 /*
- * Determine if we are on an architecture with fixed-size instructions.
+ * Determine if we are on an architecture with fixed-size instructions,
+ * and if so, what size they are.
  */
 static int
 insn_size(dis_handle_t *dhp)

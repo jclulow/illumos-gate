@@ -1530,7 +1530,6 @@ fmt_trap(dis_handle_t *dhp, uint32_t instr, const inst_t *inp, int idx)
 static int
 prt_shift(dis_handle_t *dhp, uint32_t instr, const inst_t *inp)
 {
-	dis_handle_sparc_t *dhx = dhp->dh_arch_private;
 	char name[5];
 	uint32_t cnt;
 
