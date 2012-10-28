@@ -97,23 +97,18 @@ getsymname(uint64_t addr, const char *symbol, off_t offset, char *buf,
 }
 
 /*
- * XXX This should likely move into libdisasm.
+ * Determine if we are on an architecture with fixed-size instructions.
  */
 static int
 insn_size(dis_tgt_t *tgt)
 {
-	GElf_Ehdr ehdr;
+	int min = dis_min_instrlen(dhp);
+	int max = dis_max_instrlen(dhp);
 
-	dis_tgt_ehdr(current, &ehdr);
+	if (min == max)
+		return (min);
 
-	switch (ehdr.e_machine) {
-	case EM_SPARC:
-	case EM_SPARC32PLUS:
-	case EM_SPARCV9:
-		return (4);
-	default:
-		return (0);
-	}
+	return (0);
 }
 
 /*
@@ -136,7 +131,7 @@ dis_data(dis_tgt_t *tgt, dis_handle_t *dhp, uint64_t addr, void *data,
 	int isfunc;
 	size_t symwidth = 0;
 	int ret;
-	int insz = insn_size(tgt);
+	int insz = insn_size(dhp);
 
 	db.db_tgt = tgt;
 	db.db_data = data;
