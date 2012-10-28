@@ -31,9 +31,6 @@
 # for use by kmdb and as a normal library.  We use $(CURTYPE) to indicate the
 # current flavor being built.
 #
-# The SPARC library is built from the closed gate.  This Makefile is shared
-# between both environments, so all paths must be absolute.
-#
 
 LIBRARY=	libdisasm.a
 STANDLIBRARY=	libstanddisasm.so
@@ -47,44 +44,46 @@ CURTYPE=	library
 COMDIR=		$(SRC)/lib/libdisasm/common
 
 #
-# Architecture-dependent files common to both versions of libdisasm
+# Architecture-independent files
 #
-#OBJECTS_common_i386 = dis_i386.o dis_tables.o
-#OBJECTS_common_sparc = dis_sparc.o dis_sparc_instr.o dis_sparc_fmt.o
-
-#SRCS_common_i386 = $(COMDIR)/dis_i386.c $(SRC)/common/dis/i386/dis_tables.c
-#SRCS_common_sparc = $(COMDIR)/dis_sparc.c $(COMDIR)/dis_sparc_instr.c \
-#	$(COMDIR)/dis_sparc_fmt.c
-#SRCS_common_i386= $(SRC)/common/dis/i386/dis_tables.c
-#SRCS_common_sparc=
+SRCS_common=		$(COMDIR)/libdisasm.c
+OBJECTS_common=		libdisasm.o
 
 #
-# Architecture-independent files common to both version of libdisasm
+# Architecture-dependent disassembly files
 #
-OBJECTS_common_common = libdisasm.o dis_i386.o dis_sparc.o dis_sparc_instr.o \
-	dis_sparc_fmt.o
-SRC_common_common = $(OBJECTS_common_common:%.o=$(COMDIR)/%.c) \
-	$(SRC)/common/dis/i386/dis_tables.c
+SRCS_i386=		$(COMDIR)/dis_i386.c \
+			$(SRC)/common/dis/i386/dis_tables.c
+SRCS_sparc=		$(COMDIR)/dis_sparc.c \
+			$(COMDIR)/dis_sparc_fmt.c \
+			$(COMDIR)/dis_sparc_instr.c
 
-SRC_files = $(COMDIR)/libdisasm.c $(COMDIR)/dis_i386.c \
-		$(COMDIR)/dis_sparc.c $(COMDIR)/dis_sparc_fmt.c \
-		$(COMDIR)/dis_sparc_instr.c \
-		$(SRC)/common/dis/i386/dis_tables.c
-OBJECTS = libdisasm.o dis_i386.o dis_sparc.o dis_sparc_instr.o dis_sparc_fmt.o \
-		dis_tables.o
+OBJECTS_i386=		dis_i386.o \
+			dis_tables.o
+OBJECTS_sparc=		dis_sparc.o \
+			dis_sparc_fmt.o \
+			dis_sparc_instr.o
 
-
-#OBJECTS=				\
-#	$(OBJECTS_common_$(MACH))	\
-#	$(OBJECTS_common_common)
+#
+# We build the regular shared library with support for all architectures.
+# The standalone version should only contain code for the native
+# architecture to reduce the memory footprint of kmdb.
+#
+OBJECTS_library=	$(OBJECTS_i386) \
+			$(OBJECTS_sparc) \
+			$(OBJECTS_common)
+OBJECTS_standalone=	$(OBJECTS_$(MACH)) \
+			$(OBJECTS_common)
+OBJECTS=		$(OBJECTS_$(CURTYPE))
 
 include $(SRC)/lib/Makefile.lib
 
-SRCS=$(SRC_files)
-#SRCS=					\
-#	$(SRCS_$(CURTYPE))		\
-#	$(SRCS_common_$(MACH))		\
-#	$(SRCS_common_common)
+SRCS_library=		$(SRCS_i386) \
+			$(SRCS_sparc) \
+			$(SRCS_common)
+SRCS_standalone=	$(SRCS_$(MACH)) \
+			$(SRCS_common)
+SRCS=			$(SRCS_$(CURTYPE))
 
 #
 # Used to verify that the standalone doesn't have any unexpected external

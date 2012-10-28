@@ -36,11 +36,27 @@
 
 static int _dis_errno;
 
-extern dis_arch_t dis_arch_sparc;
+/*
+ * If we're building the standalone library, then we only want to
+ * include support for disassembly of the native architecture.
+ * The regular shared library should include support for all
+ * architectures.
+ */
+#if !defined(DIS_STANDALONE) || defined(__i386) || defined(__amd64)
 extern dis_arch_t dis_arch_i386;
+#endif
+#if !defined(DIS_STANDALONE) || defined(__sparc)
+extern dis_arch_t dis_arch_sparc;
+#endif
 
 static dis_arch_t *dis_archs[] = {
-	&dis_arch_i386, &dis_arch_sparc, NULL
+#if !defined(DIS_STANDALONE) || defined(__i386) || defined(__amd64)
+	&dis_arch_i386,
+#endif
+#if !defined(DIS_STANDALONE) || defined(__sparc)
+	&dis_arch_sparc,
+#endif
+	NULL
 };
 
 /*
