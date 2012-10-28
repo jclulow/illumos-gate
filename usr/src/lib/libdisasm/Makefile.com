@@ -68,20 +68,20 @@ OBJECTS_sparc=		dis_sparc.o \
 # The standalone version should only contain code for the native
 # architecture to reduce the memory footprint of kmdb.
 #
-OBJECTS_library=	$(OBJECTS_i386) \
-			$(OBJECTS_sparc) \
-			$(OBJECTS_common)
-OBJECTS_standalone=	$(OBJECTS_$(MACH)) \
-			$(OBJECTS_common)
+OBJECTS_library=	$(OBJECTS_common) \
+			$(OBJECTS_i386) \
+			$(OBJECTS_sparc)
+OBJECTS_standalone=	$(OBJECTS_common) \
+			$(OBJECTS_$(MACH))
 OBJECTS=		$(OBJECTS_$(CURTYPE))
 
 include $(SRC)/lib/Makefile.lib
 
-SRCS_library=		$(SRCS_i386) \
-			$(SRCS_sparc) \
-			$(SRCS_common)
-SRCS_standalone=	$(SRCS_$(MACH)) \
-			$(SRCS_common)
+SRCS_library=		$(SRCS_common) \
+			$(SRCS_i386) \
+			$(SRCS_sparc)
+SRCS_standalone=	$(SRCS_common) \
+			$(SRCS_$(MACH))
 SRCS=			$(SRCS_$(CURTYPE))
 
 #
