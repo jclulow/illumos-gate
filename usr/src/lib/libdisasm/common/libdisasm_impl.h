@@ -22,16 +22,36 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef	_LIBDISASM_IMPL_H
 #define	_LIBDISASM_IMPL_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
+
+typedef struct dis_arch {
+	int (*da_supports_flags)(int);
+	int (*da_handle_attach)(dis_handle_t *);
+	void (*da_handle_detach)(dis_handle_t *);
+	int (*da_disassemble)(dis_handle_t *, uint64_t, char *, size_t);
+	uint64_t (*da_previnstr)(dis_handle_t *, uint64_t, int n);
+	int (*da_max_instrlen)(dis_handle_t *);
+	int (*da_min_instrlen)(dis_handle_t *);
+} dis_arch_t;
+
+struct dis_handle {
+	void		*dh_data;
+	int		dh_flags;
+	dis_lookup_f	dh_lookup;
+	dis_read_f	dh_read;
+	uint64_t	dh_addr;
+
+	dis_arch_t	*dh_arch;
+	void		*dh_arch_private;
+};
 
 extern int dis_seterrno(int);
 

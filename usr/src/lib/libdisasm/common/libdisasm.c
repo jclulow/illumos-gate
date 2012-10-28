@@ -22,9 +22,9 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <libdisasm.h>
 #include <stdlib.h>
@@ -32,7 +32,16 @@
 #include <mdb/mdb_modapi.h>
 #endif
 
+#include "libdisasm_impl.h"
+
 static int _dis_errno;
+
+extern dis_arch_t dis_arch_sparc;
+extern dis_arch_t dis_arch_i386;
+
+static dis_arch_t *dis_archs[] = {
+	&dis_arch_i386, &dis_arch_sparc, NULL
+};
 
 /*
  * For the standalone library, we need to link against mdb's malloc/free.
@@ -86,7 +95,102 @@ dis_strerror(int error)
 		return ("out of memory");
 	case E_DIS_INVALFLAG:
 		return ("invalid flags for this architecture");
+	case E_DIS_UNSUPARCH:
+		return ("unsupported machine architecture");
 	default:
 		return ("unknown error");
 	}
 }
+
+void
+dis_set_data(dis_handle_t *dhp, void *data)
+{
+	dhp->dh_data = data;
+}
+
+void
+dis_flags_set(dis_handle_t *dhp, int f)
+{
+	dhp->dh_flags |= f;
+}
+
+void
+dis_flags_clear(dis_handle_t *dhp, int f)
+{
+	dhp->dh_flags &= ~f;
+}
+
+void
+dis_handle_destroy(dis_handle_t *dhp)
+{
+	dhp->dh_arch->da_handle_detach(dhp);
+	dis_free(dhp, sizeof (dis_handle_t));
+}
+
+dis_handle_t *
+dis_handle_create(int flags, void *data, dis_lookup_f lookup_func,
+     dis_read_f read_func)
+{
+	dis_handle_t *dhp;
+	dis_arch_t *arch = NULL;
+	int i;
+
+	/* Select an architecture based on flags */
+	for (i = 0; dis_archs[i] != NULL; i++) {
+		if (dis_archs[i]->da_supports_flags(flags)) {
+			arch = dis_archs[i];
+			break;
+		}
+	}
+	if (arch == NULL) {
+		(void) dis_seterrno(E_DIS_UNSUPARCH);
+		return (NULL);
+	}
+
+	if ((dhp = dis_zalloc(sizeof (dis_handle_t))) == NULL) {
+		(void) dis_seterrno(E_DIS_NOMEM);
+		return (NULL);
+	}
+	dhp->dh_arch = arch;
+	dhp->dh_lookup = lookup_func;
+	dhp->dh_read = read_func;
+	dhp->dh_flags = flags;
+	dhp->dh_data = data;
+
+	/*
+	 * Allow the architecture-specific code to allocate
+	 * its private data.
+	 */
+	if (arch->da_handle_attach(dhp) != 0) {
+		dis_free(dhp, sizeof (dis_handle_t));
+		/* dis errno already set */
+		return (NULL);
+	}
+
+	return (dhp);
+}
+
+int
+dis_disassemble(dis_handle_t *dhp, uint64_t addr, char *buf, size_t buflen)
+{
+	return (dhp->dh_arch->da_disassemble(dhp, addr, buf, buflen));
+}
+
+uint64_t
+dis_previnstr(dis_handle_t *dhp, uint64_t pc, int n)
+{
+	return (dhp->dh_arch->da_previnstr(dhp, pc, n));
+}
+
+int
+dis_min_instrlen(dis_handle_t *dhp)
+{
+	return (dhp->dh_arch->da_min_instrlen(dhp));
+}
+
+int
+dis_max_instrlen(dis_handle_t *dhp)
+{
+	return (dhp->dh_arch->da_max_instrlen(dhp));
+}
+

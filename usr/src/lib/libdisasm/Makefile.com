@@ -22,6 +22,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
+#
 
 #
 # The build process for libdisasm is sightly different from that used by other
@@ -47,30 +49,42 @@ COMDIR=		$(SRC)/lib/libdisasm/common
 #
 # Architecture-dependent files common to both versions of libdisasm
 #
-OBJECTS_common_i386 = dis_i386.o dis_tables.o
-OBJECTS_common_sparc = dis_sparc.o instr.o dis_sparc_fmt.o
+#OBJECTS_common_i386 = dis_i386.o dis_tables.o
+#OBJECTS_common_sparc = dis_sparc.o instr.o dis_sparc_fmt.o
 
-SRCS_common_i386 = $(ISASRCDIR)/dis_i386.c $(SRC)/common/dis/i386/dis_tables.c
-SRCS_common_sparc = $(ISASRCDIR)/dis_sparc.c $(ISASRCDIR)/instr.c \
-	$(ISASRCDIR)/dis_sparc_fmt.c
+#SRCS_common_i386 = $(COMDIR)/dis_i386.c $(SRC)/common/dis/i386/dis_tables.c
+#SRCS_common_sparc = $(COMDIR)/dis_sparc.c $(COMDIR)/instr.c \
+#	$(COMDIR)/dis_sparc_fmt.c
+#SRCS_common_i386= $(SRC)/common/dis/i386/dis_tables.c
+#SRCS_common_sparc=
 
 #
 # Architecture-independent files common to both version of libdisasm
 #
-OBJECTS_common_common = libdisasm.o
-SRC_common_common = $(OBJECTS_common_common:%.o=$(COMDIR)/%.c)
+OBJECTS_common_common = libdisasm.o dis_i386.o dis_sparc.o instr.o \
+	dis_sparc_fmt.o
+SRC_common_common = $(OBJECTS_common_common:%.o=$(COMDIR)/%.c) \
+	$(SRC)/common/dis/i386/dis_tables.c
+
+SRC_files = $(COMDIR)/libdisasm.c $(COMDIR)/dis_i386.c \
+		$(COMDIR)/dis_sparc.c $(COMDIR)/dis_sparc_fmt.c \
+		$(COMDIR)/instr.c \
+		$(SRC)/common/dis/i386/dis_tables.c
+OBJECTS = libdisasm.o dis_i386.o dis_sparc.o instr.o dis_sparc_fmt.o \
+		dis_tables.o
 
 
-OBJECTS=				\
-	$(OBJECTS_common_$(MACH))	\
-	$(OBJECTS_common_common)
+#OBJECTS=				\
+#	$(OBJECTS_common_$(MACH))	\
+#	$(OBJECTS_common_common)
 
 include $(SRC)/lib/Makefile.lib
 
-SRCS=					\
-	$(SRCS_$(CURTYPE))		\
-	$(SRCS_common_$(MACH))		\
-	$(SRCS_common_common)
+SRCS=$(SRC_files)
+#SRCS=					\
+#	$(SRCS_$(CURTYPE))		\
+#	$(SRCS_common_$(MACH))		\
+#	$(SRCS_common_common)
 
 #
 # Used to verify that the standalone doesn't have any unexpected external
