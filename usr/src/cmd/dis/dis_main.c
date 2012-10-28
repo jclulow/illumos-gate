@@ -24,6 +24,7 @@
  * Use is subject to license terms.
  *
  * Copyright 2011 Jason King.  All rights reserved.
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #include <ctype.h>

@@ -22,7 +22,6 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- *
  * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
  */
 
@@ -145,7 +144,7 @@ dis_handle_destroy(dis_handle_t *dhp)
 
 dis_handle_t *
 dis_handle_create(int flags, void *data, dis_lookup_f lookup_func,
-     dis_read_f read_func)
+    dis_read_f read_func)
 {
 	dis_handle_t *dhp;
 	dis_arch_t *arch = NULL;
@@ -209,4 +208,3 @@ dis_max_instrlen(dis_handle_t *dhp)
 {
 	return (dhp->dh_arch->da_max_instrlen(dhp));
 }
-
