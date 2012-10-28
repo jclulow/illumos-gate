@@ -100,7 +100,7 @@ getsymname(uint64_t addr, const char *symbol, off_t offset, char *buf,
  * Determine if we are on an architecture with fixed-size instructions.
  */
 static int
-insn_size(dis_tgt_t *tgt)
+insn_size(dis_handle_t *dhp)
 {
 	int min = dis_min_instrlen(dhp);
 	int max = dis_max_instrlen(dhp);
