@@ -38,8 +38,8 @@ typedef struct dis_arch {
 	void (*da_handle_detach)(dis_handle_t *);
 	int (*da_disassemble)(dis_handle_t *, uint64_t, char *, size_t);
 	uint64_t (*da_previnstr)(dis_handle_t *, uint64_t, int n);
-	int (*da_max_instrlen)(dis_handle_t *);
 	int (*da_min_instrlen)(dis_handle_t *);
+	int (*da_max_instrlen)(dis_handle_t *);
 } dis_arch_t;
 
 struct dis_handle {

@@ -70,6 +70,7 @@ extern void dis_set_data(dis_handle_t *, void *);
 extern void dis_flags_set(dis_handle_t *, int f);
 extern void dis_flags_clear(dis_handle_t *, int f);
 extern int dis_max_instrlen(dis_handle_t *);
+extern int dis_min_instrlen(dis_handle_t *);
 
 /* libdisasm errors */
 #define	E_DIS_NOMEM		1	/* Out of memory */
