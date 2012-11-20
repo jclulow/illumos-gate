@@ -130,12 +130,8 @@ CPPFLAGS_standalone = -DDIS_STANDALONE $(STAND_RENAMED_FUNCS:%=-D%=mdb_%) \
 CPPFLAGS_library = -D_REENTRANT
 CPPFLAGS +=	-I$(COMDIR) $(CPPFLAGS_$(CURTYPE))
 
-#
-# For x86, we have to link to sources in usr/src/common
-#
-CPPFLAGS_dis_i386 = -I$(SRC)/common/dis/i386 -DDIS_TEXT
-CPPFLAGS_dis_sparc =
-CPPFLAGS +=	$(CPPFLAGS_dis_$(MACH))
+# For the x86 disassembler we have to include sources from usr/src/common
+CPPFLAGS += -I$(SRC)/common/dis/i386 -DDIS_TEXT
 
 CFLAGS_standalone = $(STAND_FLAGS_32)
 CFLAGS_common =
