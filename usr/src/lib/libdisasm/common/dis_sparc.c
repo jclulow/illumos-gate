@@ -237,12 +237,10 @@ dis_sparc_disassemble(dis_handle_t *dhp, uint64_t addr, char *buf,
 
 	buf[0] = '\0';
 
+#if !defined(DIS_STANDALONE)
 	/* this allows sparc code to be tested on x86 */
-#if !defined(DIS_STANDALONE)
 	instr = BE_32(instr);
-#endif /* DIS_STANDALONE */
 
-#if !defined(DIS_STANDALONE)
 	if ((dhx->dhx_debug & DIS_DEBUG_PRTBIN) != 0)
 		do_binary(instr);
 #endif /* DIS_STANDALONE */
