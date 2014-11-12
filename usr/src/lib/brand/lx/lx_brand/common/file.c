@@ -22,7 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/fstyp.h>
@@ -118,34 +118,6 @@ ltos_at_flag(int lflag, int allow, boolean_t enforce)
 /*
  * Miscellaneous file-related system calls.
  */
-
-/*
- * Linux creates half-duplex pipes and Illumos creates full-duplex pipes.
- * Thus, to get the correct semantics, we need to setup pipes in the kernel's
- * lx brand module.
- */
-
-long
-lx_pipe2(uintptr_t p1, uintptr_t p2)
-{
-	int flags = 0;
-	int r;
-
-	if (p2 & LX_O_NONBLOCK) {
-		flags |= O_NONBLOCK;
-		p2 &= ~LX_O_NONBLOCK;
-	}
-	if (p2 & LX_O_CLOEXEC) {
-		flags |= O_CLOEXEC;
-		p2 &= ~LX_O_CLOEXEC;
-	}
-	if (p2 != 0)
-		return (-EINVAL);
-
-	r = syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_pipe2, p1, flags);
-
-	return ((r == -1) ? -errno : r);
-}
 
 /*
  * On Linux, even root cannot create a link to a directory, so we have to

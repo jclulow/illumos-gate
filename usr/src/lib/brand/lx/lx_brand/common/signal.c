@@ -42,6 +42,7 @@
 #include <sys/lx_thread.h>
 #include <sys/syscall.h>
 #include <lx_provider_impl.h>
+#include <sys/stack.h>
 #include <assert.h>
 #include <errno.h>
 #include <poll.h>
@@ -60,9 +61,9 @@
 #if defined(_ILP32)
 extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
 	const timespec_t *tsp, const sigset_t *sp);
-#else
-static int lx_setcontext(const ucontext_t *ucp);
 #endif
+
+#define	MIN(a, b)	((a) < (b) ? (a) : (b))
 
 /*
  * Delivering signals to a Linux process is complicated by differences in
@@ -220,6 +221,7 @@ static int lx_setcontext(const ucontext_t *ucp);
  * lx_setcontext() function. This function uses a brand call (B_SIGNAL_RETURN)
  * which combines the syscall mode switching and setcontext handling in the lx
  * kernel module.
+ * XXX NO WE DONT
  *
  * An additional oddity in the signal return code is that in the stack builder
  * function we push some x86 code onto the bottom of the stack that looks like
@@ -285,6 +287,11 @@ static int lx_setcontext(const ucontext_t *ucp);
  * location originally interrupted by receipt of the signal.
  */
 
+typedef struct lx_sigdeliver_frame {
+	uintptr_t lxsdf_magic;
+	ucontext_t *lxsdf_retucp;
+	ucontext_t *lxsdf_sigucp;
+} lx_sigdeliver_frame_t;
 
 struct lx_oldsigstack {
 	void (*retaddr)();	/* address of real lx_sigreturn code */
@@ -294,12 +301,6 @@ struct lx_oldsigstack {
 	int sig_extra;		/* signal mask for signals [32 .. NSIG - 1] */
 	char trampoline[8];	/* code for trampoline to lx_sigreturn() */
 };
-
-/*
- * libc_sigacthandler is set to the address of the libc signal interposition
- * routine, sigacthandler().
- */
-void (*libc_sigacthandler)(int, siginfo_t *, void*);
 
 /*
  * The lx_sighandlers structure needs to be a global due to the semantics of
@@ -351,6 +352,9 @@ static int lx_sigsegv_depth = 0;
  * prevent useful core files being generated.
  */
 static int lx_no_abort_handler = 0;
+
+static void lx_sigdeliver(int, siginfo_t *, ucontext_t *, size_t, void (*)(),
+    void (*)(), struct lx_sigaction *);
 
 /*
  * Cache result of process.max-file-descriptor to avoid calling getrctl()
@@ -464,27 +468,6 @@ stol_osigset(sigset_t *s_sigsetp, lx_osigset_t *lx_osigsetp)
 #endif
 
 static int
-stol_sigcode(int si_code)
-{
-	switch (si_code) {
-		case SI_USER:
-			return (LX_SI_USER);
-		case SI_LWP:
-			return (LX_SI_TKILL);
-		case SI_QUEUE:
-			return (LX_SI_QUEUE);
-		case SI_TIMER:
-			return (LX_SI_TIMER);
-		case SI_ASYNCIO:
-			return (LX_SI_ASYNCIO);
-		case SI_MESGQ:
-			return (LX_SI_MESGQ);
-		default:
-			return (si_code);
-	}
-}
-
-static int
 ltos_sigcode(int si_code)
 {
 	switch (si_code) {
@@ -505,29 +488,6 @@ ltos_sigcode(int si_code)
 	}
 }
 
-/*
- * Convert the "status" field of a SIGCLD siginfo_t.  We need to extract the
- * illumos signal number and convert it to a Linux signal number while leaving
- * the ptrace(2) event bits intact.
- */
-int
-stol_status(int s)
-{
-	/*
-	 * We mask out the top bit here in case PTRACE_O_TRACESYSGOOD
-	 * is in use and 0x80 has been ORed with the signal number.
-	 */
-	int stat = stol_signo[s & 0x7f];
-	assert(stat != -1);
-
-	/*
-	 * We must mix in the ptrace(2) event which may be stored in
-	 * the second byte of the status code.  We also re-include the
-	 * PTRACE_O_TRACESYSGOOD bit.
-	 */
-	return ((s & 0xff80) | stat);
-}
-
 int
 stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 {
@@ -546,7 +506,7 @@ stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 		ret = -1;
 	}
 
-	lx_siginfo.lsi_code = stol_sigcode(siginfop->si_code);
+	lx_siginfo.lsi_code = lx_stol_sigcode(siginfop->si_code);
 	lx_siginfo.lsi_errno = siginfop->si_errno;
 
 	switch (lx_siginfo.lsi_signo) {
@@ -564,8 +524,8 @@ stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 			if (siginfop->si_code == CLD_EXITED) {
 				lx_siginfo.lsi_status = siginfop->si_status;
 			} else {
-				lx_siginfo.lsi_status = stol_status(
-				    siginfop->si_status);
+				lx_siginfo.lsi_status = lx_stol_status(
+				    siginfop->si_status, -1);
 			}
 			lx_siginfo.lsi_utime = siginfop->si_utime;
 			lx_siginfo.lsi_stime = siginfop->si_stime;
@@ -695,41 +655,59 @@ ltos_fpstate(lx_fpstate_t *lfpr, fpregset_t *fpr)
 }
 
 /*
- * The brand needs a lx version of this because the format of the lx stack_t
- * differs from the Illumos stack_t not really in content but in ORDER,
- * so we can't simply pass pointers and expect things to work (sigh...)
+ * We do not use the system sigaltstack() infrastructure as that would conflict
+ * with our handling of both system call emulation and native signals on the
+ * native stack.  Instead, we track the Linux stack structure in our
+ * thread-specific data.  This function is modeled on the behaviour of the
+ * native sigaltstack system call handler.
  */
 long
-lx_sigaltstack(uintptr_t nsp, uintptr_t osp)
+lx_sigaltstack(uintptr_t ssp, uintptr_t oss)
 {
-	lx_stack_t ls;
-	stack_t newsstack, oldsstack;
-	stack_t *nssp = (nsp ? &newsstack : NULL);
-	stack_t *ossp = (osp ? &oldsstack : NULL);
+	lx_tsd_t *lxtsd = lx_get_tsd();
+	lx_stack_t ss;
 
-	if (nsp) {
-		if (uucopy((void *)nsp, &ls, sizeof (lx_stack_t)) != 0)
-			return (-errno);
+	if (ssp != NULL) {
+		if (lxtsd->lxtsd_sigaltstack.ss_flags & LX_SS_ONSTACK) {
+			/*
+			 * If we are currently using the installed alternate
+			 * stack for signal handling, the user may not modify
+			 * the stack for this thread.
+			 */
+			return (-EPERM);
+		}
 
-		if ((ls.ss_flags & LX_SS_DISABLE) == 0 &&
-		    ls.ss_size < LX_MINSIGSTKSZ)
+		if (uucopy((void *)ssp, &ss, sizeof (ss)) != 0) {
+			return (-EFAULT);
+		}
+
+		if (ss.ss_flags & ~LX_SS_DISABLE) {
+			/*
+			 * The user may not specify a value for flags other
+			 * than 0 or SS_DISABLE.
+			 */
+			return (-EINVAL);
+		}
+
+		if (!(ss.ss_flags & LX_SS_DISABLE) && ss.ss_size <
+		    LX_MINSIGSTKSZ) {
 			return (-ENOMEM);
-
-		newsstack.ss_sp = (int *)ls.ss_sp;
-		newsstack.ss_size = (long)ls.ss_size;
-		newsstack.ss_flags = ls.ss_flags;
+		}
 	}
 
-	if (sigaltstack(nssp, ossp) != 0)
-		return (-errno);
+	if (oss != NULL) {
+		/*
+		 * User provided old and new stack_t pointers may point to
+		 * the same location.  Copy out before we modify.
+		 */
+		if (uucopy(&lxtsd->lxtsd_sigaltstack, (void *)oss,
+		    sizeof (lxtsd->lxtsd_sigaltstack)) != 0) {
+			return (-EFAULT);
+		}
+	}
 
-	if (osp) {
-		ls.ss_sp = (void *)oldsstack.ss_sp;
-		ls.ss_size = (size_t)oldsstack.ss_size;
-		ls.ss_flags = oldsstack.ss_flags;
-
-		if (uucopy(&ls, (void *)osp, sizeof (lx_stack_t)) != 0)
-			return (-errno);
+	if (ssp != NULL) {
+		lxtsd->lxtsd_sigaltstack = ss;
 	}
 
 	return (0);
@@ -993,20 +971,21 @@ lx_rt_sigtimedwait(uintptr_t set, uintptr_t sinfo, uintptr_t toutp,
 long
 lx_sigreturn(void)
 {
+	lx_sigdeliver_frame_t *lxsdf;
 	struct lx_oldsigstack *lx_ossp;
 	lx_sigset_t lx_sigset;
-	lx_regs_t *rp;
 	ucontext_t *ucp;
+	ucontext_t *sigucp;
 	uintptr_t sp;
 
-	rp = lx_syscall_regs();
+	ucp = lx_syscall_regs();
 
 	/*
 	 * NOTE:  The sp saved in the context is eight bytes off of where we
 	 *	  need it to be (either due to trampoline or the copying of
 	 *	  sp = uesp, not clear which).
 	 */
-	sp = (uintptr_t)rp->lxr_esp - 8;
+	sp = LX_REG(ucp, REG_SP) - 8;
 
 	/*
 	 * At this point, the stack pointer should point to the struct
@@ -1015,32 +994,33 @@ lx_sigreturn(void)
 	 * save a pointer to it before incrementing our copy of the sp.
 	 */
 	lx_ossp = (struct lx_oldsigstack *)sp;
-	sp += sizeof (struct lx_oldsigstack);
+	sp += SA(sizeof (struct lx_oldsigstack));
+
 
 	/*
-	 * lx_sigdeliver() pushes LX_SIGRT_MAGIC on the stack before it
-	 * creates the struct lx_oldsigstack.
+	 * lx_sigdeliver() pushes a lx_sigdeliver_frame_t onto the stack
+	 * before it creates the struct lx_oldsigstack.
 	 *
-	 * If we don't find it here, the stack's been corrupted and we need to
-	 * kill ourselves.
+	 * If we do not find it here, the stack has been corrupted and we
+	 * need to kill ourselves.
 	 */
-	if (*(uint32_t *)sp != LX_SIGRT_MAGIC)
+	lxsdf = (lx_sigdeliver_frame_t *)sp;
+	lx_debug("lx_sigreturn: reading lx_sigdeliver_frame_t @ %p\n",
+	    lxsdf);
+	lx_debug("lx_sigreturn: lxsdf: magic %p retucp %p sigucp %p\n",
+	    lxsdf->lxsdf_magic, lxsdf->lxsdf_retucp, lxsdf->lxsdf_sigucp);
+	if (lxsdf->lxsdf_magic != LX_SIGRT_MAGIC) {
 		lx_err_fatal("sp @ 0x%p, expected 0x%x, found 0x%x!",
-		    sp, LX_SIGRT_MAGIC, *(uint32_t *)sp);
+		    sp, LX_SIGRT_MAGIC, lxsdf->lxsdf_magic);
+	}
 
-	sp += sizeof (uint32_t);
+	LX_SIGNAL_DELIVERY_FRAME_FOUND(lxsdf);
 
 	/*
-	 * For signal mask handling to be done properly, this call needs to
-	 * return to the libc routine that originally called the signal handler
-	 * rather than directly set the context back to the place the signal
-	 * interrupted execution as the original Linux code would do.
-	 *
-	 * Here *sp points to the Illumos ucontext_t, so we need to copy
-	 * machine registers the Linux signal handler may have modified
-	 * back to the Illumos version.
+	 * We need to copy machine registers the Linux signal handler may have
+	 * modified back to the Illumos ucontext_t.
 	 */
-	ucp = (ucontext_t *)(*(ssize_t *)sp);
+	sigucp = lxsdf->lxsdf_sigucp;
 
 	/*
 	 * General registers copy across as-is, except Linux expects that
@@ -1051,30 +1031,29 @@ lx_sigreturn(void)
 	 * value to ESP.
 	 */
 	lx_ossp->sigc.sc_esp_at_signal = lx_ossp->sigc.sc_esp;
-	bcopy(&lx_ossp->sigc, &ucp->uc_mcontext, sizeof (gregset_t));
+	bcopy(&lx_ossp->sigc, &sigucp->uc_mcontext, sizeof (gregset_t));
 
 	/* copy back FP regs if present */
 	if (lx_ossp->sigc.sc_fpstate != NULL)
-		ltos_fpstate(&lx_ossp->fpstate, &ucp->uc_mcontext.fpregs);
+		ltos_fpstate(&lx_ossp->fpstate, &sigucp->uc_mcontext.fpregs);
 
 	/* convert Linux signal mask back to its Illumos equivalent */
 	bzero(&lx_sigset, sizeof (lx_sigset_t));
 	lx_sigset.__bits[0] = lx_ossp->sigc.sc_mask;
 	lx_sigset.__bits[1] = lx_ossp->sig_extra;
-	(void) ltos_sigset(&lx_sigset, &ucp->uc_sigmask);
+	(void) ltos_sigset(&lx_sigset, &sigucp->uc_sigmask);
 
 	/*
-	 * At this point sp contains the value of the stack pointer when
-	 * lx_call_user_handler() was called.
-	 *
-	 * Pop one more value off the stack and pass the new sp to
-	 * lx_sigreturn_tolibc(), which will in turn manipulate the x86
-	 * registers to make it appear to libc's call_user_handler() as if the
-	 * handler it had called returned.
+	 * For signal mask handling to be done properly, this call needs to
+	 * return to the libc routine that originally called the signal handler
+	 * rather than directly set the context back to the place the signal
+	 * interrupted execution as the original Linux code would do.
 	 */
-	sp += sizeof (uint32_t);
-	lx_debug("calling lx_sigreturn_tolibc(0x%p)", sp);
-	lx_sigreturn_tolibc(sp);
+	lx_debug("lx_sigreturn: calling setcontext; retucp %p flags %lx "
+	    "link %p\n", lxsdf->lxsdf_retucp, lxsdf->lxsdf_retucp->uc_flags,
+	    lxsdf->lxsdf_retucp->uc_link);
+	setcontext(lxsdf->lxsdf_retucp);
+	assert(0);
 
 	/*NOTREACHED*/
 	return (0);
@@ -1087,16 +1066,19 @@ lx_sigreturn(void)
 long
 lx_rt_sigreturn(void)
 {
+	lx_sigdeliver_frame_t *lxsdf;
 	struct lx_sigstack *lx_ssp;
-	lx_regs_t *rp;
 	lx_ucontext_t *lx_ucp;
 	ucontext_t *ucp;
+	ucontext_t *sigucp;
 	uintptr_t sp;
 
 	/* Get the registers at the emulated Linux rt_sigreturn syscall */
-	rp = lx_syscall_regs();
+	ucp = lx_syscall_regs();
 
 #if defined(_ILP32)
+	lx_debug("lx_rt_sigreturn: ESP %p UESP %p\n", LX_REG(ucp, ESP),
+	    LX_REG(ucp, UESP));
 	/*
 	 * For 32-bit
 	 *
@@ -1121,14 +1103,14 @@ lx_rt_sigreturn(void)
 	 *	  lx_sigdeliver() created the stack frame for the Linux signal
 	 *	  handler.
 	 */
-	sp = (uintptr_t)rp->lxr_esp - 4;
+	sp = (uintptr_t)LX_REG(ucp, REG_SP) - 4;
 #else
 	/*
 	 * We need to make an adjustment for 64-bit code as well. Since 64-bit
 	 * does not use the trampoline, it's probably for the same reason as
 	 * alluded to above.
 	 */
-	sp = (uintptr_t)rp->lxr_rsp - 8;
+	sp = (uintptr_t)LX_REG(ucp, REG_SP) - 8;
 #endif
 
 	/*
@@ -1138,39 +1120,38 @@ lx_rt_sigreturn(void)
 	 * save a pointer to it before incrementing our copy of the sp.
 	 */
 	lx_ssp = (struct lx_sigstack *)sp;
-	sp += sizeof (struct lx_sigstack);
+	sp += SA(sizeof (struct lx_sigstack));
+
+#if defined(_LP64)
+	/*
+	 * The 64-bit lx_sigdeliver() inserts 8 bytes of padding between
+	 * the lx_sigstack_t and the delivery frame to maintain ABI stack
+	 * alignment.
+	 */
+	sp += 8;
+#endif
 
 	/*
-	 * We handle 32 vs. 64 bit differently here, but first, lx_sigdeliver()
-	 * pushed LX_SIGRT_MAGIC on the stack before it created the
-	 * struct lx_sigstack (and possibly struct lx_fpstate_t).
+	 * lx_sigdeliver() pushes a lx_sigdeliver_frame_t onto the stack
+	 * before it creates the struct lx_oldsigstack.
 	 *
-	 * If we don't find LX_SIGRT_MAGIC here, the stack's been corrupted and
-	 * we need to kill ourselves.
-	 *
-	 * Check for and remove LX_SIGRT_MAGIC from the stack.
+	 * If we do not find it here, the stack has been corrupted and we
+	 * need to kill ourselves.
+	 */
+	lxsdf = (lx_sigdeliver_frame_t *)sp;
+	if (lxsdf->lxsdf_magic != LX_SIGRT_MAGIC) {
+		lx_err_fatal("sp @ 0x%p, expected 0x%x, found 0x%x!",
+		    sp, LX_SIGRT_MAGIC, lxsdf->lxsdf_magic);
+	}
+
+	sigucp = lxsdf->lxsdf_sigucp;
+
+	/*
+	 * We need to copy machine registers the Linux signal handler may have
+	 * modified back to the Illumos version.
 	 */
 #if defined(_LP64)
-	/* account for extra word used in lx_sigdeliver for stack alignment */
-	sp += 8;
-
-	if (*(uint64_t *)sp != LX_SIGRT_MAGIC)
-		lx_err_fatal("sp @ 0x%p, expected 0x%x, found 0x%x!",
-		    sp, LX_SIGRT_MAGIC, *(uint32_t *)sp);
-	sp += sizeof (uint64_t);
-
-	/*
-	 * Now *(sp + 24) points to the Illumos ucontext_t (working backwards
-	 * through the Linux signal hander, the stack builder, and the stack
-	 * size) which we saved on the stack in the lx_sigdeliver assembly
-	 * prologue before we pushed LX_SIGRT_MAGIC, so we need to copy machine
-	 * registers the Linux signal handler may have modified back to the
-	 * Illumos version.
-	 */
-	ucp = (ucontext_t *)(*(ssize_t *)(sp + 24));
-
 	lx_ucp = &lx_ssp->uc;
-	LX_SIGRETURN(lx_ucp, ucp, sp);
 
 	/* Track SIGSEGV recursion depth for vsyscall */
 	if (lx_ssp->si.lsi_signo == LX_SIGSEGV) {
@@ -1181,47 +1162,33 @@ lx_rt_sigreturn(void)
 	/*
 	 * General register layout is completely different.
 	 */
-	ucp->uc_mcontext.gregs[REG_R15] = lx_ucp->uc_sigcontext.sc_r15;
-	ucp->uc_mcontext.gregs[REG_R14] = lx_ucp->uc_sigcontext.sc_r14;
-	ucp->uc_mcontext.gregs[REG_R13] = lx_ucp->uc_sigcontext.sc_r13;
-	ucp->uc_mcontext.gregs[REG_R12] = lx_ucp->uc_sigcontext.sc_r12;
-	ucp->uc_mcontext.gregs[REG_R11] = lx_ucp->uc_sigcontext.sc_r11;
-	ucp->uc_mcontext.gregs[REG_R10] = lx_ucp->uc_sigcontext.sc_r10;
-	ucp->uc_mcontext.gregs[REG_R9] = lx_ucp->uc_sigcontext.sc_r9;
-	ucp->uc_mcontext.gregs[REG_R8] = lx_ucp->uc_sigcontext.sc_r8;
-	ucp->uc_mcontext.gregs[REG_RDI] = lx_ucp->uc_sigcontext.sc_rdi;
-	ucp->uc_mcontext.gregs[REG_RSI] = lx_ucp->uc_sigcontext.sc_rsi;
-	ucp->uc_mcontext.gregs[REG_RBP] = lx_ucp->uc_sigcontext.sc_rbp;
-	ucp->uc_mcontext.gregs[REG_RBX] = lx_ucp->uc_sigcontext.sc_rbx;
-	ucp->uc_mcontext.gregs[REG_RDX] = lx_ucp->uc_sigcontext.sc_rdx;
-	ucp->uc_mcontext.gregs[REG_RCX] = lx_ucp->uc_sigcontext.sc_rcx;
-	ucp->uc_mcontext.gregs[REG_RAX] = lx_ucp->uc_sigcontext.sc_rax;
-	ucp->uc_mcontext.gregs[REG_TRAPNO] = lx_ucp->uc_sigcontext.sc_trapno;
-	ucp->uc_mcontext.gregs[REG_ERR] = lx_ucp->uc_sigcontext.sc_err;
-	ucp->uc_mcontext.gregs[REG_RIP] = lx_ucp->uc_sigcontext.sc_rip;
-	ucp->uc_mcontext.gregs[REG_CS] = lx_ucp->uc_sigcontext.sc_cs;
-	ucp->uc_mcontext.gregs[REG_RFL] = lx_ucp->uc_sigcontext.sc_eflags;
-	ucp->uc_mcontext.gregs[REG_RSP] = lx_ucp->uc_sigcontext.sc_rsp;
-	ucp->uc_mcontext.gregs[REG_SS] = lx_ucp->uc_sigcontext.sc_pad0;
-	ucp->uc_mcontext.gregs[REG_FS] = lx_ucp->uc_sigcontext.sc_fs;
-	ucp->uc_mcontext.gregs[REG_GS] = lx_ucp->uc_sigcontext.sc_gs;
+	sigucp->uc_mcontext.gregs[REG_R15] = lx_ucp->uc_sigcontext.sc_r15;
+	sigucp->uc_mcontext.gregs[REG_R14] = lx_ucp->uc_sigcontext.sc_r14;
+	sigucp->uc_mcontext.gregs[REG_R13] = lx_ucp->uc_sigcontext.sc_r13;
+	sigucp->uc_mcontext.gregs[REG_R12] = lx_ucp->uc_sigcontext.sc_r12;
+	sigucp->uc_mcontext.gregs[REG_R11] = lx_ucp->uc_sigcontext.sc_r11;
+	sigucp->uc_mcontext.gregs[REG_R10] = lx_ucp->uc_sigcontext.sc_r10;
+	sigucp->uc_mcontext.gregs[REG_R9] = lx_ucp->uc_sigcontext.sc_r9;
+	sigucp->uc_mcontext.gregs[REG_R8] = lx_ucp->uc_sigcontext.sc_r8;
+	sigucp->uc_mcontext.gregs[REG_RDI] = lx_ucp->uc_sigcontext.sc_rdi;
+	sigucp->uc_mcontext.gregs[REG_RSI] = lx_ucp->uc_sigcontext.sc_rsi;
+	sigucp->uc_mcontext.gregs[REG_RBP] = lx_ucp->uc_sigcontext.sc_rbp;
+	sigucp->uc_mcontext.gregs[REG_RBX] = lx_ucp->uc_sigcontext.sc_rbx;
+	sigucp->uc_mcontext.gregs[REG_RDX] = lx_ucp->uc_sigcontext.sc_rdx;
+	sigucp->uc_mcontext.gregs[REG_RCX] = lx_ucp->uc_sigcontext.sc_rcx;
+	sigucp->uc_mcontext.gregs[REG_RAX] = lx_ucp->uc_sigcontext.sc_rax;
+	sigucp->uc_mcontext.gregs[REG_TRAPNO] = lx_ucp->uc_sigcontext.sc_trapno;
+	sigucp->uc_mcontext.gregs[REG_ERR] = lx_ucp->uc_sigcontext.sc_err;
+	sigucp->uc_mcontext.gregs[REG_RIP] = lx_ucp->uc_sigcontext.sc_rip;
+	sigucp->uc_mcontext.gregs[REG_CS] = lx_ucp->uc_sigcontext.sc_cs;
+	sigucp->uc_mcontext.gregs[REG_RFL] = lx_ucp->uc_sigcontext.sc_eflags;
+	sigucp->uc_mcontext.gregs[REG_RSP] = lx_ucp->uc_sigcontext.sc_rsp;
+	sigucp->uc_mcontext.gregs[REG_SS] = lx_ucp->uc_sigcontext.sc_pad0;
+	sigucp->uc_mcontext.gregs[REG_FS] = lx_ucp->uc_sigcontext.sc_fs;
+	sigucp->uc_mcontext.gregs[REG_GS] = lx_ucp->uc_sigcontext.sc_gs;
 
 #else /* is _ILP32 */
-	if (*(uint32_t *)sp != LX_SIGRT_MAGIC)
-		lx_err_fatal("sp @ 0x%p, expected 0x%x, found 0x%x!",
-		    sp, LX_SIGRT_MAGIC, *(uint32_t *)sp);
-	sp += sizeof (uint32_t);
-
-	/*
-	 * Here *sp points to the Illumos ucontext_t which was saved on stack
-	 * right before we pushed LX_SIGRT_MAGIC in the 32-bit lx_sigdeliver
-	 * assembly code. We need to copy machine registers the Linux signal
-	 * handler may have modified back to the Illumos version.
-	 */
-	ucp = (ucontext_t *)(*(ssize_t *)sp);
-
 	lx_ucp = &lx_ssp->uc;
-	LX_SIGRETURN(lx_ucp, ucp, sp);
 
 	/*
 	 * Illumos and Linux both follow the SysV i386 ABI layout for the
@@ -1236,83 +1203,36 @@ lx_rt_sigreturn(void)
 	 */
 	lx_ucp->uc_sigcontext.sc_esp_at_signal = lx_ucp->uc_sigcontext.sc_esp;
 
-	bcopy(&lx_ucp->uc_sigcontext, &ucp->uc_mcontext.gregs,
+	bcopy(&lx_ucp->uc_sigcontext, &sigucp->uc_mcontext.gregs,
 	    sizeof (gregset_t));
 #endif
 
-	if (lx_ucp->uc_sigcontext.sc_fpstate != NULL)
+	if (lx_ucp->uc_sigcontext.sc_fpstate != NULL) {
 		ltos_fpstate(lx_ucp->uc_sigcontext.sc_fpstate,
-		    &ucp->uc_mcontext.fpregs);
+		    &sigucp->uc_mcontext.fpregs);
+	}
 
 	/*
 	 * Convert the Linux signal mask and stack back to their
 	 * Illumos equivalents.
 	 */
-	(void) ltos_sigset(&lx_ucp->uc_sigmask, &ucp->uc_sigmask);
-	ltos_stack(&lx_ucp->uc_stack, &ucp->uc_stack);
+	(void) ltos_sigset(&lx_ucp->uc_sigmask, &sigucp->uc_sigmask);
+	ltos_stack(&lx_ucp->uc_stack, &sigucp->uc_stack);
 
 	/*
-	 * For signal mask handling to be done properly, this function must
-	 * return to the libc call_user_handler() routine that originally
-	 * called the signal handler, rather than directly set the context back
-	 * to the place the signal interrupted execution, as the original Linux
-	 * code would do.
-	 *
-	 * For the 64-bit case we can't simply let call_user_handler() invoke
-	 * __setcontext() since we need to also manage the syscall mode. Thus
-	 * we use the lx_setcontext callback hook into libc to manage this via
-	 * a brand call which combines the setcontext with setting the mode
-	 * switch.
+	 * For signal mask handling to be done properly, this call needs to
+	 * return to the libc routine that originally called the signal handler
+	 * rather than directly set the context back to the place the signal
+	 * interrupted execution as the original Linux code would do.
 	 */
-#if defined(_LP64)
-	/*
-	 * At this point sp points to the end of the stack frame we constructed
-	 * on entry to lx_sigdeliver. Pop this frame off the stack.
-	 */
-	sp += 0x30;
-
-#else
-	/*
-	 * At this point sp points to the ucontext_t pointer we pushed on the
-	 * stack right before we pushed LX_SIGRT_MAGIC in lx_sigdeliver. Pop
-	 * this value off the stack.
-	 */
-	sp += sizeof (uint32_t);
-#endif
-
-	/*
-	 * At this point sp points to the base frame we had on entry to
-	 * lx_sigdeliver (%ebp/%rbp at TOS, return address next).
-	 *
-	 * Pass the new sp to lx_sigreturn_tolibc(), which will in turn
-	 * manipulate the x86 registers to make it appear that
-	 * lx_call_user_handler() has returned. This will then take us directly
-	 * back to libc's call_user_handler().
-	 */
-	lx_debug("calling lx_sigreturn_tolibc(0x%p)", sp);
-	lx_sigreturn_tolibc(sp);
+	lx_debug("lx_rt_sigreturn: calling setcontext; retucp %p\n",
+	    lxsdf->lxsdf_retucp);
+	setcontext(lxsdf->lxsdf_retucp);
+	assert(0);
 
 	/*NOTREACHED*/
 	return (0);
 }
-
-#if defined(_LP64)
-static int
-lx_setcontext(const ucontext_t *ucp)
-{
-	extern int lx_traceflag;
-
-	/*
-	 * Since we don't return via lx_emulate, issue a trace msg here if
-	 * necessary. We know this is only called in the 64-bit rt_sigreturn
-	 * code path to the syscall number is 15.
-	 */
-	if (lx_traceflag != 0) {
-		(void) syscall(SYS_brand, B_SYSRETURN, 15, 0);
-	}
-	return (syscall(SYS_brand, B_SIGNAL_RETURN, ucp));
-}
-#endif
 
 
 #if defined(_ILP32)
@@ -1321,7 +1241,8 @@ lx_setcontext(const ucontext_t *ucp)
  * This stack-builder function is only used by 32-bit code.
  */
 static void
-lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
+lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
+    uintptr_t *hargs)
 {
 	extern void lx_sigreturn_tramp();
 
@@ -1385,6 +1306,8 @@ lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
 	 */
 	bcopy((void *)lx_sigreturn_tramp, lx_ossp->trampoline,
 	    sizeof (lx_ossp->trampoline));
+
+	LX_SIGDELIVER(lx_sig, lxsap, NULL, NULL);
 }
 #endif
 
@@ -1394,7 +1317,8 @@ lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
  * code (32-bit code also calls this when using "modern" signals).
  */
 static void
-lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
+lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
+    uintptr_t *hargs)
 {
 	extern void lx_rt_sigreturn_tramp();
 
@@ -1407,8 +1331,20 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
 
 	lx_ucp = &lx_ssp->uc;
 #if defined(_ILP32)
+	/*
+	 * Arguments are passed to the 32-bit signal handler on the stack.
+	 */
 	lx_ssp->ucp = lx_ucp;
+	lx_ssp->sip = sip != NULL ? &lx_ssp->si : NULL;
 	lx_ssp->sig = lx_sig;
+#else
+	/*
+	 * Arguments to the 64-bit signal handler are passed in registers:
+	 *   hdlr(int sig, siginfo_t *sip, void *ucp);
+	 */
+	hargs[0] = lx_sig;
+	hargs[1] = sip != NULL ? (uintptr_t)&lx_ssp->si : NULL;
+	hargs[2] = (uintptr_t)lx_ucp;
 #endif
 
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
@@ -1485,19 +1421,6 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
 	    (uintptr_t)sip->si_addr : 0;
 
 	/*
-	 * Point the lx_siginfo_t pointer to the signal stack's lx_siginfo_t
-	 * if there was a Illumos siginfo_t to convert, otherwise set it to
-	 * NULL. For 64-bit code a NULL sip is handled in the lx_deliver
-	 * assembly code.
-	 */
-#if defined(_ILP32)
-	if (sip != NULL)
-		lx_ssp->sip = &lx_ssp->si;
-	else
-		lx_ssp->sip = NULL;
-#endif
-
-	/*
 	 * This should only return an error if the signum is invalid but that
 	 * also gets converted into a LX_SIGKILL by this function.
 	 */
@@ -1531,18 +1454,6 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
 #endif
 
 	LX_SIGDELIVER(lx_sig, lxsap, lx_ssp, lx_ucp);
-
-#if defined(_LP64)
-	/*
-	 * For the 64-bit code this must be the last syscall we do in the
-	 * emulation code path before we return back to the Linux signal
-	 * handler. This will disable native syscalls so the next time a
-	 * syscall happens on this thread, it will come back into the emulation.
-	 */
-	(void) syscall(SYS_brand, B_CLR_NTV_SYSC_FLAG);
-#endif
-
-	/* We return to lx_sigdeliver to jump into the Linux signal handler */
 }
 
 #if defined(_LP64)
@@ -1555,10 +1466,10 @@ lx_vsyscall_return(long ret, ucontext_t *ucp)
 	 * Simulate a 'ret' by grabbing the return address off the caller's
 	 * stack and incrementing rsp manually before sigreturning back.
 	 */
-	(void) uucopy((void*)ucp->uc_mcontext.gregs[REG_RSP],
-	    &ucp->uc_mcontext.gregs[REG_RIP], sizeof (void*));
-	lx_debug("\tvsyscall return to %p", ucp->uc_mcontext.gregs[REG_RIP]);
-	ucp->uc_mcontext.gregs[REG_RSP] += sizeof (void*);
+	(void) uucopy((void*)ucp->uc_mcontext.gregs[REG_SP],
+	    &ucp->uc_mcontext.gregs[REG_PC], sizeof (void*));
+	lx_debug("\tvsyscall return to %p", ucp->uc_mcontext.gregs[REG_PC]);
+	ucp->uc_mcontext.gregs[REG_SP] += sizeof (void*);
 
 	/*
 	 * Make sure that libc's ul_sigmask reflects what the sigmask is about
@@ -1566,7 +1477,11 @@ lx_vsyscall_return(long ret, ucontext_t *ucp)
 	 */
 	thr_sigsetmask(SIG_SETMASK, &ucp->uc_sigmask, NULL);
 
-	(void) syscall(SYS_brand, B_SIGNAL_RETURN, ucp);
+	/*
+	 * XXX We should reconcile this with B_JUMP_TO_LINUX or a regular
+	 * return from the signal handler, or whatever.
+	 */
+	abort();
 }
 #endif
 
@@ -1578,26 +1493,10 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 {
 	void (*user_handler)();
 	void (*stk_builder)();
-#if defined(_ILP32)
-	lx_tsd_t *lx_tsd;
-	int err;
-#endif
 	struct lx_sigaction *lxsap;
 	ucontext_t *ucp = (ucontext_t *)p;
-	uintptr_t gs;
 	size_t stksize;
 	int lx_sig;
-
-	switch (sig) {
-	case SIGCLD:
-		/*
-		 * Signal to an interrupted waitpid() that it was interrupted
-		 * by a SIGCLD, and should restart to grab the wait status
-		 * this signal represented.
-		 */
-		lx_had_sigchild = 1;
-		break;
-	}
 
 	/*
 	 * If Illumos signal has no Linux equivalent, effectively ignore it.
@@ -1613,18 +1512,6 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
 	lx_debug("lxsap @ 0x%p", lxsap);
-
-	/*
-	 * If the delivery of this signal interrupted a system call, we must
-	 * only restart it if sigaction(2) was used to set the SA_RESTART flag
-	 * for this signal.  The lx_emulate() function checks this per-thread
-	 * variable to discover the restart disposition of the most recently
-	 * handled signal.
-	 *
-	 * NOTE: this mechanism may not stand up to close scrutiny in the face
-	 * of nested asynchronous signal delivery.
-	 */
-	lx_do_syscall_restart = !!(lxsap->lxsa_flags & LX_SA_RESTART);
 
 	/*
 	 * Emulate vsyscall support.
@@ -1656,25 +1543,24 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	if (sig == SIGSEGV) {
 		int i;
 		for (i = 0; lx_vsyscalls[i].lv_addr != NULL; i++) {
-			if (lx_vsyscalls[i].lv_addr != (uintptr_t)sip->si_addr)
+			uintptr_t addr = (uintptr_t)sip->si_addr;
+
+			if (lx_vsyscalls[i].lv_addr != addr)
 				continue;
+
 			/*
 			 * Users of vsyscall must commit fully by using
 			 * jmp/call access the vsyscall.  Cowardly reading data
 			 * from the page beforehand isn't allowed or possible.
 			 */
-			if (sip->si_addr !=
-			    (void*)ucp->uc_mcontext.gregs[REG_RIP])
+			if (addr != LX_REG(ucp, REG_PC))
 				continue;
 
-			lx_debug(lx_vsyscalls[i].lv_msg,
-			    ucp->uc_mcontext.gregs[REG_RDI],
-			    ucp->uc_mcontext.gregs[REG_RSI],
-			    ucp->uc_mcontext.gregs[REG_RDX]);
+			lx_debug(lx_vsyscalls[i].lv_msg, LX_REG(ucp, REG_RDI),
+			    LX_REG(ucp, REG_RSI), LX_REG(ucp, REG_RDX));
 			long ret = lx_vsyscalls[i].lv_func(
-			    ucp->uc_mcontext.gregs[REG_RDI],
-			    ucp->uc_mcontext.gregs[REG_RSI],
-			    ucp->uc_mcontext.gregs[REG_RDX]);
+			    LX_REG(ucp, REG_RDI), LX_REG(ucp, REG_RSI),
+			    LX_REG(ucp, REG_RDX));
 			lx_vsyscall_return(ret, ucp);
 			assert(0);
 		}
@@ -1715,28 +1601,9 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 		    (lxsap->lxsa_handler == SIG_DFL) ? "SIG_DFL" : "SIG_IGN");
 
 #if defined(_LP64)
-	/* %gs is ignored in the 64-bit lx_sigdeliver */
-	gs = 0;
-
 	stksize = sizeof (struct lx_sigstack);
 	stk_builder = lx_build_signal_frame;
-
 #else
-	if ((err = thr_getspecific(lx_tsd_key, (void **)&lx_tsd)) != 0)
-		lx_err_fatal("lx_call_user_handler: unable to read "
-		    "thread-specific data: %s", strerror(err));
-
-	assert(lx_tsd != 0);
-
-	gs = lx_tsd->lxtsd_gs & 0xffff;		/* gs is only 16 bits */
-
-	/*
-	 * Any zero %gs value should be caught when a save is attempted in
-	 * lx_emulate(), but this extra check will catch any zero values due to
-	 * bugs in the library. This is only applicable to 32-bit code.
-	 */
-	assert(gs != 0);
-
 	if (lxsap->lxsa_flags & LX_SA_SIGINFO) {
 		stksize = sizeof (struct lx_sigstack);
 		stk_builder = lx_build_signal_frame;
@@ -1748,22 +1615,312 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 	user_handler = lxsap->lxsa_handler;
 
-	lx_debug("delivering %d (lx %d) to handler at 0x%p with gs 0x%x", sig,
-	    lx_sig, lxsap->lxsa_handler, gs);
+	lx_debug("delivering %d (lx %d) to handler at 0x%p", sig, lx_sig,
+	    lxsap->lxsa_handler);
 
 	if (lxsap->lxsa_flags & LX_SA_RESETHAND)
 		lxsap->lxsa_handler = SIG_DFL;
 
+	lx_sigdeliver(lx_sig, sip, ucp, stksize, stk_builder, user_handler,
+	    lxsap);
+
 	/*
-	 * lx_sigdeliver() doesn't return, so it relies on the Linux signal
-	 * handler to clean up the stack, reset the current signal mask and
-	 * make a system call (sigreturn or rt_sigreturn) which is intended to
-	 * return to the code interrupted by the signal. The emulation will
-	 * catch that syscall, finish it's own cleanup, then actually return
-	 * back through here via lx_sigreturn_tolibc(), which leads us back
-	 * into libc and then back to the point where we were interrupted.
+	 * We need to handle restarting system calls if requested by the
+	 * program:
 	 */
-	lx_sigdeliver(lx_sig, sip, ucp, stksize, stk_builder, user_handler, gs);
+	if (lxsap->lxsa_flags & LX_SA_RESTART) {
+		unsigned int flags = (uintptr_t)ucp->uc_brand_data[0];
+		long ret;
+
+		/*
+		 * XXX
+		 */
+		ret = (long)LX_REG(ucp, REG_R0);
+		if (flags & LX_UC_RESTART_SYSCALL && ret == -4) {
+			lx_debug("restarting interrupted system call %d",
+			    (int)(uintptr_t)ucp->uc_brand_data[0]);
+			LX_REG(ucp, REG_PC) -= 2;
+			LX_REG(ucp, REG_R0) =
+			    (int)(uintptr_t)ucp->uc_brand_data[2];
+		}
+	}
+}
+
+/*
+ * XXX
+ */
+void
+lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
+    void (*stack_builder)(), void (*user_handler)(),
+    struct lx_sigaction *lxsap)
+{
+	ucontext_t uc;
+	lx_tsd_t *lxtsd = lx_get_tsd();
+	int totsz = 0;
+	uintptr_t flags;
+	uintptr_t hargs[3];
+	/*
+	 * These variables must be "volatile", as they are modified after the
+	 * getcontext() stores the register state:
+	 */
+	volatile boolean_t signal_delivered = B_FALSE;
+	volatile uintptr_t lxfp;
+	volatile uintptr_t old_tsd_sp;
+	volatile int newstack;
+
+	extern void _sigoff(void);
+	extern void _sigon(void);
+
+	/*
+	 * This function involves modifying the Linux process stack for this
+	 * thread.  To do so without corruption requires us to exclude other
+	 * signal handlers (or emulated system calls called from within those
+	 * handlers) from running while we reserve space on that stack.  We
+	 * defer the execution of further instances of lx_call_user_handler()
+	 * until we have completed this operation.
+	 */
+	_sigoff();
+
+	/*
+	 * Clear register arguments vector.
+	 */
+	bzero(hargs, sizeof (hargs));
+
+	/*
+	 * We save a context here so that we can be returned later to complete
+	 * handling the signal.
+	 */
+	lx_debug("lx_sigdeliver: STORING RETURN CONTEXT @ %p\n", &uc);
+	assert(getcontext(&uc) == 0);
+	lx_debug("lx_sigdeliver: RETURN CONTEXT %p LINK %p FLAGS %lx\n",
+	    &uc, uc.uc_link, uc.uc_flags);
+	if (signal_delivered) {
+		/*
+		 * If the "signal_delivered" flag is set, we are returned here
+		 * via setcontext() as called by the emulated Linux signal
+		 * return system call.
+		 */
+		lx_debug("lx_sigdeliver: WE ARE BACK, VIA UC @ %p!\n", &uc);
+		goto after_signal_handler;
+	}
+	signal_delivered = B_TRUE;
+
+	/*
+	 * Preserve the current tsd value of the Linux process stack pointer,
+	 * even if it is zero.  We will restore it when we are returned here
+	 * via setcontext() after the Linux process has completed execution of
+	 * its signal handler.
+	 */
+	old_tsd_sp = lxtsd->lxtsd_lx_sp;
+
+	/*
+	 * Figure out whether we will be handling this signal on an alternate
+	 * stack specified by the user.
+	 */
+	newstack = (lxsap->lxsa_flags & LX_SA_ONSTACK) &&
+	    !(lxtsd->lxtsd_sigaltstack.ss_flags & (LX_SS_ONSTACK |
+	    LX_SS_DISABLE));
+
+	/*
+	 * Find the first unused region of the Linux process stack, where
+	 * we will assemble our signal delivery frame.
+	 */
+	flags = (uintptr_t)ucp->uc_brand_data[0];
+	if (newstack) {
+		/*
+		 * We are moving to the user-provided alternate signal
+		 * stack.
+		 */
+		lxfp = SA((uintptr_t)lxtsd->lxtsd_sigaltstack.ss_sp) +
+		    SA(lxtsd->lxtsd_sigaltstack.ss_size) - STACK_ALIGN;
+		lx_debug("lx_sigdeliver: moving to ALTSTACK sp %p\n", lxfp);
+		LX_SIGNAL_ALTSTACK_ENABLE(lxfp);
+	} else if (flags & LX_UC_STACK_BRAND) {
+		/*
+		 * We interrupted the Linux process to take this signal.  The
+		 * stack pointer is the one saved in this context.
+		 */
+		lxfp = LX_REG(ucp, REG_SP);
+	} else {
+		/*
+		 * We interrupted a native (emulation) routine, so we must get
+		 * the current stack pointer from either the tsd (if one is
+		 * stored there) or via the context chain.
+		 *
+		 */
+		lxfp = lx_find_brand_sp();
+		if (lxtsd->lxtsd_lx_sp != 0) {
+			/*
+			 * We must also make room for the possibility of nested
+			 * signal delivery -- we may be pre-empting the
+			 * in-progress handling of another signal.
+			 *
+			 * Note that if we were already on the alternate stack,
+			 * any emulated Linux system calls would be betwixt
+			 * that original signal frame and this new one on the
+			 * one contiguous stack, so this logic holds either
+			 * way:
+			 */
+			lxfp = MIN(lxtsd->lxtsd_lx_sp, lxfp);
+		}
+	}
+
+	/*
+	 * Account for a reserved stack region (for amd64, this is 128 bytes),
+	 * and align the stack:
+	 */
+	lxfp -= STACK_RESERVE;
+	lxfp &= ~(STACK_ALIGN - 1);
+
+	/*
+	 * Allocate space on the Linux process stack for our delivery frame,
+	 * including:
+	 *
+	 *   ----------------------------------------------------- old %sp
+	 *   - lx_sigdeliver_frame_t
+	 *   - (ucontext_t pointers and stack magic)
+	 *   -----------------------------------------------------
+	 *   - (amd64-only 8-byte alignment gap)
+	 *   -----------------------------------------------------
+	 *   - frame of size "stacksz" from the stack builder
+	 *   ----------------------------------------------------- new %sp
+	 */
+#if defined(_LP64)
+	/*
+	 * The AMD64 ABI requires us to align the stack such that when the
+	 * called function pushes the base pointer, the stack is 16 byte
+	 * aligned.  The stack must, therefore, be 8- but _not_ 16-byte
+	 * aligned.
+	 */
+#if (STACK_ALIGN != 16) || (STACK_ENTRY_ALIGN != 8)
+#error "lx_sigdeliver() did not find expected stack alignment"
+#endif
+	totsz = SA(sizeof (lx_sigdeliver_frame_t)) + SA(stacksz) + 8;
+	assert((totsz & (STACK_ENTRY_ALIGN - 1)) == 0);
+	assert((totsz & (STACK_ALIGN - 1)) == 8);
+#else
+	totsz = SA(sizeof (lx_sigdeliver_frame_t)) + SA(stacksz);
+	assert((totsz & (STACK_ALIGN - 1)) == 0);
+#endif
+
+	/*
+	 * Copy our return frame into place:
+	 */
+	lxfp -= SA(sizeof (lx_sigdeliver_frame_t));
+	lx_debug("lx_sigdeliver: lx_sigdeliver_frame_t @ %p\n", lxfp);
+	{
+		lx_sigdeliver_frame_t frm;
+
+		frm.lxsdf_magic = LX_SIGRT_MAGIC;
+		frm.lxsdf_retucp = &uc;
+		frm.lxsdf_sigucp = ucp;
+
+		lx_debug("lx_sigdeliver: retucp %p sigucp %p\n",
+		    frm.lxsdf_retucp, frm.lxsdf_sigucp);
+
+		if (uucopy(&frm, (void *)lxfp, sizeof (frm)) != 0) {
+			/*
+			 * XXX should induce SIGSEGV here, probably.
+			 */
+			lx_err_fatal("could not write to Linux stack");
+		}
+
+		LX_SIGNAL_DELIVERY_FRAME_CREATE((void *)lxfp);
+	}
+
+	/*
+	 * Build the Linux signal handling frame:
+	 */
+#if defined(_LP64)
+	lxfp -= SA(stacksz) + 8;
+#else
+	lxfp -= SA(stacksz);
+#endif
+	lx_debug("lx_sigdeliver: Linux sig frame @ %p\n", lxfp);
+	stack_builder(lx_sig, sip, ucp, lxfp, hargs);
+
+	/*
+	 * Record our reservation so that any nested signal handlers
+	 * can see it.
+	 */
+	lx_debug("lx_sigdeliver: Linux tsd sp %p -> %p\n", lxtsd->lxtsd_lx_sp,
+	    lxfp);
+	lxtsd->lxtsd_lx_sp = lxfp;
+
+	if (newstack) {
+		lxtsd->lxtsd_sigaltstack.ss_flags |= LX_SS_ONSTACK;
+	}
+
+	/*
+	 * Re-enable signal delivery.  If a signal was queued while we were
+	 * in the critical section, it will be delivered immediately.
+	 */
+	_sigon();
+
+	/*
+	 * Pass control to the Linux signal handler:
+	 */
+	lx_debug("lx_sigdeliver: JUMPING TO LINUX (sig %d sp %p eip %p)\n",
+	    lx_sig, lxfp, user_handler);
+	{
+		ucontext_t jump_uc;
+
+		bcopy(lx_find_brand_uc(), &jump_uc, sizeof (jump_uc));
+
+		/*
+		 * We want to load the general registers from this context, and
+		 * switch to the BRAND stack.  We do _not_ want to restore the
+		 * uc_link value from this synthetic context, as that would
+		 * break the signal handling context chain.
+		 */
+		jump_uc.uc_flags = UC_CPU;
+		jump_uc.uc_brand_data[0] = (void *)(LX_UC_STACK_BRAND |
+		    LX_UC_IGNORE_LINK);
+
+		jump_uc.uc_mcontext.gregs[REG_FP] = 0;
+		jump_uc.uc_mcontext.gregs[REG_SP] = lxfp;
+		jump_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)user_handler;
+
+#if defined(_LP64)
+		/*
+		 * Pass signal handler arguments by registers on AMD64.
+		 */
+		jump_uc.uc_mcontext.gregs[REG_RDI] = hargs[0];
+		jump_uc.uc_mcontext.gregs[REG_RSI] = hargs[1];
+		jump_uc.uc_mcontext.gregs[REG_RDX] = hargs[2];
+#endif
+
+		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
+			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
+			    strerror(errno));
+		}
+	}
+
+
+	assert(0);
+
+after_signal_handler:
+	/*
+	 * Ensure all nested signal handlers have completed correctly
+	 * and then remove our stack reservation.
+	 */
+	_sigoff();
+	LX_SIGNAL_POST_HANDLER(lxfp, old_tsd_sp);
+	assert(lxtsd->lxtsd_lx_sp == lxfp);
+	lx_debug("lx_sigdeliver: after; Linux tsd sp %p -> %p\n", lxfp,
+	    old_tsd_sp);
+	lxtsd->lxtsd_lx_sp = old_tsd_sp;
+	if (newstack) {
+		LX_SIGNAL_ALTSTACK_DISABLE();
+		lx_debug("lx_sigdeliver: disabling ALTSTACK sp %p\n", lxfp);
+		lxtsd->lxtsd_sigaltstack.ss_flags &= ~LX_SS_ONSTACK;
+	}
+	_sigon();
+
+	/*
+	 * Here we return to libc so that it may clean up and restore the
+	 * context originally interrupted by this signal.
+	 */
 }
 
 /*
@@ -1849,12 +2006,17 @@ lx_sigaction_common(int lx_sig, struct lx_sigaction *lxsp,
 				 */
 				sa.sa_flags = SA_SIGINFO;
 
+				/*
+				 * When translating from Linux to illumos
+				 * sigaction(2) flags, we explicitly do not
+				 * pass SA_ONSTACK to the kernel.  The
+				 * alternate stack for Linux signal handling is
+				 * handled entirely by the emulation code.
+				 */
 				if (lxsa.lxsa_flags & LX_SA_NOCLDSTOP)
 					sa.sa_flags |= SA_NOCLDSTOP;
 				if (lxsa.lxsa_flags & LX_SA_NOCLDWAIT)
 					sa.sa_flags |= SA_NOCLDWAIT;
-				if (lxsa.lxsa_flags & LX_SA_ONSTACK)
-					sa.sa_flags |= SA_ONSTACK;
 				if (lxsa.lxsa_flags & LX_SA_RESTART)
 					sa.sa_flags |= SA_RESTART;
 				if (lxsa.lxsa_flags & LX_SA_NODEFER)
@@ -2079,61 +2241,11 @@ lx_signal(uintptr_t lx_sig, uintptr_t handler)
 }
 #endif
 
-#if defined(_ILP32)
-/*
- * This is only used in 32-bit code and is called by the assembly routine
- * lx_sigacthandler.
- *
- * This C routine saves the passed %gs value into the thread-specific save area.
- */
-void
-lx_sigsavegs(uintptr_t signalled_gs)
-{
-	lx_tsd_t *lx_tsd;
-	int err;
-
-	signalled_gs &= 0xffff;		/* gs is only 16 bits */
-
-	/*
-	 * While a %gs of 0 is technically legal (as long as the application
-	 * never dereferences memory using %gs), Illumos has its own ideas as
-	 * to how a zero %gs should be handled in _update_sregs(), such that
-	 * any 32-bit user process with a %gs of zero running on a system with
-	 * a 64-bit kernel will have its %gs hidden base register stomped on on
-	 * return from a system call, leaving an incorrect base address in
-	 * place until the next time %gs is actually reloaded (forcing a reload
-	 * of the base address from the appropriate descriptor table.)
-	 *
-	 * Of course the kernel will once again stomp on THAT base address when
-	 * returning from a system call, resulting in an application
-	 * segmentation fault.
-	 *
-	 * To avoid this situation, disallow a save of a zero %gs here in order
-	 * to try and capture any Linux process that takes a signal with a zero
-	 * %gs installed.
-	 */
-	assert(signalled_gs != 0);
-
-	if (signalled_gs != LWPGS_SEL) {
-		if ((err = thr_getspecific(lx_tsd_key,
-		    (void **)&lx_tsd)) != 0)
-			lx_err_fatal("sigsavegs: unable to read "
-			    "thread-specific data: %s", strerror(err));
-
-		assert(lx_tsd != 0);
-
-		lx_tsd->lxtsd_gs = signalled_gs;
-		lx_debug("lx_sigsavegs(): gsp 0x%p, saved gs: 0x%x\n",
-		    lx_tsd, signalled_gs);
-	}
-}
-#endif
-
 int
 lx_siginit(void)
 {
 	extern void set_setcontext_enforcement(int);
-	extern void lx_sigacthandler(int, siginfo_t *, void *);
+	extern void set_escaped_context_cleanup(int);
 
 	struct sigaction sa;
 	sigset_t new_set, oset;
@@ -2160,38 +2272,6 @@ lx_siginit(void)
 	for (sig = 1; sig < NSIG; sig++)
 		if (stol_signo[sig] < 0)
 			(void) sigignore(sig);
-
-	/*
-	 * As mentioned previously, when a user signal handler is installed
-	 * via sigaction(), libc interposes on the mechanism by actually
-	 * installing an internal routine sigacthandler() as the signal
-	 * handler.  On receipt of the signal, libc does some thread-related
-	 * processing via sigacthandler(), then calls the registered user
-	 * signal handler on behalf of the user.
-	 *
-	 * For 32-bit code we need to interpose on that mechanism to make sure
-	 * the correct %gs segment register value is installed before the libc
-	 * routine is called, otherwise the libc code will die with a
-	 * segmentation fault.
-	 *
-	 * For 64-bit code we overload the %gs register as a mechanism to pass
-	 * the syscall mode flag out of the kernel.
-	 *
-	 * The private libc routine setsigacthandler() will set our
-	 * interposition routine, lx_sigacthandler(), as the default
-	 * "sigacthandler" routine for all new signal handlers for this
-	 * thread. We also use this in 64-bit code to set the libc interposition
-	 * routine for setting the context when returning from a signal handler.
-	 * This is needed so we can combine changing the syscall mode flag and
-	 * doing __setcontext() in one call.
-	 */
-#if defined(_LP64)
-	setsigacthandler(lx_sigacthandler, &libc_sigacthandler, lx_setcontext);
-#else
-	setsigacthandler(lx_sigacthandler, &libc_sigacthandler, NULL);
-#endif
-	lx_debug("lx_sigacthandler installed, libc_sigacthandler = 0x%p",
-	    libc_sigacthandler);
 
 	/*
 	 * Mark any signals that are ignored as ignored in our interposition
@@ -2237,6 +2317,11 @@ lx_siginit(void)
 	 * that behavior.
 	 */
 	set_setcontext_enforcement(0);
+
+	/*
+	 * XXX
+	 */
+	set_escaped_context_cleanup(0);
 
 	/*
 	 * Reset the signal mask to what we came in with
@@ -2545,11 +2630,9 @@ lx_rt_sigqueueinfo(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 		siginfo.si_pid = lx_siginfo.lsi_pid;
 		siginfo.si_value = lx_siginfo.lsi_value;
 		siginfo.si_uid = lx_siginfo.lsi_uid;
-		return ((syscall(SYS_brand, B_IKE_SYSCALL +
-		    LX_EMUL_rt_sigqueueinfo, tgid, sig, &siginfo)) ?
-		    (-errno) : 0);
+		return ((syscall(SYS_brand, B_HELPER_SIGQUEUE,
+		    tgid, sig, &siginfo)) ? (-errno) : 0);
 	}
-
 }
 
 /*
@@ -2587,7 +2670,6 @@ lx_rt_tgsigqueueinfo(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	siginfo.si_value = lx_siginfo.lsi_value;
 	siginfo.si_uid = lx_siginfo.lsi_uid;
 
-	return ((syscall(SYS_brand, B_IKE_SYSCALL +
-	    LX_EMUL_rt_tgsigqueueinfo, tgid, tid, sig, &siginfo)) ?
-	    (-errno) : 0);
+	return ((syscall(SYS_brand, B_HELPER_TGSIGQUEUE, tgid, tid, sig,
+	    &siginfo)) ? (-errno) : 0);
 }
