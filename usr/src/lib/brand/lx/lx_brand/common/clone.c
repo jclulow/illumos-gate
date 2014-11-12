@@ -60,9 +60,6 @@
 #define	IS_FORK(f)	(((f) & SHARED_AS) == 0)
 #define	IS_VFORK(f)	(((f) & CLONE_VFORK) == CLONE_VFORK)
 
-#define	LX_EXIT		1
-#define	LX_EXIT_GROUP	2
-
 /*
  * This is dicey.  This seems to be an internal glibc structure, and not
  * part of any external interface.  Thus, it is subject to change without
@@ -103,8 +100,6 @@ struct clone_state {
 	int		c_ptrace_event;	/* ptrace(2) event for child stop */
 };
 
-extern void lx_setup_clone(uintptr_t, void *, void *);
-
 /*
  * Counter incremented when we vfork(2) ourselves, and decremented when the
  * vfork(2)ed child exit(2)s or exec(2)s.
@@ -126,11 +121,7 @@ lx_exit(uintptr_t p1)
 		_exit(status);
 	}
 
-	if ((ret = thr_getspecific(lx_tsd_key, (void **)&lx_tsd)) != 0)
-		lx_err_fatal("exit: unable to read thread-specific data: %s",
-		    strerror(ret));
-
-	assert(lx_tsd != 0);
+	lx_tsd = lx_get_tsd();
 
 	lx_tsd->lxtsd_exit = LX_ET_EXIT;
 	lx_tsd->lxtsd_exit_status = status;
@@ -147,12 +138,7 @@ lx_exit(uintptr_t p1)
 	/*
 	 * This thread is exiting.  Restore the state of the thread to
 	 * what it was before we started running linux code.
-	 * For 64-bit code, since we know we are unwinding the stack back to
-	 * lx_init, we need to unwind the syscall mode flag "stack" as well.
 	 */
-#if defined(_LP64)
-	(void) syscall(SYS_brand, B_UNWIND_NTV_SYSC_FLAG);
-#endif
 	(void) setcontext(&lx_tsd->lxtsd_exit_context);
 
 	/*
@@ -179,11 +165,7 @@ lx_group_exit(uintptr_t p1)
 		_exit(status);
 	}
 
-	if ((ret = thr_getspecific(lx_tsd_key, (void **)&lx_tsd)) != 0)
-		lx_err_fatal("group_exit: unable to read thread-specific "
-		    "data: %s", strerror(ret));
-
-	assert(lx_tsd != 0);
+	lx_tsd = lx_get_tsd();
 
 	lx_tsd->lxtsd_exit = LX_ET_EXIT_GROUP;
 	lx_tsd->lxtsd_exit_status = status;
@@ -197,12 +179,7 @@ lx_group_exit(uintptr_t p1)
 	/*
 	 * This thread is exiting.  Restore the state of the thread to
 	 * what it was before we started running linux code.
-	 * For 64-bit code, since we know we are unwinding the stack back to
-	 * lx_init, we need to unwind the syscall mode flag "stack" as well.
 	 */
-#if defined(_LP64)
-	(void) syscall(SYS_brand, B_UNWIND_NTV_SYSC_FLAG);
-#endif
 	(void) setcontext(&lx_tsd->lxtsd_exit_context);
 
 	/*
@@ -237,9 +214,8 @@ clone_start(void *arg)
 	lx_debug("\tLX_SYS_clone(0x%x, 0x%p, 0x%p, 0x%p, 0x%p)",
 	    cs->c_flags, cs->c_stk, cs->c_ptidp, cs->c_ldtinfo, cs->c_ctidp);
 
-	rval = syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_clone,
-	    cs->c_flags, cs->c_stk, cs->c_ptidp, cs->c_ldtinfo, cs->c_ctidp,
-	    NULL);
+	rval = syscall(SYS_brand, B_HELPER_CLONE, cs->c_flags, cs->c_ptidp,
+	    cs->c_ldtinfo, cs->c_ctidp);
 
 	/*
 	 * At this point the parent is waiting for cs->c_clone_res to go
@@ -261,13 +237,10 @@ clone_start(void *arg)
 		    strerror(errno));
 	}
 
-	/* Initialize the thread specific data for this thread. */
-	bzero(&lx_tsd, sizeof (lx_tsd));
-#if defined(_ILP32)
-	lx_tsd.lxtsd_gs = cs->c_gs;
-#else
-	lx_tsd.lxtsd_fsbase = (uintptr_t)cs->c_ldtinfo;
-#endif
+	/*
+	 * Initialize the thread specific data for this thread.
+	 */
+	lx_init_tsd(&lx_tsd);
 
 	/*
 	 * Use the address of the stack-allocated lx_tsd as the
@@ -283,6 +256,11 @@ clone_start(void *arg)
 		lx_err_fatal("Unable to set thread-specific ptr for clone: %s",
 		    strerror(rval));
 	}
+
+	/*
+	 * Allocate a brand emulation stack for this thread.
+	 */
+	lx_alloc_stack();
 
 	/*
 	 * Save the current context of this thread.
@@ -301,6 +279,8 @@ clone_start(void *arg)
 	 * clone(2) path.
 	 */
 	if (lx_tsd.lxtsd_exit == LX_ET_NONE) {
+		uintptr_t gs = 0;
+
 		if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
 			*(cs->c_clone_res) = -errno;
 
@@ -319,15 +299,17 @@ clone_start(void *arg)
 		 */
 		lx_ptrace_stop_if_option(cs->c_ptrace_event, B_TRUE, 0);
 
-#if defined(_LP64)
-		(void) syscall(SYS_brand, B_CLR_NTV_SYSC_FLAG);
-		lx_setup_clone((uintptr_t)&cs->c_regs, cs->c_retaddr,
-		    cs->c_stk);
-#else
-		lx_setup_clone(cs->c_gs, cs->c_retaddr, cs->c_stk);
+		/*
+		 * Jump to the Linux process.  The system call must not return.
+		 */
+#if defined(_ILP32)
+		gs = cs->c_gs;
 #endif
-
-		/* lx_setup_clone() should never return. */
+		if (syscall(SYS_brand, B_JUMP_TO_LINUX, cs->c_stk,
+		    cs->c_retaddr, gs) == -1) {
+			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
+			    strerror(errno));
+		}
 		assert(0);
 	}
 
@@ -337,8 +319,18 @@ clone_start(void *arg)
 	 * setcontext() to jump to the thread context state saved in
 	 * getcontext(), above.
 	 */
+	if (lx_tsd.lxtsd_exit == LX_ET_EXIT) {
+		/*
+		 * If the thread is exiting, but not the entire process, we
+		 * must free the stack we allocated for usermode emulation.
+		 * This is safe to do, here, because the setcontext() put us
+		 * back on the BRAND stack for this process.
+		 */
+		lx_free_stack();
+	}
 	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
 	/*NOTREACHED*/
+	return (NULL);
 }
 
 /*
@@ -386,7 +378,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	int sig;
 	int rval;
 	int pid;
-	lx_regs_t *rp;
+	ucontext_t *ucp;
 	sigset_t sigmask;
 	int fork_flags = 0;
 	int ptrace_event;
@@ -400,7 +392,8 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	}
 
 	/*
-	 * Only supported for pid 0 on Linux
+	 * Only supported for pid 0 on Linux after version 2.3.21, and
+	 * apparently not at all since 2.5.16.
 	 */
 	if (flags & LX_CLONE_PID)
 		return (-EINVAL);
@@ -422,7 +415,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			return (-EINVAL);
 	}
 
-	rp = lx_syscall_regs();
+	ucp = lx_syscall_regs();
 
 	/* test if pointer passed by user are writable */
 	if (flags & LX_CLONE_PARENT_SETTID) {
@@ -446,7 +439,10 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	 */
 	lx_ptrace_clone_begin(ptrace_event, !!(flags & LX_CLONE_PTRACE));
 
-	/* See if this is a fork() operation or a thr_create().  */
+	/*
+	 * Handle a fork(2) operation here.  If this is not a fork, a new
+	 * thread will be created after this block.
+	 */
 	if (IS_FORK(flags) || IS_VFORK(flags)) {
 		if (flags & LX_CLONE_PARENT) {
 			lx_unsupported("clone(2) only supports CLONE_PARENT "
@@ -457,6 +453,9 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		if ((flags & LX_CSIGNAL) == 0)
 			fork_flags |= FORK_NOSIGCHLD;
 
+		/*
+		 * Perform the actual fork(2) operation.
+		 */
 		if (flags & LX_CLONE_VFORK) {
 			is_vforked++;
 			rval = vforkx(fork_flags);
@@ -484,50 +483,67 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			 * forked, so on failure, we just don't copy the
 			 * memory.
 			 */
-			pid = lx_getpid();
+			pid = syscall(SYS_brand, B_GETPID);
 			if (pid >= 0)
 				(void) uucopy(&pid, ctidp, sizeof (int));
 		}
 
-		/* Parent just returns */
+		/*
+		 * The parent process returns through the regular system call
+		 * path here.
+		 */
 		if (rval != 0) {
-			if (rval > 0)
+			if (rval > 0) {
 				lx_ptrace_stop_if_option(ptrace_event, B_FALSE,
 				    (ulong_t)rval);
+			}
 			return ((rval < 0) ? -errno : rval);
 		}
+
+		/*
+		 * The rest of this block runs only within the new child
+		 * process.
+		 */
 
 		/*
 		 * Set up additional data in the lx_proc_data structure as
 		 * necessary.
 		 */
-		rval = syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_clone,
-		    flags, cldstk, ptidp, ldtinfo, ctidp, NULL);
-		if (rval < 0) {
+		if ((rval = syscall(SYS_brand, B_HELPER_CLONE, flags, ptidp,
+		    ldtinfo, ctidp)) < 0) {
 			return (rval);
 		}
 
 		/*
-		 * lx_setup_clone() doesn't return below, so stop now, if
-		 * necessary.
+		 * Allocate a native (emulation) stack for this thread.
+		 * XXX In the case of a regular fork(2) we probably do _not_
+		 * want to adjust the emulation stack here.  In the case of
+		 * a vfork(2), I guess we probably do not then either --
+		 * when the original lwp in the parent resumes, it should
+		 * assume things were as it left them.
+		 */
+#if 0
+		lx_alloc_stack();
+#endif
+
+		/*
+		 * Stop for ptrace if required.
+		 * XXX Should we do this _after_ we set the new stack
+		 * pointer into the context below?!
 		 */
 		lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0);
 
 		/*
 		 * If provided, the child needs its new stack set up.
 		 */
-		if (cldstk) {
-#if defined(_LP64)
-			(void) syscall(SYS_brand, B_CLR_NTV_SYSC_FLAG);
-			lx_setup_clone((uintptr_t)rp, (void *)rp->lxr_rip,
-			    cldstk);
-#else
-			lx_setup_clone(rp->lxr_gs, (void *)rp->lxr_eip, cldstk);
-#endif
-			/* lx_setup_clone() should never return. */
-			assert(0);
+		if (cldstk != 0) {
+			LX_REG(ucp, REG_SP) = (uintptr_t)cldstk;
 		}
 
+		/*
+		 * The child process returns via the regular emulated system
+		 * call path:
+		 */
 		return (0);
 	}
 
@@ -572,43 +588,21 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	cs->c_ctidp = ctidp;
 	cs->c_clone_res = &clone_res;
 	cs->c_ptrace_event = ptrace_event;
-#if defined(_LP64)
-	/*
-	 * The AMD64 ABI says that the kernel clobbers %rcx and %r11. We
-	 * return a value in %rax. The new %rsp and %rip will be setup in
-	 * lx_setup_clone. Thus, we don't worry about passing/restoring those
-	 * registers.
-	 */
-	cs->c_regs.lxr_rdi = rp->lxr_rdi;
-	cs->c_regs.lxr_rsi = rp->lxr_rsi;
-	cs->c_regs.lxr_rbx = rp->lxr_rbx;
-	cs->c_regs.lxr_rdx = rp->lxr_rdx;
-	cs->c_regs.lxr_rdi = rp->lxr_rdi;
-	cs->c_regs.lxr_r8 = rp->lxr_r8;
-	cs->c_regs.lxr_r9 = rp->lxr_r9;
-	cs->c_regs.lxr_r10 = rp->lxr_r10;
-	cs->c_regs.lxr_r12 = rp->lxr_r12;
-	cs->c_regs.lxr_r13 = rp->lxr_r13;
-	cs->c_regs.lxr_r14 = rp->lxr_r14;
-	cs->c_regs.lxr_r15 = rp->lxr_r15;
-#else
-	cs->c_gs = rp->lxr_gs;
+#if defined(_ILP32)
+	cs->c_gs = LX_REG(ucp, GS);
 #endif
 
 	if (lx_sched_getaffinity(0, sizeof (cs->c_affmask),
-	    (uintptr_t)&cs->c_affmask) == -1)
+	    (uintptr_t)&cs->c_affmask) == -1) {
 		lx_err_fatal("Unable to get affinity mask for parent "
 		    "thread: %s", strerror(errno));
+	}
 
 	/*
 	 * We want the new thread to return directly to the return site for
 	 * the system call.
 	 */
-#if defined(_LP64)
-	cs->c_retaddr = (void *)rp->lxr_rip;
-#else
-	cs->c_retaddr = (void *)rp->lxr_eip;
-#endif
+	cs->c_retaddr = (void *)LX_REG(ucp, REG_PC);
 	clone_res = 0;
 
 	(void) sigfillset(&sigmask);

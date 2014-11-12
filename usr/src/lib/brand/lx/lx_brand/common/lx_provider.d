@@ -18,6 +18,18 @@ provider lx {
 	probe sigdeliver(int sig, void *lx_sigaction, void *lx_sigstack,
 	    void *lx_ucontext);
 	probe sigreturn(void *lx_ucontext, void *ucontext, uintptr_t sp);
+
+	probe signal_delivery_frame_create(void *lx_sigdeliver_frame);
+	probe signal_delivery_frame_found(void *lx_sigdeliver_frame);
+
+	probe signal_post_handler(uintptr_t old_sp, uintptr_t new_sp);
+
+	probe signal_altstack_enable(uintptr_t alt_sp);
+	probe signal_altstack_disable();
+
+	probe emulate_enter(void *ucp, int syscall_num, uintptr_t *args);
+	probe emulate_return(void *ucp, int syscall_num, uintptr_t ret,
+	    uintptr_t errn);
 };
 
 #pragma D attributes Evolving/Evolving/ISA provider lx provider

@@ -207,6 +207,7 @@
 	movl	$to, %esi;			\
 	call	syscall_mstate
 
+
 /*
  * Check to see if a simple (direct) return is possible i.e.
  *
@@ -795,6 +796,25 @@ _syscall32_save:
 	incq	 %gs:CPU_STATS_SYS_SYSCALL
 
 	/*
+	 * If we our lwp has an alternate system call handler, run that instead
+	 * of the regular system call path.
+	 */
+	movq	LWP_BRAND_SYSCALL(%r14), %rax
+	testq	%rax, %rax
+	jz	_syscall32_no_brand
+
+	movb	$LWP_SYS, LWP_STATE(%r14)
+	call	*%rax
+
+	/*
+	 * If the alternate handler returns 0, we skip straight to the return
+	 * to usermode.  Otherwise, we resume regular system call processing.
+	 */
+	testl	%eax, %eax
+	jz	_syscall32_after_brand
+
+_syscall32_no_brand:
+	/*
 	 * Make some space for MAXSYSARGS (currently 8) 32-bit args placed
 	 * into 64-bit (long) arg slots, maintaining 16 byte alignment.  Or
 	 * more succinctly:
@@ -860,6 +880,8 @@ _syscall32_save:
 	movq	%rax, %r13
 	shrq	$32, %r13	/* upper 32-bits into %edx */
 	movl	%eax, %r12d	/* lower 32-bits into %eax */
+
+_syscall32_after_brand:
 
 	/*
 	 * Optimistically assume that there's no post-syscall
@@ -1192,6 +1214,22 @@ sys_int80()
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
 	BRAND_CALLBACK(BRAND_CB_INT80, BRAND_URET_FROM_INTR_STACK())
+
+	/*
+	 * Check to see if this lwp provides "lwp_brand_syscall".  If so, we
+	 * will route this int80 through the regular system call handling path.
+	 */
+	movq	%r15, %gs:CPU_RTMP_R15
+	movq	%gs:CPU_THREAD, %r15
+	movq	T_LWP(%r15), %r15
+	movq	LWP_BRAND_SYSCALL(%r15), %r15
+	testq	%r15, %r15
+	movq	%gs:CPU_RTMP_R15, %r15
+	jnz	nopop_syscall_int
+
+	/*
+	 * Otherwise, the brand has opted out of handling this trap.
+	 */
 	SWAPGS				/* user gsbase */
 	jmp	nopop_int80
 

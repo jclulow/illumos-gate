@@ -174,7 +174,24 @@ lx_pipe(intptr_t arg)
  * pipe2(2) system call.
  */
 long
-lx_pipe2(intptr_t arg, int flags)
+lx_pipe2(intptr_t arg, int lxflags)
 {
+	int flags = 0;
+
+	/*
+	 * Validate allowed flags.
+	 */
+	if ((lxflags & ~(04000 | 02000000)) != 0) {
+		return (set_errno(EINVAL));
+	}
+
+	/*
+	 * Convert from Linux flags to illumos flags.
+	 */
+	if (lxflags & 04000 /* XXX LX_O_NONBLOCK*/)
+		flags |= FNONBLOCK;
+	if (lxflags & 02000000 /* XXX LX_O_CLOEXEC */)
+		flags |= FCLOEXEC;
+
 	return (lx_hd_pipe(arg, flags));
 }
