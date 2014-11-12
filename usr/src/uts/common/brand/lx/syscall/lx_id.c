@@ -286,7 +286,7 @@ lx_setresgid16(l_gid16_t rgid16, l_gid16_t egid16, l_gid16_t sgid16)
  * the terrible hack below so that tests may proceed, if only on DEBUG kernels.
  */
 long
-lx_setgroups(int ngroups, gid_t *grouplist)
+lx_helper_setgroups(int ngroups, gid_t *grouplist)
 {
 #ifdef DEBUG
 	if (ngroups > ngroups_max && ngroups <= LX_NGROUPS_MAX)

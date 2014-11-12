@@ -133,7 +133,6 @@ typedef struct lxt_syslog_arg {
  * thunk server process.
  */
 void lxt_server_init(int, char *[]);
-int lxt_server_pid(int *pid);
 void lxt_server_exec_check(void);
 
 #ifdef	__cplusplus

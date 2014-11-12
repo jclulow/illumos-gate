@@ -17,11 +17,13 @@
 #include <sys/systm.h>
 #include <sys/file.h>
 #include <sys/vnode.h>
+#include <sys/brand.h>
+#include <sys/lx_brand.h>
 
 /* uts/common/syscall/rw.c */
 extern ssize_t read(int fdes, void *cbuf, size_t count);
 
-ssize_t
+long
 lx_read(int fd, void *buf, size_t nbyte)
 {
 	file_t *fp;
@@ -34,6 +36,12 @@ lx_read(int fd, void *buf, size_t nbyte)
 
 	if (t == VDIR)
 		return (set_errno(EISDIR));
+
+	/*
+	 * If read(2) returns EINTR, we want to signal that restarting the
+	 * system call is acceptable:
+	 */
+	ttolxlwp(curthread)->br_syscall_restart = 1;
 
 	return (read(fd, buf, nbyte));
 }

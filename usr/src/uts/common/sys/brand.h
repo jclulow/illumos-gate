@@ -132,6 +132,13 @@ struct brand_ops {
 	boolean_t (*b_native_exec)(uint8_t, const char **);
 	void (*b_ptrace_exectrap)(proc_t *);
 	uint32_t (*b_map32limit)(proc_t *);
+	void	(*b_savecontext)(ucontext_t *);
+#if defined(_SYSCALL32_IMPL)
+	void	(*b_savecontext32)(ucontext32_t *);
+#endif
+	void	(*b_restorecontext)(ucontext_t *);
+	caddr_t	(*b_sendsig_stack)(int);
+	void	(*b_sendsig)(int);
 };
 
 /*

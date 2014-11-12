@@ -122,6 +122,8 @@ d_ucontext(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    uc.uc_stack.ss_sp, uc.uc_stack.ss_size, stack_flags(&uc.uc_stack));
 	mdb_printf("  mcontext = 0x%p\n",
 	    addr + OFFSETOF(ucontext_t, uc_mcontext));
+	mdb_printf("  brand    = 0x%p 0x%p\n",
+	    uc.uc_brand_data[0], uc.uc_brand_data[1]);
 
 	return (DCMD_OK);
 }

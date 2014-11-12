@@ -391,10 +391,6 @@ extern void setsigacthandler(void (*)(int, siginfo_t *, void *),
 
 extern int lx_siginit(void);
 
-extern void lx_sigreturn_tolibc(uintptr_t);
-extern void lx_sigdeliver(int, siginfo_t *, void *, size_t, void (*)(),
-    void (*)(), uintptr_t);
-
 extern int stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop);
 
 #endif	/* !defined(_ASM) */

@@ -88,7 +88,6 @@ lx_exec()
 	 * invalid; clear them.
 	 */
 	pd->l_handler = NULL;
-	pd->l_tracehandler = NULL;
 
 	/*
 	 * There are two mutually exclusive special cases we need to
@@ -116,6 +115,14 @@ lx_exec()
 	/* clear the fsbase values until the app. can reinitialize them */
 	lwpd->br_lx_fsbase = NULL;
 	lwpd->br_ntv_fsbase = NULL;
+
+	/*
+	 * Clear the native stack flags.  This will be reinitialised by
+	 * lx_init() in the new process image.
+	 */
+	lwpd->br_stack_mode = LX_STACK_MODE_PREINIT;
+	lwpd->br_ntv_stack = 0;
+	lwpd->br_ntv_stack_current = 0;
 
 	installctx(lwptot(lwp), lwp, lx_save, lx_restore, NULL, NULL, lx_save,
 	    NULL);
@@ -223,12 +230,18 @@ lx_freelwp(klwp_t *lwp)
 {
 	struct lx_lwp_data *lwpd = lwptolxlwp(lwp);
 
+	/*
+	 * Remove our system call interposer.
+	 */
+	lwp->lwp_brand_syscall = NULL;
+
 	if (lwpd != NULL) {
 		(void) removectx(lwptot(lwp), lwp, lx_save, lx_restore,
 		    NULL, NULL, lx_save, NULL);
-		if (lwpd->br_pid != 0)
+		if (lwpd->br_pid != 0) {
 			lx_pid_rele(lwptoproc(lwp)->p_pid,
 			    lwptot(lwp)->t_tid);
+		}
 
 		lwp->lwp_brand = NULL;
 		kmem_free(lwpd, sizeof (struct lx_lwp_data));
@@ -248,8 +261,7 @@ lx_initlwp(klwp_t *lwp)
 	lwpd->br_clear_ctidp = NULL;
 	lwpd->br_set_ctidp = NULL;
 	lwpd->br_signal = 0;
-	lwpd->br_ntv_syscall = 1;
-	lwpd->br_scms = 1;
+	lwpd->br_stack_mode = LX_STACK_MODE_PREINIT;
 
 	/*
 	 * lwpd->br_affinitymask was zeroed by kmem_zalloc()
@@ -291,6 +303,11 @@ lx_initlwp(klwp_t *lwp)
 
 	installctx(lwptot(lwp), lwp, lx_save, lx_restore, NULL, NULL,
 	    lx_save, NULL);
+
+	/*
+	 * Install branded system call hook for this lwp:
+	 */
+	lwp->lwp_brand_syscall = lx_syscall_hook;
 
 	return (0);
 }

@@ -575,6 +575,12 @@ ucontext_32ton(const ucontext32_t *src, ucontext_t *dst)
 	if (src->uc_flags & UC_FPU)
 		fpregset_32ton(&src->uc_mcontext.fpregs,
 		    &dst->uc_mcontext.fpregs);
+
+	/*
+	 * Copy the brand-private data:
+	 */
+	dst->uc_brand_data[0] = (void *)(uintptr_t)src->uc_brand_data[0];
+	dst->uc_brand_data[1] = (void *)(uintptr_t)src->uc_brand_data[1];
 }
 
 #endif	/* _SYSCALL32_IMPL */

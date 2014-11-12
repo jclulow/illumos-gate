@@ -45,6 +45,11 @@ extern boolean_t lx_wait_filter(proc_t *, proc_t *);
 
 extern void lx_ifname_convert(char *, int);
 
+extern int lx_helper_clone(int64_t *, int, void *, void *, void *);
+extern int lx_helper_setgroups(int, gid_t *);
+extern int lx_helper_rt_sigqueueinfo(pid_t, int, siginfo_t *);
+extern int lx_helper_rt_tgsigqueueinfo(pid_t, pid_t, int, siginfo_t *);
+
 #endif
 
 #ifdef	__cplusplus

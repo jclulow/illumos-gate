@@ -112,6 +112,19 @@ mmap_common(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		fd = -1;
 
 	/*
+	 * We refuse, as a matter of principle, to overcommit memory.
+	 * Unfortunately, several bits of important and popular software expect
+	 * to be able to pre-allocate large amounts of virtual memory but then
+	 * probably never use it.  One particularly bad example of this
+	 * practice is golang.
+	 *
+	 * In the interest of running software, unsafe or not, we fudge
+	 * something vaguely similar to overcommit by permanently enabling
+	 * MAP_NORESERVE:
+	 */
+	flags |= LX_MAP_NORESERVE;
+
+	/*
 	 * This is totally insane. The NOTES section in the linux mmap(2) man
 	 * page claims that on some architectures, read protection may
 	 * automatically include exec protection. It has been observed on a

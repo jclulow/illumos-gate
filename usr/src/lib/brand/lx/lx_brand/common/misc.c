@@ -24,6 +24,7 @@
  * Copyright 2015 Joyent, Inc.  All rights reserved.
  */
 
+#include <stdlib.h>
 #include <assert.h>
 #include <alloca.h>
 #include <errno.h>
@@ -56,40 +57,6 @@
 #include <priv.h>
 
 extern int sethostname(char *, int);
-
-struct lx_sysinfo {
-	int64_t si_uptime;	/* Seconds since boot */
-	uint64_t si_loads[3];	/* 1, 5, and 15 minute avg runq length */
-	uint64_t si_totalram;	/* Total memory size */
-	uint64_t si_freeram;	/* Available memory */
-	uint64_t si_sharedram;	/* Shared memory */
-	uint64_t si_bufferram;	/* Buffer memory */
-	uint64_t si_totalswap;	/* Total swap space */
-	uint64_t si_freeswap;	/* Avail swap space */
-	uint16_t si_procs;	/* Process count */
-	uint16_t si_pad;	/* Padding */
-	uint64_t si_totalhigh;	/* High memory size */
-	uint64_t si_freehigh;	/* Avail high memory */
-	uint32_t si_mem_unit;	/* Unit size of memory fields */
-};
-
-struct lx_sysinfo32 {
-	int32_t si_uptime;	/* Seconds since boot */
-	uint32_t si_loads[3];	/* 1, 5, and 15 minute avg runq length */
-	uint32_t si_totalram;	/* Total memory size */
-	uint32_t si_freeram;	/* Available memory */
-	uint32_t si_sharedram;	/* Shared memory */
-	uint32_t si_bufferram;	/* Buffer memory */
-	uint32_t si_totalswap;	/* Total swap space */
-	uint32_t si_freeswap;	/* Avail swap space */
-	uint16_t si_procs;	/* Process count */
-	uint16_t si_pad;	/* Padding */
-	uint32_t si_totalhigh;	/* High memory size */
-	uint32_t si_freehigh;	/* Avail high memory */
-	uint32_t si_mem_unit;	/* Unit size of memory fields */
-};
-
-extern long lx_sysinfo(struct lx_sysinfo *sip);
 
 /* ARGUSED */
 long
@@ -295,11 +262,15 @@ lx_getgroups16(uintptr_t p1, uintptr_t p2)
 	if (count < 0)
 		return (-EINVAL);
 
-	grouplist32 = SAFE_ALLOCA(count * sizeof (gid_t));
-	if (grouplist32 == NULL && count > 0)
+	grouplist32 = malloc(count * sizeof (gid_t));
+	if (grouplist32 == NULL && count > 0) {
+		free(grouplist32);
 		return (-ENOMEM);
-	if ((ret = getgroups(count, grouplist32)) < 0)
+	}
+	if ((ret = getgroups(count, grouplist32)) < 0) {
+		free(grouplist32);
 		return (-errno);
+	}
 
 	/* we must not modify the list if the incoming count was 0 */
 	if (count > 0) {
@@ -307,28 +278,48 @@ lx_getgroups16(uintptr_t p1, uintptr_t p2)
 			grouplist[i] = LX_GID32_TO_GID16(grouplist32[i]);
 	}
 
+	free(grouplist32);
 	return (ret);
 }
 
 long
 lx_setgroups16(uintptr_t p1, uintptr_t p2)
 {
+	long rv;
 	int count = (int)p1;
-	lx_gid16_t *grouplist = (lx_gid16_t *)p2;
-	gid_t *grouplist32;
+	lx_gid16_t *grouplist = NULL;
+	gid_t *grouplist32 = NULL;
 	int i;
 
-	grouplist32 = SAFE_ALLOCA(count * sizeof (gid_t));
-	if (grouplist32 == NULL)
+	if ((grouplist = malloc(count * sizeof (lx_gid16_t))) == NULL) {
 		return (-ENOMEM);
+	}
+	if (uucopy((void *)p2, grouplist, count * sizeof (lx_gid16_t)) != 0) {
+		free(grouplist);
+		return (-EFAULT);
+	}
+
+	grouplist32 = malloc(count * sizeof (gid_t));
+	if (grouplist32 == NULL) {
+		free(grouplist);
+		return (-ENOMEM);
+	}
 	for (i = 0; i < count; i++)
 		grouplist32[i] = LX_GID16_TO_GID32(grouplist[i]);
 
 	/* order matters here to get the correct errno back */
-	if (count > NGROUPS_MAX_DEFAULT)
+	if (count > NGROUPS_MAX_DEFAULT) {
+		free(grouplist);
+		free(grouplist32);
 		return (-EINVAL);
+	}
 
-	return (setgroups(count, grouplist32) ? -errno : 0);
+	rv = setgroups(count, grouplist32);
+
+	free(grouplist);
+	free(grouplist32);
+
+	return (rv != 0 ? -errno : 0);
 }
 
 /*
@@ -488,19 +479,6 @@ lx_setdomainname(uintptr_t p1, uintptr_t p2)
 }
 
 long
-lx_getpid(void)
-{
-	int pid;
-
-	/* First call the thunk server hook. */
-	if (lxt_server_pid(&pid) != 0)
-		return (pid);
-
-	pid = syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_getpid);
-	return ((pid == -1) ? -errno : pid);
-}
-
-long
 lx_execve(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 {
 	char *filename = (char *)p1;
@@ -561,11 +539,13 @@ lx_setgroups(uintptr_t p1, uintptr_t p2)
 	lx_debug("\tlx_setgroups(%d, 0x%p", ng, p2);
 
 	if (ng > 0) {
-		if ((glist = (gid_t *)SAFE_ALLOCA(ng * sizeof (gid_t))) == NULL)
+		if ((glist = (gid_t *)malloc(ng * sizeof (gid_t))) == NULL)
 			return (-ENOMEM);
 
-		if (uucopy((void *)p2, glist, ng * sizeof (gid_t)) != 0)
+		if (uucopy((void *)p2, glist, ng * sizeof (gid_t)) != 0) {
+			free(glist);
 			return (-errno);
+		}
 
 		/*
 		 * Linux doesn't check the validity of the group IDs, but
@@ -579,12 +559,14 @@ lx_setgroups(uintptr_t p1, uintptr_t p2)
 	}
 
 	/* order matters here to get the correct errno back */
-	if (ng > NGROUPS_MAX_DEFAULT)
+	if (ng > NGROUPS_MAX_DEFAULT) {
+		free(glist);
 		return (-EINVAL);
+	}
 
-	r = syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_setgroups,
-	    ng, glist);
+	r = syscall(SYS_brand, B_HELPER_SETGROUPS, ng, glist);
 
+	free(glist);
 	return ((r == -1) ? -errno : r);
 }
 
@@ -698,45 +680,6 @@ lx_syslog(int type, char *bufp, int len)
 
 	if ((type == 8) && (len < 1 || len > 8))
 		return (-EINVAL);
-
-	return (0);
-}
-
-long
-lx_sysinfo32(uintptr_t arg)
-{
-	struct lx_sysinfo32 *sip = (struct lx_sysinfo32 *)arg;
-	struct lx_sysinfo32 si;
-	struct lx_sysinfo sil;
-	int i;
-
-	if (syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_sysinfo, &sil) != 0)
-		return (-errno);
-
-	si.si_uptime = sil.si_uptime;
-
-	for (i = 0; i < 3; i++) {
-		if ((sil.si_loads[i]) > 0x7fffffff)
-			si.si_loads[i] = 0x7fffffff;
-		else
-			si.si_loads[i] = sil.si_loads[i];
-	}
-
-	si.si_procs = sil.si_procs;
-	si.si_totalram = sil.si_totalram;
-	si.si_freeram = sil.si_freeram;
-	si.si_totalswap = sil.si_totalswap;
-	si.si_freeswap = sil.si_freeswap;
-	si.si_mem_unit = sil.si_mem_unit;
-
-	si.si_bufferram = sil.si_bufferram;
-	si.si_sharedram = sil.si_sharedram;
-
-	si.si_totalhigh = sil.si_totalhigh;
-	si.si_freehigh = sil.si_freehigh;
-
-	if (uucopy(&si, sip, sizeof (si)) != 0)
-		return (-errno);
 
 	return (0);
 }

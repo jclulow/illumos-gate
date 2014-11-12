@@ -57,8 +57,8 @@
  * linux cloned thread.
  */
 /* ARGSUSED */
-long
-lx_clone(int flags, void *stkp, void *ptidp, void *tls, void *ctidp)
+int
+lx_helper_clone(int64_t *rval, int flags, void *ptidp, void *tls, void *ctidp)
 {
 	struct lx_lwp_data *lwpd = ttolxlwp(curthread);
 	struct lx_proc_data *lproc = ttolxproc(curthread);
@@ -144,7 +144,9 @@ lx_clone(int flags, void *stkp, void *ptidp, void *tls, void *ctidp)
 			return (set_errno(EFAULT));
 		}
 	}
-	return (lwpd->br_pid);
+
+	*rval = lwpd->br_pid;
+	return (0);
 }
 
 long

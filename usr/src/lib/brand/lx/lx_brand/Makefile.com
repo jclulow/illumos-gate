@@ -60,11 +60,10 @@ COBJS	=	capabilities.o			\
 		sysv_ipc.o		\
 		time.o			\
 		truncate.o		\
-		wait.o			\
-		xattr.o
+		wait.o
 
 CMNOBJS =	lx_signum.o
-ASOBJS	=	lx_handler.o lx_runexe.o lx_crt.o
+ASOBJS	=	lx_handler.o lx_crt.o
 OBJECTS	=	$(CMNOBJS) $(COBJS) $(ASOBJS)
 
 USDT_PROVIDERS =	lx_provider.d

@@ -39,6 +39,7 @@
 #include <sys/lwp.h>
 
 #include <sys/lx_brand.h>
+#include <sys/lx_thread.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -144,6 +145,11 @@ extern boolean_t lx_is_rpm;
 	B_TRACE_POINT_5(0, 0, 0, 0, 0)
 
 /*
+ * Macros to access register state within a ucontext_t:
+ */
+#define	LX_REG(ucp, r)	(ucp->uc_mcontext.gregs[(r)])
+
+/*
  * normally we never want to write to stderr or stdout because it's unsafe
  * to make assumptions about the underlying file descriptors.  to protect
  * against writes to these file descriptors we go ahead and close them
@@ -159,10 +165,9 @@ extern void lx_unsupported(char *, ...);
 
 struct ucontext;
 
-extern void lx_handler_table(void);
-extern void lx_handler_trace_table(void);
-extern void lx_emulate_done(void);
-extern lx_regs_t *lx_syscall_regs(void);
+extern ucontext_t *lx_syscall_regs(void);
+extern uintptr_t lx_find_brand_sp(void);
+extern uintptr_t lx_find_brand_gs(void);
 extern int lx_errno(int);
 
 extern char *lx_fd_to_path(int fd, char *buf, int buf_size);
@@ -178,6 +183,10 @@ extern int lx_check_alloca(size_t);
 #define	SAFE_ALLOCA(sz)	(lx_check_alloca(sz) ? alloca(sz) : NULL)
 
 extern int ltos_at_flag(int lflag, int allow, boolean_t enforce);
+
+extern void lx_init_tsd(lx_tsd_t *);
+extern void lx_alloc_stack(void);
+extern void lx_free_stack(void);
 
 /*
  * NO_UUCOPY disables calls to the uucopy* system calls to help with
