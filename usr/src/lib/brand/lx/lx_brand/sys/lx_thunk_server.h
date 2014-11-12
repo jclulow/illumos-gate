@@ -23,11 +23,12 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015, Joyent, Inc.
+ */
 
 #ifndef	_LX_THUNK_SERVER_H
 #define	_LX_THUNK_SERVER_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -133,7 +134,6 @@ typedef struct lxt_syslog_arg {
  * thunk server process.
  */
 void lxt_server_init(int, char *[]);
-int lxt_server_pid(int *pid);
 void lxt_server_exec_check(void);
 
 #ifdef	__cplusplus

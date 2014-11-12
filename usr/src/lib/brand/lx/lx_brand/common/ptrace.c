@@ -256,6 +256,13 @@ syscall_regs(int fd, uintptr_t fp, pid_t pid)
 #endif
 
 	/*
+	 * XXX this mechanism will require a rework.
+	 */
+	assert(0);
+	return (0);
+
+#if 0
+	/*
 	 * Try to walk the stack looking for a return address that corresponds
 	 * to the traced process's lx_emulate_done symbol. This relies on the
 	 * fact that the brand library in the traced process is the same as the
@@ -326,6 +333,7 @@ syscall_regs(int fd, uintptr_t fp, pid_t pid)
 #endif
 
 	return (addr);
+#endif
 }
 
 static int
