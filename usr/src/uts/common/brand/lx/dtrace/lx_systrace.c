@@ -76,7 +76,7 @@ static lx_sys_names_t lx_sysnames32[] =
 	{"creat"},
 	{"link"},
 	{"unlink"},					/* 10 */
-	{"exec"},
+	{"execve"},
 	{"chdir"},
 	{"gtime"},
 	{"mknod"},
