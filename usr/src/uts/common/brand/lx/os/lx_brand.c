@@ -633,7 +633,8 @@ lx_sendsig_stack(int sig)
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 
 	/*
-	 * We want to take signal delivery on the native stack.
+	 * We want to take signal delivery on the native stack, but only if
+	 * one has been allocated and installed for this LWP.
 	 */
 	if (lwpd->br_stack_mode == LX_STACK_MODE_BRAND) {
 		/*
@@ -646,8 +647,9 @@ lx_sendsig_stack(int sig)
 		struct regs *rp = lwptoregs(lwp);
 
 		/*
-		 * The program is already running on the native stack,
-		 * so use the current stack pointer value.
+		 * Either the program is already running on the native stack,
+		 * or one has not yet been allocated for this LWP.  Use the
+		 * current stack pointer value.
 		 */
 		return ((caddr_t)rp->r_sp);
 	}
@@ -665,18 +667,31 @@ lx_sendsig(int sig)
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	struct regs *rp = lwptoregs(lwp);
 
-	/*
-	 * In lx_sendsig_stack(), we nominated a stack pointer from the
-	 * native stack.  Update the stack mode, and the current in-use
-	 * extent of the native stack, accordingly:
-	 */
-	lwpd->br_stack_mode = LX_STACK_MODE_NATIVE;
-	lx_lwp_set_native_stack_current(lwpd, rp->r_sp);
+	switch (lwpd->br_stack_mode) {
+	case LX_STACK_MODE_BRAND:
+	case LX_STACK_MODE_NATIVE:
+		/*
+		 * In lx_sendsig_stack(), we nominated a stack pointer from the
+		 * native stack.  Update the stack mode, and the current in-use
+		 * extent of the native stack, accordingly:
+		 */
+		lwpd->br_stack_mode = LX_STACK_MODE_NATIVE;
+		lx_lwp_set_native_stack_current(lwpd, rp->r_sp);
 
-	/*
-	 * Fix up segment registers, etc.
-	 */
-	lx_switch_to_native(lwp);
+		/*
+		 * Fix up segment registers, etc.
+		 */
+		lx_switch_to_native(lwp);
+		break;
+
+	default:
+		/*
+		 * Otherwise, the brand library has not yet installed the
+		 * alternate stack for this LWP.  Signals will be handled on
+		 * the regular stack thread.
+		 */
+		return;
+	}
 }
 
 static void
@@ -721,12 +736,15 @@ lx_savecontext(ucontext_t *ucp)
 	 * stored in the second element.
 	 */
 
-	/*
-	 * Record the value of the native stack pointer to restore when
-	 * returning to this branded context:
-	 */
-	flags |= LX_UC_RESTORE_NATIVE_SP;
-	sp = lwpd->br_ntv_stack_current;
+	if (lwpd->br_stack_mode != LX_STACK_MODE_INIT &&
+	    lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
+		/*
+		 * Record the value of the native stack pointer to restore
+		 * when returning to this branded context:
+		 */
+		flags |= LX_UC_RESTORE_NATIVE_SP;
+		sp = lwpd->br_ntv_stack_current;
+	}
 
 	/*
 	 * Save the stack mode:
@@ -759,12 +777,15 @@ lx_savecontext32(ucontext32_t *ucp)
 	 * stored in the second element.
 	 */
 
-	/*
-	 * Record the value of the native stack pointer to restore when
-	 * returning to this branded context:
-	 */
-	flags |= LX_UC_RESTORE_NATIVE_SP;
-	sp = (caddr32_t)lwpd->br_ntv_stack_current;
+	if (lwpd->br_stack_mode != LX_STACK_MODE_INIT &&
+	    lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
+		/*
+		 * Record the value of the native stack pointer to restore
+		 * when returning to this branded context:
+		 */
+		flags |= LX_UC_RESTORE_NATIVE_SP;
+		sp = lwpd->br_ntv_stack_current;
+	}
 
 	/*
 	 * Save the stack mode:
@@ -1158,6 +1179,12 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * emulation (i.e. native) code.  Once the initialisation
 		 * process for this thread has finished, we will jump to
 		 * brand-specific code, while moving to the BRAND mode.
+		 *
+		 * When a new LWP is created, lx_initlwp() will clear the
+		 * stack data.  If that LWP is actually being duplicated
+		 * into a child process by fork(2), lx_forklwp() will copy
+		 * it so that the cloned thread will keep using the same
+		 * alternate stack.
 		 */
 		lwpd->br_ntv_stack = arg1;
 		lwpd->br_stack_mode = LX_STACK_MODE_INIT;
@@ -1219,6 +1246,20 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			 * usermode emulation handling.
 			 */
 			return (ENOENT);
+
+		case LX_STACK_MODE_BRAND:
+			/*
+			 * The LWP should not be on the BRAND stack.
+			 */
+			exit(CLD_KILLED, SIGSYS);
+			return (0);
+
+		case LX_STACK_MODE_INIT:
+			/*
+			 * The LWP is transitioning to Linux code for the first
+			 * time.
+			 */
+			break;
 		}
 
 		/*

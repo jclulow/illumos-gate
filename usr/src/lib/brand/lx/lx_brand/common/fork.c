@@ -44,6 +44,12 @@ lx_fork(void)
 	int ret = fork1();
 
 	if (ret == 0) {
+		/*
+		 * We must free the stacks for every thread except
+		 * the one duplicated from the parent by fork1().
+		 */
+		lx_free_other_stacks();
+
 		if (lx_is_rpm)
 			(void) sleep(lx_rpm_delay);
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEFORK, B_TRUE, 0);
@@ -68,6 +74,12 @@ lx_vfork(void)
 	int ret = fork1();
 
 	if (ret == 0) {
+		/*
+		 * We must free the stacks for every thread except
+		 * the one duplicated from the parent by fork1().
+		 */
+		lx_free_other_stacks();
+
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_TRUE, 0);
 	} else if (ret != -1) {
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_FALSE,

@@ -328,6 +328,26 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 	dst->br_ptid = lwptot(srclwp)->t_tid;
 	bcopy(src->br_tls, dst->br_tls, sizeof (dst->br_tls));
 
+	switch (src->br_stack_mode) {
+	case LX_STACK_MODE_BRAND:
+	case LX_STACK_MODE_NATIVE:
+		/*
+		 * The parent LWP has an alternate stack installed.
+		 * The child LWP should have the same stack base and extent.
+		 */
+		dst->br_ntv_stack = src->br_ntv_stack;
+		dst->br_ntv_stack_current = src->br_ntv_stack_current;
+		break;
+
+	default:
+		/*
+		 * Otherwise, clear the stack data for this LWP.
+		 */
+		dst->br_stack_mode = LX_STACK_MODE_PREINIT;
+		dst->br_ntv_stack = 0;
+		dst->br_ntv_stack_current = 0;
+	}
+
 	/*
 	 * copy only these flags
 	 */

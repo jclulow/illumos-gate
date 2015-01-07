@@ -47,13 +47,6 @@ typedef struct lx_tsd {
 	ucontext_t	lxtsd_exit_context;
 
 	/*
-	 * The alternate (i.e. NATIVE) stack used by the usermode emulation
-	 * library.
-	 */
-	void		*lxtsd_stack;
-	size_t		lxtsd_stack_size;
-
-	/*
 	 * If this value is non-zero, we use it in lx_sigdeliver() to represent
 	 * the in-use extent of the Linux (i.e. BRAND) stack for this thread.
 	 * Access to this value must be protected by _sigoff()/_sigon().

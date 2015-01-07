@@ -525,6 +525,12 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		 */
 
 		/*
+		 * We must free the stacks for every thread except the one
+		 * duplicated from the parent by forkx().
+		 */
+		lx_free_other_stacks();
+
+		/*
 		 * Set up additional data in the lx_proc_data structure as
 		 * necessary.
 		 */
@@ -532,18 +538,6 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		    ldtinfo, ctidp)) < 0) {
 			return (rval);
 		}
-
-		/*
-		 * Allocate a native (emulation) stack for this thread.
-		 * XXX In the case of a regular fork(2) we probably do _not_
-		 * want to adjust the emulation stack here.  In the case of
-		 * a vfork(2), I guess we probably do not then either --
-		 * when the original lwp in the parent resumes, it should
-		 * assume things were as it left them.
-		 */
-#if 0
-		lx_alloc_stack();
-#endif
 
 		/*
 		 * Stop for ptrace if required.
