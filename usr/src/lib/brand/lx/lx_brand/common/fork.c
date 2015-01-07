@@ -60,6 +60,13 @@ lx_fork(void)
 		if (lx_is_rpm) {
 			(void) sleep(lx_rpm_delay);
 		}
+
+		/*
+		 * We must free the stacks for every thread except
+		 * the one duplicated from the parent by fork1().
+		 */
+		lx_free_other_stacks();
+
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEFORK, B_TRUE, 0);
 		return (0);
 
@@ -99,6 +106,13 @@ lx_vfork(void)
 		/*
 		 * Returning in the new child.
 		 */
+
+		/*
+		 * We must free the stacks for every thread except
+		 * the one duplicated from the parent by fork1().
+		 */
+		lx_free_other_stacks();
+
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_TRUE, 0);
 		return (0);
 

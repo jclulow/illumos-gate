@@ -387,10 +387,12 @@ typedef enum lx_ptrace_attach {
 	LX_PTA_INHERIT_OPTIONS = 0x08	/* due to PTRACE_SETOPTIONS options */
 } lx_ptrace_attach_t;
 
-#define	LX_STACK_MODE_PREINIT	0
-#define	LX_STACK_MODE_INIT	1
-#define	LX_STACK_MODE_NATIVE	2
-#define	LX_STACK_MODE_BRAND	3
+typedef enum lx_stack_mode {
+	LX_STACK_MODE_PREINIT = 0,
+	LX_STACK_MODE_INIT,
+	LX_STACK_MODE_NATIVE,
+	LX_STACK_MODE_BRAND
+} lx_stack_mode_t;
 
 /*
  * lx-specific data in the klwp_t
@@ -450,7 +452,7 @@ struct lx_lwp_data {
 	 * native (emulation) stack.  This is similar, in principle, to the
 	 * sigaltstack mechanism for signal handling.
 	 */
-	uint_t	br_stack_mode;
+	lx_stack_mode_t	br_stack_mode;
 	uintptr_t br_ntv_stack;
 	uintptr_t br_ntv_stack_current;
 

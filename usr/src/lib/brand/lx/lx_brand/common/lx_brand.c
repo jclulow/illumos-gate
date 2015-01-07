@@ -147,6 +147,17 @@ static int stol_errno[] = LX_STOL_ERRNO_INIT;
 char lx_release[LX_VERS_MAX];
 char lx_cmd_name[MAXNAMLEN];
 
+
+typedef struct stack_list_ent {
+	thread_t sle_tid;
+	void *sle_stack;
+	size_t sle_stack_size;
+} stack_list_ent_t;
+
+static mutex_t stack_list_lock = DEFAULTMUTEX;
+static stack_list_ent_t *stack_list = NULL;
+static unsigned int stack_list_elems = 0;
+
 /*
  * Map a linux locale ending string to the solaris equivalent.
  */
@@ -198,6 +209,9 @@ pid_t zoneinit_pid;		/* zone init PID */
 long max_pid;			/* native maximum PID */
 
 thread_key_t lx_tsd_key;
+
+extern void _sigon(void);
+extern void _sigoff(void);
 
 int
 lx_errno(int err)
@@ -371,15 +385,89 @@ lx_check_alloca(size_t sz)
 void
 lx_free_stack(void)
 {
+	thread_t me = thr_self();
 	lx_tsd_t *lxtsd = lx_get_tsd();
+	int i;
 
-	assert(lxtsd->lxtsd_stack != NULL);
-	assert(lxtsd->lxtsd_stack_size != 0);
+	_sigoff();
+	mutex_lock(&stack_list_lock);
 
-	(void) munmap(lxtsd->lxtsd_stack, lxtsd->lxtsd_stack_size);
+	/*
+	 * Find this thread's stack in the list of stacks.
+	 */
+	for (i = 0; i < stack_list_elems; i++) {
+		if (stack_list[i].sle_tid != me) {
+			continue;
+		}
 
-	lxtsd->lxtsd_stack = NULL;
-	lxtsd->lxtsd_stack_size = 0;
+		(void) munmap(stack_list[i].sle_stack,
+		    stack_list[i].sle_stack_size);
+
+		/*
+		 * Free up this stack list entry:
+		 */
+		bzero(&stack_list[i], sizeof (stack_list[i]));
+
+		mutex_unlock(&stack_list_lock);
+		_sigon();
+		return;
+	}
+
+	/*
+	 * Did not find the stack in the list.
+	 */
+	assert(0);
+}
+
+/*
+ * After fork1(), we must unmap the stack of every thread other than the
+ * one copied into the child process.
+ */
+void
+lx_free_other_stacks(void)
+{
+	int i, this_stack = -1;
+	thread_t me = thr_self();
+
+	_sigoff();
+	mutex_lock(&stack_list_lock);
+
+	for (i = 0; i < stack_list_elems; i++) {
+		if (stack_list[i].sle_tid == me) {
+			/*
+			 * Do not unmap the stack for this LWP.
+			 */
+			this_stack = i;
+			continue;
+		} else if (stack_list[i].sle_tid == 0) {
+			/*
+			 * Skip any holes in the list.
+			 */
+			continue;
+		}
+
+		/*
+		 * Unmap the stack of every other LWP.
+		 */
+		(void) munmap(stack_list[i].sle_stack,
+		    stack_list[i].sle_stack_size);
+	}
+	/*
+	 * Did not find the stack for this LWP in the list.
+	 */
+	assert(this_stack != -1);
+
+	/*
+	 * Ensure the stack data for this LWP is in the first slot and shrink
+	 * the list.
+	 */
+	if (this_stack != 0)
+		stack_list[0] = stack_list[this_stack];
+	stack_list_elems = 1;
+	stack_list = realloc(stack_list, stack_list_elems);
+
+	mutex_unlock(&stack_list_lock);
+	_sigon();
 }
 
 /*
@@ -388,6 +476,7 @@ lx_free_stack(void)
 void
 lx_alloc_stack(void)
 {
+	thread_t me = thr_self();
 	static int pagesize = 0;
 	static int stackprot = 0;
 	static int stacksize = 0;
@@ -395,6 +484,7 @@ lx_alloc_stack(void)
 	void *stack_top;
 	int pos;
 	lx_tsd_t *lxtsd = lx_get_tsd();
+	int i;
 
 	if (pagesize == 0) {
 		pagesize = _sysconf(_SC_PAGESIZE);
@@ -421,12 +511,24 @@ lx_alloc_stack(void)
 	}
 
 	/*
-	 * Stash this new config in the tsd:
+	 * Install the stack in the global list of thread stacks.
 	 */
-	assert(lxtsd->lxtsd_stack == NULL);
-	assert(lxtsd->lxtsd_stack_size == 0);
-	lxtsd->lxtsd_stack = stack;
-	lxtsd->lxtsd_stack_size = stacksize;
+	_sigoff();
+	mutex_lock(&stack_list_lock);
+	for (i = 0; i < stack_list_elems; i++) {
+		assert(stack_list[i].sle_tid != me);
+		if (stack_list[i].sle_tid == 0)
+			break;
+	}
+	if (i >= stack_list_elems) {
+		stack_list_elems++;
+		stack_list = realloc(stack_list, stack_list_elems);
+	}
+	stack_list[i].sle_tid = me;
+	stack_list[i].sle_stack = stack;
+	stack_list[i].sle_stack_size = stacksize;
+	mutex_unlock(&stack_list_lock);
+	_sigon();
 
 	/*
 	 * Should protect the last (first, stack grows down!) 128 bytes
