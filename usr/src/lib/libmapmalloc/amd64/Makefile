@@ -22,8 +22,8 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+
+ISASRCDIR = ../$(MACH)/
 
 include ../Makefile.com
 include ../../Makefile.lib.64
