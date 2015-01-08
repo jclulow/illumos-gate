@@ -1092,6 +1092,15 @@ lx_rt_sigreturn(void)
 	lx_ssp = (struct lx_sigstack *)sp;
 	sp += SA(sizeof (struct lx_sigstack));
 
+#if defined(_LP64)
+	/*
+	 * The 64-bit lx_sigdeliver() inserts 8 bytes of padding between
+	 * the lx_sigstack_t and the delivery frame to maintain ABI stack
+	 * alignment.
+	 */
+	sp += 8;
+#endif
+
 	/*
 	 * lx_sigdeliver() pushes a lx_sigdeliver_frame_t onto the stack
 	 * before it creates the struct lx_oldsigstack.
@@ -1196,7 +1205,8 @@ lx_rt_sigreturn(void)
  * This stack-builder function is only used by 32-bit code.
  */
 static void
-lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
+lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
+    uintptr_t *hargs)
 {
 	extern void lx_sigreturn_tramp();
 
@@ -1271,7 +1281,8 @@ lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
  * code (32-bit code also calls this when using "modern" signals).
  */
 static void
-lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
+lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
+    uintptr_t *hargs)
 {
 	extern void lx_rt_sigreturn_tramp();
 
@@ -1284,8 +1295,20 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
 
 	lx_ucp = &lx_ssp->uc;
 #if defined(_ILP32)
+	/*
+	 * Arguments are passed to the 32-bit signal handler on the stack.
+	 */
 	lx_ssp->ucp = lx_ucp;
+	lx_ssp->sip = sip != NULL ? &lx_ssp->si : NULL;
 	lx_ssp->sig = lx_sig;
+#else
+	/*
+	 * Arguments to the 64-bit signal handler are passed in registers:
+	 *   hdlr(int sig, siginfo_t *sip, void *ucp);
+	 */
+	hargs[0] = lx_sig;
+	hargs[1] = sip != NULL ? &lx_ssp->si : NULL;
+	hargs[2] = (uintptr_t)lx_ucp;
 #endif
 
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
@@ -1360,19 +1383,6 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp)
 	 */
 	lx_ucp->uc_sigcontext.sc_cr2 = ((lx_sig == LX_SIGSEGV) && (sip)) ?
 	    (uintptr_t)sip->si_addr : 0;
-
-	/*
-	 * Point the lx_siginfo_t pointer to the signal stack's lx_siginfo_t
-	 * if there was a Illumos siginfo_t to convert, otherwise set it to
-	 * NULL. For 64-bit code a NULL sip is handled in the lx_deliver
-	 * assembly code.
-	 */
-#if defined(_ILP32)
-	if (sip != NULL)
-		lx_ssp->sip = &lx_ssp->si;
-	else
-		lx_ssp->sip = NULL;
-#endif
 
 	/*
 	 * This should only return an error if the signum is invalid but that
@@ -1489,6 +1499,7 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	lx_tsd_t *lxtsd = lx_get_tsd();
 	int totsz = 0;
 	uintptr_t flags;
+	uintptr_t hargs[3];
 	/*
 	 * These variables must be "volatile", as they are modified after the
 	 * getcontext() stores the register state:
@@ -1510,6 +1521,11 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	 * until we have completed this operation.
 	 */
 	_sigoff();
+
+	/*
+	 * Clear register arguments vector.
+	 */
+	bzero(hargs, sizeof (hargs));
 
 	/*
 	 * We save a context here so that we can be returned later to complete
@@ -1591,26 +1607,44 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	}
 
 	/*
-	 * Account for a reserved stack region (for amd64, this is 128 bytes).
+	 * Account for a reserved stack region (for amd64, this is 128 bytes),
+	 * and align the stack:
 	 */
 	lxfp -= STACK_RESERVE;
+	lxfp &= ~(STACK_ALIGN - 1);
 
 	/*
 	 * Allocate space on the Linux process stack for our delivery frame,
 	 * including:
 	 *
 	 *     ------------------------- old %sp
-	 *     - ucontext_t * -- link back to lx_sigdeliver()
-	 *     - LX_SIGRT_MAGIC  -- stack magic
+	 *     - lx_sigdeliver_frame_t (includes ucontext_t pointers
+	 *     -                        and stack magic)
+	 *     -------------------------
+	 *     - (amd64-only 8-byte alignment gap)
 	 *     -------------------------
 	 *     - frame of size "stacksz"
 	 *     - from the stack builder
 	 *     - function
 	 *     ------------------------- new %sp
 	 */
-	lxfp = lxfp & ~(STACK_ALIGN - 1);
+#if defined(_LP64)
+	/*
+	 * The AMD64 ABI requires us to align the stack such that when the
+	 * called function pushes the base pointer, the stack is 16 byte
+	 * aligned.  The stack must, therefore, be 8- but _not_ 16-byte
+	 * aligned.
+	 */
+#if (STACK_ALIGN != 16) || (STACK_ENTRY_ALIGN != 8)
+#error "lx_sigdeliver() did not find expected stack alignment"
+#endif
+	totsz = SA(sizeof (lx_sigdeliver_frame_t)) + SA(stacksz) + 8;
+	assert((totsz & (STACK_ENTRY_ALIGN - 1)) == 0);
+	assert((totsz & (STACK_ALIGN - 1)) == 8);
+#else
 	totsz = SA(sizeof (lx_sigdeliver_frame_t)) + SA(stacksz);
 	assert((totsz & (STACK_ALIGN - 1)) == 0);
+#endif
 
 	/*
 	 * Copy our return frame into place:
@@ -1640,9 +1674,13 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	/*
 	 * Build the Linux signal handling frame:
 	 */
+#if defined(_LP64)
+	lxfp -= SA(stacksz) + 8;
+#else
 	lxfp -= SA(stacksz);
+#endif
 	lx_debug("lx_sigdeliver: Linux sig frame @ %p\n", lxfp);
-	stack_builder(lx_sig, sip, ucp, lxfp);
+	stack_builder(lx_sig, sip, ucp, lxfp, hargs);
 
 	/*
 	 * Record our reservation so that any nested signal handlers
@@ -1656,7 +1694,6 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 		lxtsd->lxtsd_sigaltstack.ss_flags |= LX_SS_ONSTACK;
 	}
 
-
 	/*
 	 * Re-enable signal delivery.  If a signal was queued while we were
 	 * in the critical section, it will be delivered immediately.
@@ -1669,7 +1706,7 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	lx_debug("lx_sigdeliver: JUMPING TO LINUX (sig %d sp %p eip %p)\n",
 	    lx_sig, lxfp, user_handler);
 	if (syscall(SYS_brand, B_JUMP_TO_LINUX, lxfp, user_handler,
-	    lx_find_brand_gs()) == -1) {
+	    lx_find_brand_gs(), hargs) == -1) {
 		lx_err_fatal("B_JUMP_TO_LINUX failed: %s", strerror(errno));
 	}
 	assert(0);

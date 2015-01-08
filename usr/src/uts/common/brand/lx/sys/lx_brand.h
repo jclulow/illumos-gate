@@ -409,7 +409,7 @@ extern char *lx_get_zone_kern_version(zone_t *);
 
 extern void lx_lwp_set_native_stack_current(lx_lwp_data_t *, uintptr_t);
 extern void lx_divert(klwp_t *, uintptr_t);
-extern void lx_runexe(klwp_t *, uintptr_t, uintptr_t, uintptr_t);
+extern void lx_runexe(klwp_t *, uintptr_t, uintptr_t, uintptr_t, uintptr_t *);
 extern void lx_switch_to_native(klwp_t *);
 
 extern int lx_syscall_hook(void);

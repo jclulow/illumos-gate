@@ -946,7 +946,8 @@ lx_init(int argc, char *argv[], char *envp[])
 		/*
 		 * This system call should not return.
 		 */
-		if (syscall(SYS_brand, B_JUMP_TO_LINUX, sp, entry, 0) == -1) {
+		if (syscall(SYS_brand, B_JUMP_TO_LINUX, sp, entry, 0,
+		    NULL) == -1) {
 			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
 			    strerror(errno));
 		}
@@ -1272,7 +1273,7 @@ static lx_syscall_handler_t handlers[] = {
 	lx_setreuid,
 	lx_setregid,
 	lx_getgroups,
-	NULL,		/* 116: setgroups */
+	lx_setgroups,
 	NULL,		/* 117: setresuid */
 	lx_getresuid,
 	NULL,		/* 119: setresgid */
