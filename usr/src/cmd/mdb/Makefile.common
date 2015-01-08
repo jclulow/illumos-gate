@@ -30,6 +30,7 @@ COMMON_MODULES_PROC = \
 	libc \
 	libctf \
 	libcmdutils \
+	libmapmalloc \
 	libnvpair \
 	libproc \
 	libpython2.6 \

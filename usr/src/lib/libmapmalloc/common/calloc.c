@@ -28,6 +28,15 @@
 #include <string.h>
 #include <errno.h>
 
+extern void *caller(void);
+
+/*
+ * We stash our caller in this thread-local variable such that our malloc()
+ * implementation, if used, can use it to populate the mmb_pc member of a
+ * mapalloc_block_t.
+ */
+__thread void *mapmalloc_calloc_caller = NULL;
+
 /*
  * calloc - allocate and clear memory block
  */
@@ -50,9 +59,12 @@ calloc(size_t num, size_t size)
 		}
 	}
 
+	mapmalloc_calloc_caller = caller();
 	mp = malloc(total);
+	mapmalloc_calloc_caller = NULL;
 	if (mp == NULL)
 		return (NULL);
+
 	(void) memset(mp, 0, total);
 	return (mp);
 }
