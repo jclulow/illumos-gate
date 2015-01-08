@@ -306,7 +306,7 @@ clone_start(void *arg)
 		gs = cs->c_gs;
 #endif
 		if (syscall(SYS_brand, B_JUMP_TO_LINUX, cs->c_stk,
-		    cs->c_retaddr, gs) == -1) {
+		    cs->c_retaddr, gs, NULL) == -1) {
 			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
 			    strerror(errno));
 		}

@@ -504,6 +504,7 @@ noprod_sys_syscall:
 	
 	movq	T_LWP(%r15), %r14
 	ASSERT_NO_RUPDATE_PENDING(%r14)
+
 	ENABLE_INTR_FLAGS
 
 	MSTATE_TRANSITION(LMS_USER, LMS_SYSTEM)
@@ -517,6 +518,26 @@ noprod_sys_syscall:
 
 	incq	%gs:CPU_STATS_SYS_SYSCALL
 
+	/*
+	 * If our LWP has an alternate system call handler, run that instead of
+	 * the regular system call path.
+	 */
+	movq	LWP_BRAND_SYSCALL(%r14), %rdi
+	testq	%rdi, %rdi
+	jz	_syscall_no_brand
+
+	pushq	%rax
+	call	*%rdi
+
+	/*
+	 * If the alternate handler returns 0, we skip straight to the return to
+	 * usermode.  Otherwise, we resume regular system call processing.
+	 */
+	testl	%eax, %eax
+	popq	%rax
+	jz	_syscall_after_brand
+
+_syscall_no_brand:
 	movw	%ax, T_SYSNUM(%r15)
 	movzbl	T_PRE_SYS(%r15), %ebx
 	ORL_SYSCALLTRACE(%ebx)
@@ -551,6 +572,8 @@ _syscall_invoke:
 	shrq	$32, %r13	/* upper 32-bits into %edx */
 	movl	%r12d, %r12d	/* lower 32-bits into %eax */
 5:
+
+_syscall_after_brand:
 	/*
 	 * Optimistically assume that there's no post-syscall
 	 * work to do.  (This is to avoid having to call syscall_mstate()

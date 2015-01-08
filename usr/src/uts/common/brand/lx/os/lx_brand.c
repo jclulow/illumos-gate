@@ -438,6 +438,18 @@ lx_restorecontext(ucontext_t *ucp)
 	} else if (flags & LX_UC_STACK_BRAND) {
 		lwpd->br_stack_mode = LX_STACK_MODE_BRAND;
 	}
+
+#if defined(__amd64)
+	/*
+	 * Override the fsbase in the context with the value provided through
+	 * the Linux arch_prctl(2) system call.
+	 */
+	if (flags & LX_UC_STACK_BRAND) {
+		if (lwpd->br_lx_fsbase != 0) {
+			ucp->uc_mcontext.gregs[REG_FSBASE] = lwpd->br_lx_fsbase;
+		}
+	}
+#endif
 }
 
 static void
@@ -595,6 +607,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
     uintptr_t arg3, uintptr_t arg4, uintptr_t arg5)
 {
 	kthread_t *t = curthread;
+	klwp_t *lwp = ttolwp(t);
 	proc_t *p = ttoproc(t);
 	lx_proc_data_t *pd;
 	int ike_call;
@@ -604,7 +617,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	int code;
 	int sig;
 	lx_brand_registration_t reg;
-	lx_lwp_data_t *lwpd;
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 
 	/*
 	 * There is one operation that is suppored for non-branded
@@ -613,8 +626,8 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	 * a branded process.
 	 */
 	if (cmd == B_EXEC_BRAND) {
-		ASSERT(p->p_zone != NULL);
-		ASSERT(p->p_zone->zone_brand == &lx_brand);
+		VERIFY(p->p_zone != NULL);
+		VERIFY(p->p_zone->zone_brand == &lx_brand);
 		return (exec_common(
 		    (char *)arg1, (const char **)arg2, (const char **)arg3,
 		    EBA_BRAND));
@@ -622,14 +635,13 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 	/* For all other operations this must be a branded process. */
 	if (p->p_brand == NULL)
-		return (set_errno(ENOSYS));
+		return (ENOSYS);
 
-	ASSERT(p->p_brand == &lx_brand);
-	ASSERT(p->p_brand_data != NULL);
+	VERIFY(p->p_brand == &lx_brand);
+	VERIFY(p->p_brand_data != NULL);
 
 	switch (cmd) {
 	case B_REGISTER:
-		lwpd = ttolxlwp(t);
 		if (lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
 			lx_print("stack mode was not PREINIT during "
 			    "REGISTER\n");
@@ -681,8 +693,8 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			(void) suword32((void *)pd->l_traceflag, 1);
 		}
 
-		*rval = 0;
 		return (0);
+
 	case B_TTYMODES:
 		/* This is necessary for emulating TCGETS ioctls. */
 		if (ddi_prop_lookup_byte_array(DDI_DEV_T_ANY, ddi_root_node(),
@@ -698,7 +710,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		}
 
 		ddi_prop_free(termios);
-		*rval = 0;
 		return (0);
 
 	case B_ELFDATA:
@@ -706,8 +717,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		if (get_udatamodel() == DATAMODEL_NATIVE) {
 			if (copyout(&pd->l_elf_data, (void *)arg1,
 			    sizeof (lx_elf_data_t)) != 0) {
-				(void) set_errno(EFAULT);
-				return (*rval = -1);
+				return (EFAULT);
 			}
 		}
 #if defined(_LP64)
@@ -724,23 +734,15 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 			if (copyout(&led32, (void *)arg1,
 			    sizeof (led32)) != 0) {
-				(void) set_errno(EFAULT);
-				return (*rval = -1);
+				return (EFAULT);
 			}
 		}
 #endif
-		*rval = 0;
 		return (0);
 
 	case B_EXEC_NATIVE:
-		error = exec_common(
-		    (char *)arg1, (const char **)arg2, (const char **)arg3,
-		    EBA_NATIVE);
-		if (error) {
-			(void) set_errno(error);
-			return (*rval = -1);
-		}
-		return (*rval = 0);
+		return (exec_common((char *)arg1, (const char **)arg2,
+		    (const char **)arg3, EBA_NATIVE));
 
 	/*
 	 * The B_TRUSS_POINT subcommand is used so that we can make a no-op
@@ -748,37 +750,34 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	 * emulation.
 	 */
 	case B_TRUSS_POINT:
-		*rval = 0;
 		return (0);
 
-	case B_LPID_TO_SPAIR:
+	case B_LPID_TO_SPAIR: {
 		/*
 		 * Given a Linux pid as arg1, return the Solaris pid in arg2 and
 		 * the Solaris LWP in arg3.  We also translate pid 1 (which is
 		 * hardcoded in many applications) to the zone's init process.
 		 */
-		{
-			pid_t s_pid;
-			id_t s_tid;
+		pid_t s_pid;
+		id_t s_tid;
 
-			if ((pid_t)arg1 == 1) {
-				s_pid = p->p_zone->zone_proc_initpid;
-				/* handle the dead/missing init(1M) case */
-				if (s_pid == -1)
-					s_pid = 1;
-				s_tid = 1;
-			} else if (lx_lpid_to_spair((pid_t)arg1, &s_pid,
-			    &s_tid) < 0)
-				return (ESRCH);
-
-			if (copyout(&s_pid, (void *)arg2,
-			    sizeof (s_pid)) != 0 ||
-			    copyout(&s_tid, (void *)arg3, sizeof (s_tid)) != 0)
-				return (EFAULT);
-
-			*rval = 0;
-			return (0);
+		if ((pid_t)arg1 == 1) {
+			s_pid = p->p_zone->zone_proc_initpid;
+			/* handle the dead/missing init(1M) case */
+			if (s_pid == -1)
+				s_pid = 1;
+			s_tid = 1;
+		} else if (lx_lpid_to_spair((pid_t)arg1, &s_pid, &s_tid) < 0) {
+			return (ESRCH);
 		}
+
+		if (copyout(&s_pid, (void *)arg2, sizeof (s_pid)) != 0 ||
+		    copyout(&s_tid, (void *)arg3, sizeof (s_tid)) != 0) {
+			return (EFAULT);
+		}
+
+		return (0);
+	}
 
 	case B_SET_AFFINITY_MASK:
 	case B_GET_AFFINITY_MASK:
@@ -842,8 +841,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		return (0);
 	}
 
-	case B_UNSUPPORTED:
-		{
+	case B_UNSUPPORTED: {
 		char dmsg[256];
 
 		if (copyin((void *)arg1, &dmsg, sizeof (dmsg)) != 0) {
@@ -853,11 +851,11 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		}
 		dmsg[255] = '\0';
 		lx_unsupported(dmsg);
-		}
 
 		return (0);
+	}
 
-	case B_STORE_ARGS:
+	case B_STORE_ARGS: {
 		/*
 		 * B_STORE_ARGS subcommand
 		 * arg1 = address of struct to be copied in
@@ -865,39 +863,36 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * arg3-arg6 ignored
 		 * rval = the amount of data copied.
 		 */
-		{
-			int err;
-			void *buf;
+		void *buf;
 
-			lwpd = ttolxlwp(curthread);
-			/* only have upper limit because arg2 is unsigned */
-			if (arg2 > LX_BR_ARGS_SIZE_MAX) {
-				return (EINVAL);
-			}
-
-			buf = kmem_alloc(arg2, KM_SLEEP);
-			if ((err = copyin((void *)arg1, buf, arg2)) != 0) {
-				lx_print("Failed to copyin scall arg at 0x%p\n",
-				    (void *) arg1);
-				kmem_free(buf, arg2);
-				/*
-				 * Purposely not setting br_scall_args to NULL
-				 * to preserve data for debugging.
-				 */
-				return (EFAULT);
-			}
-
-			if (lwpd->br_scall_args != NULL) {
-				ASSERT(lwpd->br_args_size > 0);
-				kmem_free(lwpd->br_scall_args,
-				    lwpd->br_args_size);
-			}
-
-			lwpd->br_scall_args = buf;
-			lwpd->br_args_size = arg2;
-			*rval = arg2;
-			return (0);
+		/* only have upper limit because arg2 is unsigned */
+		if (arg2 > LX_BR_ARGS_SIZE_MAX) {
+			return (EINVAL);
 		}
+
+		buf = kmem_alloc(arg2, KM_SLEEP);
+		if (copyin((void *)arg1, buf, arg2) != 0) {
+			lx_print("Failed to copyin scall arg at 0x%p\n",
+			    (void *) arg1);
+			kmem_free(buf, arg2);
+			/*
+			 * Purposely not setting br_scall_args to NULL
+			 * to preserve data for debugging.
+			 */
+			return (EFAULT);
+		}
+
+		if (lwpd->br_scall_args != NULL) {
+			ASSERT(lwpd->br_args_size > 0);
+			kmem_free(lwpd->br_scall_args,
+			    lwpd->br_args_size);
+		}
+
+		lwpd->br_scall_args = buf;
+		lwpd->br_args_size = arg2;
+		*rval = arg2;
+		return (0);
+	}
 
 	case B_HELPER_CLONE:
 		return (lx_helper_clone(rval, arg1, (void *)arg2, (void *)arg3,
@@ -915,7 +910,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		    (siginfo_t *)arg4));
 
 	case B_SET_THUNK_PID:
-		lwpd = ttolxlwp(curthread);
 		lwpd->br_lx_thunk_pid = arg1;
 		return (0);
 
@@ -932,9 +926,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * B_SET_BRAND_STACK subcommand
 		 * arg1 = the base of the stack to use for emulation
 		 */
-
-		lwpd = ttolxlwp(curthread);
-
 		if (lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
 			lx_print("B_SET_BRAND_STACK when stack was already "
 			    "set to %p\n", (void *)arg1);
@@ -961,13 +952,11 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 		return (0);
 
-	case B_GET_CURRENT_CONTEXT: {
+	case B_GET_CURRENT_CONTEXT:
 		/*
 		 * B_GET_CURRENT_CONTEXT subcommand:
-		 * arg1 = address for pointer to current ucontext_t...
+		 * arg1 = address for pointer to current ucontext_t
 		 */
-		klwp_t *lwp = ttolwp(curthread);
-		int error;
 
 #if defined (_SYSCALL32_IMPL)
 		if (get_udatamodel() != DATAMODEL_NATIVE) {
@@ -982,7 +971,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		}
 
 		return (error != 0 ? EFAULT : 0);
-	}
 
 	case B_JUMP_TO_LINUX: {
 		/*
@@ -990,10 +978,9 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * arg1 = caddr32_t for new brand stack pointer
 		 * arg2 = caddr32_t for brand code entry point
 		 * arg3 = %gs value (a value of 0 will be ignored)
+		 * arg4 = uintptr_t[3] for register args (%rdi, %rsi, %rdx)
 		 */
-		klwp_t *lwp = ttolwp(curthread);
-
-		lwpd = lwptolxlwp(lwp);
+		uintptr_t hargs[3];
 
 		switch (lwpd->br_stack_mode) {
 		case LX_STACK_MODE_NATIVE: {
@@ -1009,6 +996,13 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			break;
 		}
 
+		case LX_STACK_MODE_INIT:
+			/*
+			 * The LWP is transitioning to Linux code for the first
+			 * time.
+			 */
+			break;
+
 		case LX_STACK_MODE_PREINIT:
 			/*
 			 * This LWP has not installed an alternate stack for
@@ -1022,26 +1016,36 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			 */
 			exit(CLD_KILLED, SIGSYS);
 			return (0);
-
-		case LX_STACK_MODE_INIT:
-			/*
-			 * The LWP is transitioning to Linux code for the first
-			 * time.
-			 */
-			break;
 		}
 
+#if defined(_LP64)
 		/*
-		 * We are now in branded stack mode:
+		 * Copy in register arguments for signal handlers.  We take
+		 * three arguments, which will load into %rdi, %rsi and %rdx
+		 * while transferring control.
 		 */
-		lwpd->br_stack_mode = LX_STACK_MODE_BRAND;
+		if (get_udatamodel() == DATAMODEL_NATIVE) {
+			void *uhargs;
 
-		lx_runexe(ttolwp(curthread), arg1, arg2, arg3);
+			if ((uhargs = (void *)arg4) == NULL) {
+				bzero(hargs, sizeof (hargs));
+			} else {
+				if (copyin(uhargs, &hargs, sizeof (hargs)) !=
+				    0) {
+					return (EFAULT);
+				}
+			}
+		}
+#endif
 
+		/*
+		 * Transfer control to Linux:
+		 */
+		lx_runexe(lwp, arg1, arg2, arg3, hargs);
 		return (0);
 	}
 
-	case B_EMULATION_DONE: {
+	case B_EMULATION_DONE:
 		/*
 		 * B_EMULATION_DONE subcommand:
 		 * arg1 = ucontext_t * to restore
@@ -1049,7 +1053,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * arg3 = return code
 		 * arg4 = if operation failed, the errno value
 		 */
-		int rv;
 
 		/*
 		 * The first part of this operation is a setcontext() to
@@ -1058,8 +1061,17 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * If that fails, we return (hopefully) to the emulation
 		 * routine and it will handle the error.
 		 */
-		if ((rv = getsetcontext32(SETCONTEXT, (void *)arg1)) != 0) {
-			return (rv);
+#if (_SYSCALL32_IMPL)
+		if (get_udatamodel() != DATAMODEL_NATIVE) {
+			error = getsetcontext32(SETCONTEXT, (void *)arg1);
+		} else
+#endif
+		{
+			error = getsetcontext(SETCONTEXT, (void *)arg1);
+		}
+
+		if (error != 0) {
+			return (error);
 		}
 
 		/*
@@ -1067,13 +1079,16 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * return value or errno with code common to the in-kernel
 		 * system call emulation.
 		 */
-		if ((rv = (int)arg4) != 0) {
-			set_errno(rv);
+		if ((error = (int)arg4) != 0) {
+			/*
+			 * lx_syscall_return() looks at the errno in the LWP,
+			 * so set it here:
+			 */
+			set_errno(error);
 		}
 		lx_syscall_return(ttolwp(curthread), (int)arg2, (long)arg3);
 
 		return (0);
-	}
 
 	case B_EXIT_AS_SIG:
 		code = CLD_KILLED;

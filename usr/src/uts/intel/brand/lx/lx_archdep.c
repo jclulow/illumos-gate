@@ -16,9 +16,18 @@
  * a Linux entrypoint.
  */
 void
-lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs)
+lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs,
+    uintptr_t *hargs)
 {
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	struct regs *rp = lwptoregs(lwp);
+
+	/*
+	 * We should only make it here when transitioning to Linux from
+	 * the NATIVE or INIT mode.
+	 */
+	VERIFY(lwpd->br_stack_mode == LX_STACK_MODE_NATIVE ||
+	    lwpd->br_stack_mode == LX_STACK_MODE_INIT);
 
 	rp->r_fp = 0;
 	rp->r_sp = sp;
@@ -26,35 +35,64 @@ lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs)
 
 #if defined(__amd64)
 	/*
-	 * Clear the general registers:
+	 * Potentially pass arguments by register:
+	 */
+	rp->r_rdi = hargs != NULL ? hargs[0] : 0;
+	rp->r_rsi = hargs != NULL ? hargs[1] : 0;
+	rp->r_rdx = hargs != NULL ? hargs[2] : 0;
+
+	/*
+	 * Clear the other general registers:
 	 */
 	rp->r_rax = 0;
 	rp->r_rbx = 0;
 	rp->r_rcx = 0;
-	rp->r_rdx = 0;
-	rp->r_rsi = 0;
-	rp->r_rdi = 0;
 
-	/*
-	 * Set %gs for 32-bit processes if one is provided:
-	 */
-	if (get_udatamodel() != DATAMODEL_NATIVE && gs != 0) {
+	if (get_udatamodel() == DATAMODEL_NATIVE) {
 		struct pcb *pcb = &lwp->lwp_pcb;
 
-		kpreempt_disable();
-
-		pcb->pcb_gs = 0xffff & gs;
+		/*
+		 * Preserve the %fsbase value for this LWP, as set and used by
+		 * native illumos code.
+		 */
+		lwpd->br_ntv_fsbase = pcb->pcb_fsbase;
 
 		/*
-		 * Ensure we go out via update_sregs
+		 * Load the Linux %fsbase if required:
 		 */
-		pcb->pcb_rupdate = 1;
+		kpreempt_disable();
+		if (lwpd->br_lx_fsbase != 0 && pcb->pcb_fsbase !=
+		    lwpd->br_lx_fsbase) {
+			pcb->pcb_fsbase = lwpd->br_lx_fsbase;
 
+			/*
+			 * Ensure we go out via update_sregs.
+			 */
+			pcb->pcb_rupdate = 1;
+		}
 		kpreempt_enable();
+	} else {
+		/*
+		 * Set %gs for 32-bit processes if one is provided:
+		 */
+		if (gs != 0) {
+			struct pcb *pcb = &lwp->lwp_pcb;
+
+			kpreempt_disable();
+
+			pcb->pcb_gs = 0xffff & gs;
+
+			/*
+			 * Ensure we go out via update_sregs
+			 */
+			pcb->pcb_rupdate = 1;
+
+			kpreempt_enable();
+		}
 	}
 #elif defined(__i386)
 	/*
-	 * Clear the general registers:
+	 * Clear the other general registers:
 	 */
 	rp->r_eax = 0;
 	rp->r_ebx = 0;
@@ -72,6 +110,11 @@ lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs)
 #else
 #error "unknown x86"
 #endif
+
+	/*
+	 * We are now running in emulated Linux mode.
+	 */
+	lwpd->br_stack_mode = LX_STACK_MODE_BRAND;
 }
 
 /*
@@ -120,8 +163,7 @@ lx_switch_to_native(klwp_t *lwp)
 			}
 		}
 		kpreempt_enable();
-	}
-	else if (get_udatamodel() == DATAMODEL_LP64) {
+	} else if (get_udatamodel() == DATAMODEL_LP64) {
 		lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 
 		if (lwpd->br_ntv_fsbase != 0) {
@@ -222,8 +264,8 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	top = top & ~(STACK_ALIGN - 1);
 	sp = top - frsz;
 
-	uc_addr = top - SA(sizeof (ucontext32_t));
-	args_addr = uc_addr - SA(6 * sizeof (uint32_t));
+	uc_addr = top - SA(sizeof (ucontext_t));
+	args_addr = uc_addr - SA(6 * sizeof (uintptr_t));
 
 	/*
 	 * XXX call to watch_disable_addr() here ?
@@ -279,6 +321,13 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	rp->r_rdi = uc_addr;
 	rp->r_rsi = syscall_num;
 	rp->r_rdx = args_addr;
+
+	/*
+	 * In order to be able to restore %edx, we need to JUSTRETURN.
+	 */
+	lwp->lwp_eosys = JUSTRETURN;
+	curthread->t_post_sys = 1;
+	aston(curthread);
 
 	/*
 	 * Set stack pointer and return address to the usermode emulation

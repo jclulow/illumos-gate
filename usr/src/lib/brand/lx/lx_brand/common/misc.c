@@ -250,7 +250,7 @@ lx_uname(uintptr_t p1)
 
 /*
  * {get,set}groups16() - Handle the conversion between 16-bit Linux gids and
- * 32-bit Solaris gids.
+ * 32-bit illumos gids.
  */
 long
 lx_getgroups16(uintptr_t p1, uintptr_t p2)
@@ -430,10 +430,10 @@ lx_mknod(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 		 *
 		 * Most programmers aren't even aware you can do this.
 		 *
-		 * Note you can also do this via Solaris' mknod(2), but
+		 * Note you can also do this via illumos' mknod(2), but
 		 * Linux allows anyone who can create a UNIX domain
 		 * socket via bind(2) to create one via mknod(2);
-		 * Solaris requires the caller to be privileged.
+		 * illumos requires the caller to be privileged.
 		 */
 		if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 			return (-errno);
@@ -582,7 +582,7 @@ lx_setgroups(uintptr_t p1, uintptr_t p2)
 
 		/*
 		 * Linux doesn't check the validity of the group IDs, but
-		 * Solaris does. Change any invalid group IDs to a known, valid
+		 * illumos does. Change any invalid group IDs to a known, valid
 		 * value (yuck).
 		 */
 		for (i = 0; i < ng; i++) {
