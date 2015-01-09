@@ -1386,7 +1386,7 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
 	 *   hdlr(int sig, siginfo_t *sip, void *ucp);
 	 */
 	hargs[0] = lx_sig;
-	hargs[1] = sip != NULL ? &lx_ssp->si : NULL;
+	hargs[1] = sip != NULL ? (uintptr_t)&lx_ssp->si : NULL;
 	hargs[2] = (uintptr_t)lx_ucp;
 #endif
 
