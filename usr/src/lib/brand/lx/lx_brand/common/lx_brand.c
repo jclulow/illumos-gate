@@ -1149,7 +1149,7 @@ lx_fd_to_path(int fd, char *buf, int buf_size)
 
 static lx_syscall_handler_t handlers[] = {
 	NULL,		/*   0: read */
-	lx_write,
+	NULL,		/*   1: write */
 	lx_open,
 	lx_close,
 	lx_stat64,
@@ -1172,7 +1172,7 @@ static lx_syscall_handler_t handlers[] = {
 	lx_access,
 	NULL,		/* 22: pipe */
 	lx_select,
-	lx_yield,
+	NULL,		/* 24: sched_yield */
 	lx_remap,
 	lx_msync,
 	lx_mincore,
@@ -1477,7 +1477,7 @@ static lx_syscall_handler_t handlers[] = {
 	lx_exit,
 	lx_fork,
 	NULL,		/*   3: read */
-	lx_write,
+	NULL,		/*   4: write */
 	lx_open,
 	lx_close,
 	lx_waitpid,
@@ -1631,7 +1631,7 @@ static lx_syscall_handler_t handlers[] = {
 	lx_sched_getparam,
 	lx_sched_setscheduler,
 	lx_sched_getscheduler,
-	lx_yield,
+	NULL,		/* 158: sched_yield */
 	lx_sched_get_priority_max,
 	lx_sched_get_priority_min,
 	lx_sched_rr_get_interval,

@@ -377,7 +377,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"exit",	NULL,			0,		1}, /*  1 */
 	{"fork",	NULL,			0,		0}, /*  2 */
 	{"read",	lx_read,		0,		3}, /*  3 */
-	{"write",	NULL,			0,		3}, /*  4 */
+	{"write",	lx_write,		0,		3}, /*  4 */
 	{"open",	NULL,			0,		3}, /*  5 */
 	{"close",	NULL,			0,		1}, /*  6 */
 	{"waitpid",	NULL,			0,		3}, /*  7 */
@@ -531,7 +531,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"sched_getparam", NULL,		0,		2}, /* 155 */
 	{"sched_setscheduler", NULL,		0,		3}, /* 156 */
 	{"sched_getscheduler", NULL,		0,		1}, /* 157 */
-	{"sched_yield",	NULL,			0,		0}, /* 158 */
+	{"sched_yield",	lx_sched_yield,		0,		0}, /* 158 */
 	{"sched_get_priority_max", NULL, 	0,		1}, /* 159 */
 	{"sched_get_priority_min", NULL, 	0,		1}, /* 160 */
 	{"sched_rr_get_interval", NULL, 	0,		2}, /* 161 */
@@ -743,7 +743,7 @@ lx_sysent_t lx_sysent32[] = {
  */
 lx_sysent_t lx_sysent64[] = {
 	{"read",	lx_read,		0,		3}, /* 0 */
-	{"write",	NULL,			0,		3}, /* 1 */
+	{"write",	lx_write,		0,		3}, /* 1 */
 	{"open",	NULL,			0,		3}, /* 2 */
 	{"close",	NULL,			0,		1}, /* 3 */
 	{"stat",	NULL,			0,		2}, /* 4 */
@@ -766,7 +766,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"access",	NULL,			0,		2}, /* 21 */
 	{"pipe",	lx_pipe,		0,		1}, /* 22 */
 	{"select",	NULL,			0,		5}, /* 23 */
-	{"sched_yield",	NULL,			0,		0}, /* 24 */
+	{"sched_yield",	lx_sched_yield,		0,		0}, /* 24 */
 	{"mremap",	NULL,			0,		5}, /* 25 */
 	{"msync",	NULL,			0,		3}, /* 26 */
 	{"mincore",	NULL,			0,		3}, /* 27 */

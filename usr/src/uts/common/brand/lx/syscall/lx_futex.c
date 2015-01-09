@@ -277,10 +277,16 @@ futex_wait(memid_t *memid, caddr_t addr, int val, timespec_t *timeout)
 	while ((fw.fw_woken == 0) && (err == 0)) {
 		ret = cv_waituntil_sig(&fw.fw_cv, &futex_hash_lock[index],
 		    timeout, timechanged);
-		if (ret < 0)
+		if (ret < 0) {
 			err = set_errno(ETIMEDOUT);
-		else if (ret == 0)
+		} else if (ret == 0) {
+			/*
+			 * According to signal(7), a futex(2) call with the
+			 * FUTEX_WAIT operation is restartable.
+			 */
+			ttolxlwp(curthread)->br_syscall_restart = 1;
 			err = set_errno(EINTR);
+		}
 	}
 
 	/*
