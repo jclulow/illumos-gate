@@ -10,17 +10,20 @@
 #include <sys/stack.h>
 #include <sys/sdt.h>
 
+extern int getsetcontext(int, void *);
+#if defined(_SYSCALL32_IMPL)
+extern int getsetcontext32(int, void *);
+#endif
+
 /*
- * Clear out registers and repoint the stack and program counter.  This
- * function is used by the B_JUMP_TO_LINUX brand system call to trampoline into
- * a Linux entrypoint.
+ * Load registers and repoint the stack and program counter.  This function is
+ * used by the B_JUMP_TO_LINUX brand system call to trampoline into a Linux
+ * entrypoint.
  */
-void
-lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs,
-    uintptr_t *hargs)
+int
+lx_runexe(klwp_t *lwp, void *ucp)
 {
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
-	struct regs *rp = lwptoregs(lwp);
 
 	/*
 	 * We should only make it here when transitioning to Linux from
@@ -29,25 +32,7 @@ lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs,
 	VERIFY(lwpd->br_stack_mode == LX_STACK_MODE_NATIVE ||
 	    lwpd->br_stack_mode == LX_STACK_MODE_INIT);
 
-	rp->r_fp = 0;
-	rp->r_sp = sp;
-	rp->r_pc = entry;
-
 #if defined(__amd64)
-	/*
-	 * Potentially pass arguments by register:
-	 */
-	rp->r_rdi = hargs != NULL ? hargs[0] : 0;
-	rp->r_rsi = hargs != NULL ? hargs[1] : 0;
-	rp->r_rdx = hargs != NULL ? hargs[2] : 0;
-
-	/*
-	 * Clear the other general registers:
-	 */
-	rp->r_rax = 0;
-	rp->r_rbx = 0;
-	rp->r_rcx = 0;
-
 	if (get_udatamodel() == DATAMODEL_NATIVE) {
 		struct pcb *pcb = &lwp->lwp_pcb;
 
@@ -57,64 +42,13 @@ lx_runexe(klwp_t *lwp, uintptr_t sp, uintptr_t entry, uintptr_t gs,
 		 */
 		lwpd->br_ntv_fsbase = pcb->pcb_fsbase;
 
-		/*
-		 * Load the Linux %fsbase if required:
-		 */
-		kpreempt_disable();
-		if (lwpd->br_lx_fsbase != 0 && pcb->pcb_fsbase !=
-		    lwpd->br_lx_fsbase) {
-			pcb->pcb_fsbase = lwpd->br_lx_fsbase;
-
-			/*
-			 * Ensure we go out via update_sregs.
-			 */
-			pcb->pcb_rupdate = 1;
-		}
-		kpreempt_enable();
+		return (getsetcontext(SETCONTEXT, ucp));
 	} else {
-		/*
-		 * Set %gs for 32-bit processes if one is provided:
-		 */
-		if (gs != 0) {
-			struct pcb *pcb = &lwp->lwp_pcb;
-
-			kpreempt_disable();
-
-			pcb->pcb_gs = 0xffff & gs;
-
-			/*
-			 * Ensure we go out via update_sregs
-			 */
-			pcb->pcb_rupdate = 1;
-
-			kpreempt_enable();
-		}
-	}
-#elif defined(__i386)
-	/*
-	 * Clear the other general registers:
-	 */
-	rp->r_eax = 0;
-	rp->r_ebx = 0;
-	rp->r_ecx = 0;
-	rp->r_edx = 0;
-	rp->r_esi = 0;
-	rp->r_edi = 0;
-
-	/*
-	 * Set %gs if one is provided:
-	 */
-	if (gs != 0) {
-		rp->r_gs = gs;
+		return (getsetcontext32(SETCONTEXT, ucp));
 	}
 #else
-#error "unknown x86"
+	return (getsetcontext(SETCONTEXT, ucp));
 #endif
-
-	/*
-	 * We are now running in emulated Linux mode.
-	 */
-	lwpd->br_stack_mode = LX_STACK_MODE_BRAND;
 }
 
 /*

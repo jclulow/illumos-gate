@@ -167,7 +167,7 @@ struct ucontext;
 
 extern ucontext_t *lx_syscall_regs(void);
 extern uintptr_t lx_find_brand_sp(void);
-extern uintptr_t lx_find_brand_gs(void);
+extern const ucontext_t *lx_find_brand_uc(void);
 extern int lx_errno(int);
 
 extern char *lx_fd_to_path(int fd, char *buf, int buf_size);

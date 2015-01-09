@@ -105,11 +105,7 @@ struct clone_state {
 	void 		*c_ptidp;
 	struct lx_desc	*c_ldtinfo;	/* thread-specific segment */
 	void		*c_ctidp;
-#if defined(_LP64)
-	lx_regs_t	c_regs;		/* original register state */
-#else
-	uintptr_t	c_gs;		/* Linux's %gs */
-#endif
+	ucontext_t	c_uc;		/* original register state */
 	sigset_t	c_sigmask;	/* signal mask */
 	lx_affmask_t	c_affmask;	/* CPU affinity mask */
 	volatile int	*c_clone_res;	/* pid/error returned to cloner */
@@ -294,8 +290,6 @@ clone_start(void *arg)
 	 * clone(2) path.
 	 */
 	if (lx_tsd.lxtsd_exit == LX_ET_NONE) {
-		uintptr_t gs = 0;
-
 		if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
 			*(cs->c_clone_res) = -errno;
 
@@ -310,13 +304,32 @@ clone_start(void *arg)
 		*(cs->c_clone_res) = rval;
 
 		/*
+		 * We want to load the general registers from this context, and
+		 * switch to the BRAND stack.
+		 */
+		cs->c_uc.uc_flags = UC_CPU;
+		cs->c_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
+
+		/*
+		 * New threads will not link into the existing context chain.
+		 */
+		cs->c_uc.uc_link = NULL;
+
+		/*
+		 * Set stack pointer and entry point for new thread:
+		 */
+		cs->c_uc.uc_mcontext.gregs[REG_SP] = (uintptr_t)cs->c_stk;
+		cs->c_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)cs->c_retaddr;
+
+		/*
+		 * Return 0 to the child:
+		 */
+		cs->c_uc.uc_mcontext.gregs[REG_R0] = (uintptr_t)0;
+
+		/*
 		 * Jump to the Linux process.  The system call must not return.
 		 */
-#if defined(_ILP32)
-		gs = cs->c_gs;
-#endif
-		if (syscall(SYS_brand, B_JUMP_TO_LINUX, cs->c_stk,
-		    cs->c_retaddr, gs, NULL) == -1) {
+		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &cs->c_uc) == -1) {
 			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
 			    strerror(errno));
 		}
@@ -600,9 +613,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	cs->c_ldtinfo = ldtinfo;
 	cs->c_ctidp = ctidp;
 	cs->c_clone_res = &clone_res;
-#if defined(_ILP32)
-	cs->c_gs = LX_REG(ucp, GS);
-#endif
+	bcopy(ucp, &cs->c_uc, sizeof (cs->c_uc));
 
 	if (lx_sched_getaffinity(0, sizeof (cs->c_affmask),
 	    (uintptr_t)&cs->c_affmask) == -1) {
