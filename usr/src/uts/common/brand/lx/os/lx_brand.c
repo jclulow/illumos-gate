@@ -501,6 +501,20 @@ lx_savecontext(ucontext_t *ucp)
 		flags |= LX_UC_STACK_BRAND;
 	}
 
+	/*
+	 * If we might need to restart this system call, save that information
+	 * in the context:
+	 */
+	if (lwpd->br_stack_mode == LX_STACK_MODE_BRAND) {
+		ucp->uc_brand_data[2] =
+		    (void *)(uintptr_t)lwpd->br_syscall_num;
+		if (lwpd->br_syscall_restart != 0) {
+			flags |= LX_UC_RESTART_SYSCALL;
+		}
+	} else {
+		ucp->uc_brand_data[2] = NULL;
+	}
+
 	ucp->uc_brand_data[0] = (void *)flags;
 	ucp->uc_brand_data[1] = (void *)sp;
 }
@@ -540,6 +554,19 @@ lx_savecontext32(ucontext32_t *ucp)
 		flags |= LX_UC_STACK_NATIVE;
 	} else if (lwpd->br_stack_mode == LX_STACK_MODE_BRAND) {
 		flags |= LX_UC_STACK_BRAND;
+	}
+
+	/*
+	 * If we might need to restart this system call, save that information
+	 * in the context:
+	 */
+	if (lwpd->br_stack_mode == LX_STACK_MODE_BRAND) {
+		ucp->uc_brand_data[2] = (caddr32_t)lwpd->br_syscall_num;
+		if (lwpd->br_syscall_restart != 0) {
+			flags |= LX_UC_RESTART_SYSCALL;
+		}
+	} else {
+		ucp->uc_brand_data[2] = NULL;
 	}
 
 	ucp->uc_brand_data[0] = flags;

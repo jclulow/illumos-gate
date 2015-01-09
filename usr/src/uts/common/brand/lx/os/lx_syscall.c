@@ -206,6 +206,15 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	struct regs *rp = lwptoregs(lwp);
 	int error = lwp->lwp_errno;
 
+	if (error != EINTR) {
+		/*
+		 * If this system call was not interrupted, clear the system
+		 * call restart flag before lx_setcontext() can pass it to
+		 * usermode.
+		 */
+		lwpd->br_syscall_restart = 0;
+	}
+
 	if (error != 0) {
 		/*
 		 * XXX bounds check on stol_errno
@@ -214,25 +223,11 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 		ret = -stol_errno[error];
 	}
 
-	if (error == EINTR && lwpd->br_syscall_restart != 0) {
-		/*
-		 * XXX This system call was interrupted, e.g. by an
-		 * asynchronous signal, but has requested that it be restarted.
-		 * Both the int80 and the syscall instruction are 2 bytes, so
-		 * wind back the program counter before returning.  After the
-		 * signal we will take the same system call with the original
-		 * arguments again.
-		 * XXX We should probably only restart this system call due
-		 * to _signal handling_, and only if SA_RESTART was set...
-		 */
-		rp->r_pc -= 2;
-	} else {
-		/*
-		 * The system call completed, and a restart was not requested.
-		 * 32-bit Linux returns via %eax; 64-bit returns via %rax.
-		 */
-		rp->r_r0 = ret;
-	}
+	/*
+	 * 32-bit Linux system calls return via %eax; 64-bit calls return via
+	 * %rax.
+	 */
+	rp->r_r0 = ret;
 
 	/*
 	 * Fire ptrace and DTrace probes:
@@ -245,7 +240,6 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	 * Clear errno and reset restart flag for next time:
 	 */
 	lwp->lwp_errno = 0;
-	lwpd->br_syscall_restart = 0;
 
 	/*
 	 * We want complete control of the registers on return from this
@@ -307,6 +301,18 @@ lx_syscall_hook(void)
 	{
 		s = &lx_sysent32[syscall_num];
 	}
+
+	/*
+	 * Clear the restartable system call flag.  This flag will be set
+	 * on in the system call handler if the call is a candidate for
+	 * a restart.  It will be saved by lx_setcontext() in the event
+	 * that we take a signal, and used in the signal handling path
+	 * to restart the system call iff SA_RESTART was set for this
+	 * signal.  Save the system call number so that we can store it
+	 * in the saved context if required.
+	 */
+	lwpd->br_syscall_num = syscall_num;
+	lwpd->br_syscall_restart = 0;
 
 	/*
 	 * Process the arguments for this system call, and fire ptrace

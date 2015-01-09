@@ -581,6 +581,7 @@ ucontext_32ton(const ucontext32_t *src, ucontext_t *dst)
 	 */
 	dst->uc_brand_data[0] = (void *)(uintptr_t)src->uc_brand_data[0];
 	dst->uc_brand_data[1] = (void *)(uintptr_t)src->uc_brand_data[1];
+	dst->uc_brand_data[2] = (void *)(uintptr_t)src->uc_brand_data[2];
 }
 
 #endif	/* _SYSCALL32_IMPL */

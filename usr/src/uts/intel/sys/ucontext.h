@@ -87,10 +87,10 @@ struct	__ucontext {
 	 * called "uc_filler", padding the size of the struct to 512 bytes.  To
 	 * allow zone brands to communicate extra data right the way through
 	 * the signal handling process, from sigacthandler to setcontext, we
-	 * steal the first two of these longs as a brand-private member.
+	 * steal the first three of these longs as a brand-private member.
 	 */
-	void		*uc_brand_data[2];
-	long		uc_filler[3];
+	void		*uc_brand_data[3];
+	long		uc_filler[2];
 };
 #if defined(_SYSCALL32)
 
@@ -102,8 +102,8 @@ typedef struct ucontext32 {
 	sigset_t	uc_sigmask;
 	stack32_t	uc_stack;
 	mcontext32_t	uc_mcontext;
-	caddr32_t	uc_brand_data[2];
-	int32_t		uc_filler[3];
+	caddr32_t	uc_brand_data[3];
+	int32_t		uc_filler[2];
 } ucontext32_t;
 
 #if defined(_KERNEL)

@@ -447,6 +447,7 @@ struct lx_lwp_data {
 	ulong_t	br_ptrace_eventmsg;
 
 
+	int	br_syscall_num;		/* current system call number */
 	uint_t	br_syscall_restart;	/* should restart on EINTR */
 
 	/*

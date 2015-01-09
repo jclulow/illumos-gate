@@ -1122,6 +1122,8 @@ lx_rt_sigreturn(void)
 	ucp = lx_syscall_regs();
 
 #if defined(_ILP32)
+	lx_debug("lx_rt_sigreturn: ESP %p UESP %p\n", LX_REG(ucp, ESP),
+	    LX_REG(ucp, UESP));
 	/*
 	 * For 32-bit
 	 *
@@ -1686,6 +1688,27 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 	lx_sigdeliver(lx_sig, sip, ucp, stksize, stk_builder, user_handler,
 	    lxsap);
+
+	/*
+	 * We need to handle restarting system calls if requested by the
+	 * program:
+	 */
+	if (lxsap->lxsa_flags & LX_SA_RESTART) {
+		unsigned int flags = (uintptr_t)ucp->uc_brand_data[0];
+		long ret;
+
+		/*
+		 * XXX
+		 */
+		ret = (long)LX_REG(ucp, REG_R0);
+		if (flags & LX_UC_RESTART_SYSCALL && ret == -4) {
+			lx_debug("restarting interrupted system call %d",
+			    (int)(uintptr_t)ucp->uc_brand_data[0]);
+			LX_REG(ucp, REG_PC) -= 2;
+			LX_REG(ucp, REG_R0) = (int)(uintptr_t)
+			    ucp->uc_brand_data[2];
+		}
+	}
 }
 
 /*
