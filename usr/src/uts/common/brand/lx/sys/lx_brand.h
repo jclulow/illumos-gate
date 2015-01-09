@@ -366,6 +366,7 @@ typedef struct lx_lwp_data {
 
 	uint_t	br_ptrace;		/* ptrace is active for this LWP */
 
+	int	br_syscall_num;		/* current system call number */
 	uint_t	br_syscall_restart;	/* should restart on EINTR */
 
 	/*
