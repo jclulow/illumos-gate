@@ -38,7 +38,16 @@
 #include <sys/lx_sched.h>
 #include <sys/lx_brand.h>
 
+extern int yield();
 extern long priocntl_common(int, procset_t *, int, caddr_t, caddr_t, uio_seg_t);
+
+long
+lx_sched_yield(void)
+{
+	yield();
+
+	return (0);
+}
 
 int
 lx_sched_affinity(int cmd, uintptr_t pid, int len, uintptr_t maskp,

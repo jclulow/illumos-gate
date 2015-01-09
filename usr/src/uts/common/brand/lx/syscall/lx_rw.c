@@ -22,6 +22,7 @@
 
 /* uts/common/syscall/rw.c */
 extern ssize_t read(int fdes, void *cbuf, size_t count);
+extern ssize_t write(int fdes, void *cbuf, size_t count);
 
 long
 lx_read(int fd, void *buf, size_t nbyte)
@@ -44,4 +45,16 @@ lx_read(int fd, void *buf, size_t nbyte)
 	ttolxlwp(curthread)->br_syscall_restart = 1;
 
 	return (read(fd, buf, nbyte));
+}
+
+long
+lx_write(int fd, void *cbuf, size_t nbyte)
+{
+	/*
+	 * If write(2) returns EINTR, we want to signal that restarting the
+	 * system call is acceptable:
+	 */
+	ttolxlwp(curthread)->br_syscall_restart = 1;
+
+	return (write(fd, buf, nbyte));
 }

@@ -1037,23 +1037,6 @@ lx_utimes(const char *path, const struct timeval times[2])
 }
 
 long
-lx_write(int fildes, const void *buf, size_t nbyte)
-{
-	int r;
-
-	r = write(fildes, buf, nbyte);
-	return ((r == -1) ? -errno : r);
-}
-
-long
-lx_yield(void)
-{
-
-	yield();
-	return (0);
-}
-
-long
 lx_vhangup(void)
 {
 	if (geteuid() != 0)

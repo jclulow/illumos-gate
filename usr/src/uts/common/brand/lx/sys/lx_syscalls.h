@@ -54,6 +54,7 @@ extern long lx_sched_getscheduler();
 extern long lx_sched_rr_get_interval();
 extern long lx_sched_setparam();
 extern long lx_sched_setscheduler();
+extern long lx_sched_yield();
 extern long lx_set_thread_area();
 extern long lx_set_tid_address();
 extern long lx_setresgid();
@@ -62,6 +63,7 @@ extern long lx_setresuid();
 extern long lx_setresuid16();
 extern long lx_sysinfo32();
 extern long lx_sysinfo64();
+extern long lx_write();
 extern long lx_xattr();
 
 #endif	/* _KERNEL */
