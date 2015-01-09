@@ -460,7 +460,8 @@ lx_free_other_stacks(void)
 	if (this_stack != 0)
 		stack_list[0] = stack_list[this_stack];
 	stack_list_elems = 1;
-	stack_list = realloc(stack_list, stack_list_elems);
+	stack_list = realloc(stack_list, stack_list_elems *
+	    sizeof (stack_list[0]));
 
 	mutex_unlock(&stack_list_lock);
 	_sigon();
@@ -518,7 +519,8 @@ lx_alloc_stack(void)
 	}
 	if (i >= stack_list_elems) {
 		stack_list_elems++;
-		stack_list = realloc(stack_list, stack_list_elems);
+		stack_list = realloc(stack_list, stack_list_elems *
+		    sizeof (stack_list[0]));
 	}
 	stack_list[i].sle_tid = me;
 	stack_list[i].sle_stack = stack;
