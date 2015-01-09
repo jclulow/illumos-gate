@@ -320,10 +320,12 @@ typedef ulong_t lx_affmask_t[LX_AFF_ULONGS];
 /*
  * Flag values for uc_brand_data[0] in the ucontext_t:
  */
-#define	LX_UC_STACK_NATIVE	0x001
-#define	LX_UC_STACK_BRAND	0x002
-#define	LX_UC_RESTORE_NATIVE_SP	0x010
-#define	LX_UC_FRAME_IS_SYSCALL	0x100
+#define	LX_UC_STACK_NATIVE	0x00001
+#define	LX_UC_STACK_BRAND	0x00002
+#define	LX_UC_RESTORE_NATIVE_SP	0x00010
+#define	LX_UC_FRAME_IS_SYSCALL	0x00100
+#define	LX_UC_RESTART_SYSCALL	0x01000
+#define	LX_UC_IGNORE_LINK	0x10000
 
 #ifdef	_KERNEL
 
@@ -505,7 +507,7 @@ extern char *lx_get_zone_kern_version(zone_t *);
 
 extern void lx_lwp_set_native_stack_current(lx_lwp_data_t *, uintptr_t);
 extern void lx_divert(klwp_t *, uintptr_t);
-extern void lx_runexe(klwp_t *, uintptr_t, uintptr_t, uintptr_t, uintptr_t *);
+extern int lx_runexe(klwp_t *, void *);
 extern void lx_switch_to_native(klwp_t *);
 
 extern int lx_syscall_hook(void);

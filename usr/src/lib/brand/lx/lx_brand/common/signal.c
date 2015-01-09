@@ -1906,10 +1906,41 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	 */
 	lx_debug("lx_sigdeliver: JUMPING TO LINUX (sig %d sp %p eip %p)\n",
 	    lx_sig, lxfp, user_handler);
-	if (syscall(SYS_brand, B_JUMP_TO_LINUX, lxfp, user_handler,
-	    lx_find_brand_gs(), hargs) == -1) {
-		lx_err_fatal("B_JUMP_TO_LINUX failed: %s", strerror(errno));
+	{
+		ucontext_t jump_uc;
+
+		bcopy(lx_find_brand_uc(), &jump_uc, sizeof (jump_uc));
+
+		/*
+		 * We want to load the general registers from this context, and
+		 * switch to the BRAND stack.  We do _not_ want to restore the
+		 * uc_link value from this synthetic context, as that would
+		 * break the signal handling context chain.
+		 */
+		jump_uc.uc_flags = UC_CPU;
+		jump_uc.uc_brand_data[0] = (void *)(LX_UC_STACK_BRAND |
+		    LX_UC_IGNORE_LINK);
+
+		jump_uc.uc_mcontext.gregs[REG_FP] = 0;
+		jump_uc.uc_mcontext.gregs[REG_SP] = lxfp;
+		jump_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)user_handler;
+
+#if defined(_LP64)
+		/*
+		 * Pass signal handler arguments by registers on AMD64.
+		 */
+		jump_uc.uc_mcontext.gregs[REG_RDI] = hargs[0];
+		jump_uc.uc_mcontext.gregs[REG_RSI] = hargs[1];
+		jump_uc.uc_mcontext.gregs[REG_RDX] = hargs[2];
+#endif
+
+		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
+			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
+			    strerror(errno));
+		}
 	}
+
+
 	assert(0);
 
 after_signal_handler:

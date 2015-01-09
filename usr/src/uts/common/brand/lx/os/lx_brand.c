@@ -415,10 +415,15 @@ lx_sendsig(int sig)
 	}
 }
 
+/*
+ * This hook runs prior to the context restoration, allowing us to take action
+ * or modify the context before it is loaded.
+ */
 static void
 lx_restorecontext(ucontext_t *ucp)
 {
-	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	klwp_t *lwp = ttolwp(curthread);
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	uintptr_t flags = (uintptr_t)ucp->uc_brand_data[0];
 	caddr_t sp = ucp->uc_brand_data[1];
 
@@ -428,6 +433,14 @@ lx_restorecontext(ucontext_t *ucp)
 	 */
 	if (flags & LX_UC_RESTORE_NATIVE_SP) {
 		lx_lwp_set_native_stack_current(lwpd, (uintptr_t)sp);
+	}
+
+	/*
+	 * We do not wish to restore the value of uc_link in this context,
+	 * so replace it with the value currently in the LWP.
+	 */
+	if (flags & LX_UC_IGNORE_LINK) {
+		ucp->uc_link = (ucontext_t *)lwp->lwp_oldcontext;
 	}
 
 	/*
@@ -971,15 +984,14 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 		return (error != 0 ? EFAULT : 0);
 
-	case B_JUMP_TO_LINUX: {
+	case B_JUMP_TO_LINUX:
 		/*
 		 * B_JUMP_TO_LINUX subcommand:
-		 * arg1 = caddr32_t for new brand stack pointer
-		 * arg2 = caddr32_t for brand code entry point
-		 * arg3 = %gs value (a value of 0 will be ignored)
-		 * arg4 = uintptr_t[3] for register args (%rdi, %rsi, %rdx)
+		 * arg1 = ucontext_t pointer for jump state
 		 */
-		uintptr_t hargs[3];
+
+		if (arg1 == NULL)
+			return (EINVAL);
 
 		switch (lwpd->br_stack_mode) {
 		case LX_STACK_MODE_NATIVE: {
@@ -1017,32 +1029,10 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			return (0);
 		}
 
-#if defined(_LP64)
-		/*
-		 * Copy in register arguments for signal handlers.  We take
-		 * three arguments, which will load into %rdi, %rsi and %rdx
-		 * while transferring control.
-		 */
-		if (get_udatamodel() == DATAMODEL_NATIVE) {
-			void *uhargs;
-
-			if ((uhargs = (void *)arg4) == NULL) {
-				bzero(hargs, sizeof (hargs));
-			} else {
-				if (copyin(uhargs, &hargs, sizeof (hargs)) !=
-				    0) {
-					return (EFAULT);
-				}
-			}
-		}
-#endif
-
 		/*
 		 * Transfer control to Linux:
 		 */
-		lx_runexe(lwp, arg1, arg2, arg3, hargs);
-		return (0);
-	}
+		return (lx_runexe(lwp, (void *)arg1));
 
 	case B_EMULATION_DONE:
 		/*

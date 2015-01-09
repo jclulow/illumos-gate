@@ -935,14 +935,30 @@ lx_init(int argc, char *argv[], char *envp[])
 		 */
 		void *sp = ((void *)argv) - sizeof (void *);
 		void *entry = (void *)edp.ed_ldentry;
+		ucontext_t jump_uc;
+
+		if (getcontext(&jump_uc) != 0) {
+			lx_err_fatal("Unable to grab context for jump: %s",
+			    strerror(errno));
+		}
+
+		/*
+		 * We want to load the general registers from this
+		 * context, and switch to the BRAND stack.
+		 */
+		jump_uc.uc_flags = UC_CPU;
+		jump_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
+
+		jump_uc.uc_mcontext.gregs[REG_FP] = (uintptr_t)NULL;
+		jump_uc.uc_mcontext.gregs[REG_SP] = (uintptr_t)sp;
+		jump_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)entry;
 
 		lx_debug("starting Linux program sp %p ldentry %p", sp, entry);
 
 		/*
 		 * This system call should not return.
 		 */
-		if (syscall(SYS_brand, B_JUMP_TO_LINUX, sp, entry, 0,
-		    NULL) == -1) {
+		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
 			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
 			    strerror(errno));
 		}
@@ -993,50 +1009,8 @@ lx_exit_common(lx_exit_type_t exit_type, uintptr_t exit_value)
 	abort();
 }
 
-uintptr_t
-lx_find_brand_gs(void)
-{
-#if defined(__amd64)
-	return (0);
-#else
-	ucontext_t *ucp = NULL;
-
-	/*
-	 * Ask for the current emulation (or signal handling) ucontext_t...
-	 */
-	assert(syscall(SYS_brand, B_GET_CURRENT_CONTEXT, &ucp) == 0);
-
-	for (;;) {
-		uintptr_t flags;
-
-		if (ucp == NULL) {
-			/*
-			 * If we could not find an emulation context, we
-			 * assume the illumos %gs value.
-			 */
-			lx_debug("lx_find_brand_gs: assume illumos %%gs\n");
-			return (LWPGS_SEL);
-		}
-
-		flags = (uintptr_t)ucp->uc_brand_data[0];
-
-		if (flags & LX_UC_STACK_BRAND) {
-			uintptr_t gs = 0xffff & LX_REG(ucp, GS);
-
-			lx_debug("lx_find_brand_gs: ucp %p gs %p\n", ucp, gs);
-
-			return (gs);
-		}
-
-		lx_debug("lx_find_brand_gs: skip non-BRAND ucp %p\n", ucp);
-
-		ucp = ucp->uc_link;
-	}
-#endif
-}
-
-uintptr_t
-lx_find_brand_sp(void)
+const ucontext_t *
+lx_find_brand_uc(void)
 {
 	ucontext_t *ucp = NULL;
 
@@ -1048,27 +1022,36 @@ lx_find_brand_sp(void)
 	for (;;) {
 		uintptr_t flags;
 
-		lx_debug("lx_find_brand_sp: inspect ucp %p...\n", ucp);
+		lx_debug("lx_find_brand_uc: inspect ucp %p...\n", ucp);
 		assert(ucp != NULL);
 
 		flags = (uintptr_t)ucp->uc_brand_data[0];
 
 		if (flags & LX_UC_STACK_BRAND) {
-			uintptr_t sp = LX_REG(ucp, REG_SP);
+			lx_debug("lx_find_brand_uc: ucp %p\n", ucp);
 
-			lx_debug("lx_find_brand_sp: ucp %p sp %p\n", ucp, sp);
-
-			return (sp);
+			return (ucp);
 		}
 
-		lx_debug("lx_find_brand_sp: skip non-BRAND ucp %p\n", ucp);
+		lx_debug("lx_find_brand_uc: skip non-BRAND ucp %p\n", ucp);
 
 		/*
 		 * Walk up the context chain to find the most recently stored
-		 * brand stack pointer.
+		 * brand register state.
 		 */
 		ucp = ucp->uc_link;
 	}
+}
+
+uintptr_t
+lx_find_brand_sp(void)
+{
+	const ucontext_t *ucp = lx_find_brand_uc();
+	uintptr_t sp = LX_REG(ucp, REG_SP);
+
+	lx_debug("lx_find_brand_sp: ucp %p sp %p\n", ucp, sp);
+
+	return (sp);
 }
 
 ucontext_t *
