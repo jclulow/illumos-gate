@@ -66,7 +66,7 @@ extern "C" {
 /*
  * This must be large enough for both the 32-bit table and 64-bit table.
  */
-#define	LX_NSYSCALLS		352
+#define	LX_NSYSCALLS		358
 
 /*
  * brand(2) subcommands
@@ -473,7 +473,6 @@ struct lx_lwp_data {
 /* brand specific data */
 typedef struct lx_zone_data {
 	char lxzd_kernel_version[LX_VERS_MAX];
-	int lxzd_max_syscall;
 } lx_zone_data_t;
 
 #define	BR_CPU_BOUND	0x0001
@@ -490,6 +489,17 @@ typedef struct lx_zone_data {
 /* Macro for converting to system call arguments. */
 #define	LX_ARGS(scall) ((struct lx_##scall##_args *)\
 	(ttolxlwp(curthread)->br_scall_args))
+
+/*
+ * Determine the upper bound on the system call number:
+ */
+#if defined(_LP64)
+#define	LX_MAX_SYSCALL(lwp)						\
+	((lwp_getdatamodel(lwp) == DATAMODEL_NATIVE) ?			\
+	    lx_nsysent64 : lx_nsysent32)
+#else
+#define	LX_MAX_SYSCALL(lwp)	lx_nsysent32
+#endif
 
 extern char *lx_get_zone_kern_version(zone_t *);
 
@@ -511,6 +521,23 @@ extern void lx_emulate_user32(klwp_t *, int, uintptr_t *);
 
 extern int lx_debug;
 #define	lx_print	if (lx_debug) printf
+
+/*
+ * In-Kernel Linux System Call Description.
+ */
+typedef struct lx_sysent {
+	char	*sy_name;
+	long	(*sy_callc)();
+	char	sy_flags;
+	char	sy_narg;
+} lx_sysent_t;
+
+#if defined(_LP64)
+extern lx_sysent_t lx_sysent64[LX_NSYSCALLS + 1];
+extern int lx_nsysent64;
+#endif
+extern lx_sysent_t lx_sysent32[LX_NSYSCALLS + 1];
+extern int lx_nsysent32;
 
 #endif	/* _KERNEL */
 #endif /* _ASM */
