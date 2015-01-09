@@ -38,9 +38,6 @@
 lx_proc_data
 	l_handler
 
-lx_zone_data
-	lxzd_max_syscall
-
 lx_lwp_data
 	br_lx_fsbase
 	br_ntv_fsbase

@@ -827,7 +827,6 @@ lx_init_brand_data(zone_t *zone)
 	 * This can be changed by a call to setattr() during zone boot.
 	 */
 	(void) strlcpy(data->lxzd_kernel_version, "2.4.21", LX_VERS_MAX);
-	data->lxzd_max_syscall = LX_NSYSCALLS;
 	zone->zone_brand_data = data;
 }
 
@@ -1774,10 +1773,34 @@ lx_native_exec(uint8_t osabi, const char **interp)
 	return (B_TRUE);
 }
 
+static void
+lx_syscall_init(void)
+{
+	int i;
+
+	/*
+	 * Count up the 32-bit Linux system calls.
+	 */
+	for (i = 0; i < LX_NSYSCALLS && lx_sysent32[i].sy_name != NULL; i++)
+		continue;
+	lx_nsysent32 = i;
+
+#if defined(_LP64)
+	/*
+	 * Count up the 32-bit Linux system calls.
+	 */
+	for (i = 0; i < LX_NSYSCALLS && lx_sysent64[i].sy_name != NULL; i++)
+		continue;
+	lx_nsysent64 = i;
+#endif
+}
+
 int
 _init(void)
 {
 	int err = 0;
+
+	lx_syscall_init();
 
 	/* pid/tid conversion hash tables */
 	lx_pid_init();

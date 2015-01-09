@@ -81,26 +81,19 @@ static char *nosys_reasons[] = {
 	"Unsupported, obsolete system call"
 };
 
-/*
- * In-Kernel Linux System Call Handler.
- */
-typedef struct lx_sysent {
-	char	*sy_name;
-	long	(*sy_callc)();
-	char	sy_flags;
-	char	sy_narg;
-} lx_sysent_t;
 
 #if defined(_LP64)
 /*
- * System call handler table for Linux AMD64:
+ * System call handler table and entry count for Linux x86_64 (amd64):
  */
-static lx_sysent_t lx_sysents64[LX_NSYSCALLS + 1];
+lx_sysent_t lx_sysent64[LX_NSYSCALLS + 1];
+int lx_nsysent64;
 #endif
 /*
- * System call handler table for Linux i386:
+ * System call handler table and entry count for Linux x86 (i386):
  */
-static lx_sysent_t lx_sysents32[LX_NSYSCALLS + 1];
+lx_sysent_t lx_sysent32[LX_NSYSCALLS + 1];
+int lx_nsysent32;
 
 /*
  * Map Illumos errno to the Linux equivalent.
@@ -300,19 +293,19 @@ lx_syscall_hook(void)
 	 * we expect.
 	 */
 	syscall_num = (int)rp->r_r0;
-	if (syscall_num < 0 || syscall_num > LX_NSYSCALLS) {
+	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
 		set_errno(ENOTSUP);
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
 	}
 
 #if defined(_LP64)
-	if (get_udatamodel() == DATAMODEL_NATIVE) {
-		s = &lx_sysents64[syscall_num];
+	if (lwp_getdatamodel(lwp) == DATAMODEL_NATIVE) {
+		s = &lx_sysent64[syscall_num];
 	} else
 #endif
 	{
-		s = &lx_sysents32[syscall_num];
+		s = &lx_sysent32[syscall_num];
 	}
 
 	/*
@@ -369,7 +362,11 @@ lx_syscall_hook(void)
 	}
 }
 
-static lx_sysent_t lx_sysents32[] = {
+/*
+ * Linux defines system call numbers for 32-bit x86 in the file:
+ *   arch/x86/syscalls/syscall_32.tbl
+ */
+lx_sysent_t lx_sysent32[] = {
 	{"nosys",	NULL,			NOSYS_NONE,	0}, /*  0 */
 	{"exit",	NULL,			0,		1}, /*  1 */
 	{"fork",	NULL,			0,		0}, /*  2 */
@@ -725,10 +722,20 @@ static lx_sysent_t lx_sysents32[] = {
 	{"finit_module", NULL,			NOSYS_NULL,	0}, /* 350 */
 	{"sched_setattr", NULL,			NOSYS_NULL,	0}, /* 351 */
 	{"sched_getattr", NULL,			NOSYS_NULL,	0}, /* 352 */
+	{"renameat2",	NULL,			NOSYS_NULL,	0}, /* 353 */
+	{"seccomp",	NULL,			NOSYS_NULL,	0}, /* 354 */
+	{"getrandom",	NULL,			NOSYS_NULL,	0}, /* 355 */
+	{"memfd_create", NULL,			NOSYS_NULL,	0}, /* 356 */
+	{"bpf",		NULL,			NOSYS_NULL,	0}, /* 357 */
+	{"execveat",	NULL,			NOSYS_NULL,	0}, /* 358 */
 };
 
 #if defined(_LP64)
-static lx_sysent_t lx_sysents64[] = {
+/*
+ * Linux defines system call numbers for 64-bit x86 in the file:
+ *   arch/x86/syscalls/syscall_64.tbl
+ */
+lx_sysent_t lx_sysent64[] = {
 	{"read",	lx_read,		0,		3}, /* 0 */
 	{"write",	NULL,			0,		3}, /* 1 */
 	{"open",	NULL,			0,		3}, /* 2 */
@@ -1046,6 +1053,12 @@ static lx_sysent_t lx_sysents64[] = {
 	{"sched_setattr", NULL,			NOSYS_NULL,	0}, /* 314 */
 	{"sched_getattr", NULL,			NOSYS_NULL,	0}, /* 315 */
 	{"renameat2", NULL,			NOSYS_NULL,	0}, /* 316 */
+	{"seccomp",	NULL,			NOSYS_NULL,	0}, /* 317 */
+	{"getrandom",	NULL,			NOSYS_NULL,	0}, /* 318 */
+	{"memfd_create", NULL,			NOSYS_NULL,	0}, /* 319 */
+	{"kexec_file_load", NULL,		NOSYS_NULL,	0}, /* 320 */
+	{"bpf",		NULL,			NOSYS_NULL,	0}, /* 321 */
+	{"execveat",	NULL,			NOSYS_NULL,	0}, /* 322 */
 
 	/* XXX TBD gap then x32 syscalls from 512 - 544 */
 };
