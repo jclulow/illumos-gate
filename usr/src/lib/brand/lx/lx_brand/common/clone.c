@@ -49,7 +49,9 @@
 #include <sys/lx_debug.h>
 #include <sys/lx_thread.h>
 #include <sys/fork.h>
+#include <sys/mman.h>
 #include <lx_syscall.h>
+
 
 #define	SHARED_AS	\
 	(LX_CLONE_VM | LX_CLONE_FS | LX_CLONE_FILES | LX_CLONE_SIGHAND	\
@@ -94,6 +96,9 @@ struct clone_state {
 	lx_affmask_t	c_affmask;	/* CPU affinity mask */
 	volatile int	*c_clone_res;	/* pid/error returned to cloner */
 	int		c_ptrace_event;	/* ptrace(2) event for child stop */
+	void		*c_ntv_stk;	/* native stack for this thread */
+	size_t		c_ntv_stk_sz;	/* native stack size */
+	lx_tsd_t	*c_lx_tsd;	/* thread tsd area */
 };
 
 /*
@@ -193,7 +198,7 @@ clone_start(void *arg)
 {
 	int rval;
 	struct clone_state *cs = (struct clone_state *)arg;
-	lx_tsd_t lx_tsd;
+	lx_tsd_t *lxtsd;
 
 	/*
 	 * Let the kernel finish setting up all the needed state for this
@@ -207,8 +212,8 @@ clone_start(void *arg)
 	 * table.
 	 */
 	lx_debug("\tre-vectoring to lx kernel module to complete lx_clone()");
-	lx_debug("\tLX_SYS_clone(0x%x, 0x%p, 0x%p, 0x%p, 0x%p)",
-	    cs->c_flags, cs->c_stk, cs->c_ptidp, cs->c_ldtinfo, cs->c_ctidp);
+	lx_debug("\tB_HELPER_CLONE(0x%x, 0x%p, 0x%p, 0x%p)",
+	    cs->c_flags, cs->c_ptidp, cs->c_ldtinfo, cs->c_ctidp);
 
 	rval = syscall(SYS_brand, B_HELPER_CLONE, cs->c_flags, cs->c_ptidp,
 	    cs->c_ldtinfo, cs->c_ctidp);
@@ -236,7 +241,9 @@ clone_start(void *arg)
 	/*
 	 * Initialize the thread specific data for this thread.
 	 */
-	lx_init_tsd(&lx_tsd);
+	lxtsd = cs->c_lx_tsd;
+	lx_init_tsd(lxtsd);
+	lxtsd->lxtsd_clone_state = cs;
 
 	/*
 	 * Use the address of the stack-allocated lx_tsd as the
@@ -247,23 +254,23 @@ clone_start(void *arg)
 	 * danger of other threads using this storage area, nor of it
 	 * being accessed once this stack frame has been freed.
 	 */
-	if (thr_setspecific(lx_tsd_key, &lx_tsd) != 0) {
+	if (thr_setspecific(lx_tsd_key, lxtsd) != 0) {
 		*(cs->c_clone_res) = -errno;
 		lx_err_fatal("Unable to set thread-specific ptr for clone: %s",
 		    strerror(rval));
 	}
 
 	/*
-	 * Allocate a brand emulation stack for this thread.
+	 * Install the emulation stack for this thread.
 	 */
-	lx_alloc_stack();
+	lx_install_stack(cs->c_ntv_stk, cs->c_ntv_stk_sz);
 
 	/*
 	 * Save the current context of this thread.
 	 *
 	 * We'll restore this context when this thread attempts to exit.
 	 */
-	if (getcontext(&lx_tsd.lxtsd_exit_context) != 0) {
+	if (getcontext(&lxtsd->lxtsd_exit_context) != 0) {
 		*(cs->c_clone_res) = -errno;
 
 		lx_err_fatal("Unable to initialize thread-specific exit "
@@ -271,61 +278,66 @@ clone_start(void *arg)
 	}
 
 	/*
-	 * Do the final stack twiddling, reset %gs, and return to the
-	 * clone(2) path.
+	 * Ensure variables are correct when we return from getcontext() for
+	 * the second time.
 	 */
-	if (lx_tsd.lxtsd_exit == LX_ET_NONE) {
-		if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
-			*(cs->c_clone_res) = -errno;
-
-			lx_err_fatal("Unable to release held signals for child "
-			    "thread: %s", strerror(errno));
-		}
-
-		/*
-		 * Let the parent know that the clone has (effectively) been
-		 * completed.
-		 */
-		*(cs->c_clone_res) = rval;
-
-		/*
-		 * Fire the ptrace(2) event stop in the new thread:
-		 */
-		lx_ptrace_stop_if_option(cs->c_ptrace_event, B_TRUE, 0);
-
-		/*
-		 * We want to load the general registers from this context, and
-		 * switch to the BRAND stack.
-		 */
-		cs->c_uc.uc_flags = UC_CPU;
-		cs->c_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
-
-		/*
-		 * New threads will not link into the existing context chain.
-		 */
-		cs->c_uc.uc_link = NULL;
-
-		/*
-		 * Set stack pointer and entry point for new thread:
-		 */
-		cs->c_uc.uc_mcontext.gregs[REG_SP] = (uintptr_t)cs->c_stk;
-		cs->c_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)cs->c_retaddr;
-
-		/*
-		 * Return 0 to the child:
-		 */
-		cs->c_uc.uc_mcontext.gregs[REG_R0] = (uintptr_t)0;
-
-		/*
-		 * Jump to the Linux process.  The system call must not return.
-		 */
-		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &cs->c_uc) == -1) {
-			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
-			    strerror(errno));
-		}
-		assert(0);
+	lxtsd = lx_get_tsd();
+	cs = lxtsd->lxtsd_clone_state;
+	if (lxtsd->lxtsd_exit != LX_ET_NONE) {
+		goto after_exit;
 	}
 
+	if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
+		*(cs->c_clone_res) = -errno;
+
+		lx_err_fatal("Unable to release held signals for child "
+		    "thread: %s", strerror(errno));
+	}
+
+	/*
+	 * Let the parent know that the clone has (effectively) been
+	 * completed.
+	 */
+	*(cs->c_clone_res) = rval;
+
+	/*
+	 * Fire the ptrace(2) event stop in the new thread:
+	 */
+	lx_ptrace_stop_if_option(cs->c_ptrace_event, B_TRUE, 0);
+
+	/*
+	 * We want to load the general registers from this context, and
+	 * switch to the BRAND stack.
+	 */
+	cs->c_uc.uc_flags = UC_CPU;
+	cs->c_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
+
+	/*
+	 * New threads will not link into the existing context chain.
+	 */
+	cs->c_uc.uc_link = NULL;
+
+	/*
+	 * Set stack pointer and entry point for new thread:
+	 */
+	cs->c_uc.uc_mcontext.gregs[REG_SP] = (uintptr_t)cs->c_stk;
+	cs->c_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)cs->c_retaddr;
+
+	/*
+	 * Return 0 to the child:
+	 */
+	cs->c_uc.uc_mcontext.gregs[REG_R0] = (uintptr_t)0;
+
+	/*
+	 * Jump to the Linux process.  The system call must not return.
+	 */
+	if (syscall(SYS_brand, B_JUMP_TO_LINUX, &cs->c_uc) == -1) {
+		lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
+		    strerror(errno));
+	}
+	assert(0);
+
+after_exit:
 	/*
 	 * We are here because the Linux application called the exit() or
 	 * exit_group() system call.  In turn the brand library did a
@@ -340,7 +352,11 @@ clone_start(void *arg)
 		 * back on the BRAND stack for this process.
 		 */
 		lx_free_stack();
+
+		free(lxtsd);
+		free(cs);
 	}
+
 	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
 	/*NOTREACHED*/
 	return (NULL);
@@ -395,6 +411,10 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	sigset_t sigmask;
 	int fork_flags = 0;
 	int ptrace_event;
+	int error = 0;
+
+	extern void _sigon(void);
+	extern void _sigoff(void);
 
 	if (flags & LX_CLONE_SETTLS) {
 		lx_debug("lx_clone(flags=0x%x stk=0x%p ptidp=0x%p ldt=0x%p "
@@ -467,8 +487,10 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			fork_flags |= FORK_NOSIGCHLD;
 
 		/*
-		 * Perform the actual fork(2) operation.
+		 * Suspend signal delivery and perform the actual fork(2)
+		 * operation.
 		 */
+		_sigoff();
 		if (flags & LX_CLONE_VFORK) {
 			is_vforked++;
 			rval = vforkx(fork_flags);
@@ -481,35 +503,30 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		}
 
 		/*
-		 * Since we've already forked, we can't do much if uucopy
-		 * fails, so we just ignore failure. Failure is unlikely since
-		 * we've tested the memory before we did the fork.
-		 */
-		if (rval > 0 && (flags & LX_CLONE_PARENT_SETTID)) {
-			(void) uucopy(&rval, ptidp, sizeof (int));
-		}
-
-		if (rval == 0 && (flags & LX_CLONE_CHILD_SETTID)) {
-			/*
-			 * lx_getpid should not fail, and if it does, there's
-			 * not much we can do about it since we've already
-			 * forked, so on failure, we just don't copy the
-			 * memory.
-			 */
-			pid = syscall(SYS_brand, B_GETPID);
-			if (pid >= 0)
-				(void) uucopy(&pid, ctidp, sizeof (int));
-		}
-
-		/*
 		 * The parent process returns through the regular system call
 		 * path here.
 		 */
 		if (rval != 0) {
+			/*
+			 * Since we've already forked, we can't do much if
+			 * uucopy fails, so we just ignore failure. Failure is
+			 * unlikely since we've tested the memory before we did
+			 * the fork.
+			 */
+			if (rval > 0 && (flags & LX_CLONE_PARENT_SETTID)) {
+				(void) uucopy(&rval, ptidp, sizeof (int));
+			}
+
 			if (rval > 0) {
 				lx_ptrace_stop_if_option(ptrace_event, B_FALSE,
 				    (ulong_t)rval);
 			}
+
+			/*
+			 * Re-enable signal delivery in the parent process.
+			 */
+			_sigon();
+
 			return ((rval < 0) ? -errno : rval);
 		}
 
@@ -524,6 +541,18 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		 */
 		lx_free_other_stacks();
 
+		if (rval == 0 && (flags & LX_CLONE_CHILD_SETTID)) {
+			/*
+			 * lx_getpid should not fail, and if it does, there's
+			 * not much we can do about it since we've already
+			 * forked, so on failure, we just don't copy the
+			 * memory.
+			 */
+			pid = syscall(SYS_brand, B_GETPID);
+			if (pid >= 0)
+				(void) uucopy(&pid, ctidp, sizeof (int));
+		}
+
 		/*
 		 * Set up additional data in the lx_proc_data structure as
 		 * necessary.
@@ -532,6 +561,11 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		    ldtinfo, ctidp)) < 0) {
 			return (rval);
 		}
+
+		/*
+		 * Re-enable signal delivery in the child process.
+		 */
+		_sigon();
 
 		/*
 		 * Stop for ptrace if required.
@@ -580,13 +614,13 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	}
 
 	/*
-	 * To avoid malloc() here, we steal a part of the new thread's
-	 * stack to store all the info that thread might need for
-	 * initialization.  We also make it 64-bit aligned for good
-	 * measure.
+	 * Initialise the state structure we pass as an argument to the new
+	 * thread:
 	 */
-	cs = (struct clone_state *)
-	    ((p2 - sizeof (struct clone_state)) & -((uintptr_t)8));
+	if ((cs = malloc(sizeof (*cs))) == NULL) {
+		lx_debug("could not allocate clone_state: %s", strerror(errno));
+		return (-ENOMEM);
+	}
 	cs->c_flags = flags;
 	cs->c_sig = sig;
 	cs->c_stk = cldstk;
@@ -595,7 +629,20 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	cs->c_ctidp = ctidp;
 	cs->c_clone_res = &clone_res;
 	cs->c_ptrace_event = ptrace_event;
+	/*
+	 * We want the new thread to return directly to the return site for
+	 * the system call.
+	 */
+	cs->c_retaddr = (void *)LX_REG(ucp, REG_PC);
+	/*
+	 * Copy the saved context for the clone(2) system call so that the
+	 * new thread may use it to initialise registers.
+	 */
 	bcopy(ucp, &cs->c_uc, sizeof (cs->c_uc));
+	if ((cs->c_lx_tsd = malloc(sizeof (*cs->c_lx_tsd))) == NULL) {
+		free(cs);
+		return (-ENOMEM);
+	}
 
 	if (lx_sched_getaffinity(0, sizeof (cs->c_affmask),
 	    (uintptr_t)&cs->c_affmask) == -1) {
@@ -603,11 +650,6 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		    "thread: %s", strerror(errno));
 	}
 
-	/*
-	 * We want the new thread to return directly to the return site for
-	 * the system call.
-	 */
-	cs->c_retaddr = (void *)LX_REG(ucp, REG_PC);
 	clone_res = 0;
 
 	(void) sigfillset(&sigmask);
@@ -618,10 +660,32 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	 */
 	if (sigprocmask(SIG_BLOCK, &sigmask, &cs->c_sigmask) < 0) {
 		lx_debug("lx_clone sigprocmask() failed: %s", strerror(errno));
+		free(cs->c_lx_tsd);
+		free(cs);
 		return (-errno);
 	}
 
+	/*
+	 * Allocate the native stack for this new thread now, so that we
+	 * can return failure gracefully as ENOMEM.
+	 */
+	if (lx_alloc_stack(&cs->c_ntv_stk, &cs->c_ntv_stk_sz) != 0) {
+		free(cs->c_lx_tsd);
+		free(cs);
+		return (-ENOMEM);
+	}
+
 	rval = thr_create(NULL, NULL, clone_start, cs, THR_DETACHED, &tid);
+
+	/*
+	 * If the thread did not start, free the resources we allocated:
+	 */
+	if (rval == -1) {
+		error = errno;
+		(void) munmap(cs->c_ntv_stk, cs->c_ntv_stk_sz);
+		free(cs->c_lx_tsd);
+		free(cs);
+	}
 
 	/*
 	 * Release any pending signals
@@ -637,7 +701,12 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 
 		rval = clone_res;
 		lx_ptrace_stop_if_option(ptrace_event, B_FALSE, (ulong_t)rval);
-	}
 
-	return (rval);
+		return (rval);
+	} else {
+		/*
+		 * Return the error from thr_create(3C).
+		 */
+		return (-error);
+	}
 }

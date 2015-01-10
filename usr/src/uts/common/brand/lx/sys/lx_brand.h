@@ -94,6 +94,7 @@ extern "C" {
 #define	B_HELPER_SETGROUPS	145
 #define	B_HELPER_SIGQUEUE	146
 #define	B_HELPER_TGSIGQUEUE	147
+#define	B_SET_NATIVE_STACK	148
 
 #ifndef _ASM
 /*
@@ -181,6 +182,13 @@ typedef enum lx_ptrace_options {
 	 22,  22,  22, 108, 109, 110, 111, 112, 113, 114, /* 149 */	\
 	115, 116 }
 /* END CSTYLED */
+
+/*
+ * Usermode emulation routines are run on an alternate stack allocated by
+ * the brand library.  Every LWP in a process will incur this overhead beyond
+ * the regular thread stack:
+ */
+#define	LX_NATIVE_STACK_PAGE_COUNT	64
 
 #ifndef	_ASM
 

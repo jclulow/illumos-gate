@@ -960,9 +960,9 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		*rval = lx_getpid();
 		return (0);
 
-	case B_SET_BRAND_STACK:
+	case B_SET_NATIVE_STACK:
 		/*
-		 * B_SET_BRAND_STACK subcommand
+		 * B_SET_NATIVE_STACK subcommand
 		 * arg1 = the base of the stack to use for emulation
 		 */
 		if (lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {

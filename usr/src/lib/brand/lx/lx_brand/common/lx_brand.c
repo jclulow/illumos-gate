@@ -205,6 +205,11 @@ int lx_strict = 0;		/* "strict" mode enabled if non-zero */
 int lx_verbose = 0;		/* verbose mode enabled if non-zero */
 int lx_debug_enabled = 0;	/* debugging output enabled if non-zero */
 
+/*
+ * Usermode emulation alternate stack size, expressed as a page count:
+ */
+int lx_native_stack_page_count = LX_NATIVE_STACK_PAGE_COUNT;
+
 pid_t zoneinit_pid;		/* zone init PID */
 long max_pid;			/* native maximum PID */
 
@@ -473,42 +478,71 @@ lx_free_other_stacks(void)
 
 /*
  * Allocate an alternate stack for the execution of native emulation routines.
+ * Elements of this routine are based on find_stack() in libc.
  */
-void
-lx_alloc_stack(void)
+int
+lx_alloc_stack(void **nstack, size_t *nstack_size)
 {
-	thread_t me = thr_self();
 	static int pagesize = 0;
 	static int stackprot = 0;
-	static int stacksize = 0;
+	int stacksize = 0;
 	void *stack;
-	void *stack_top;
 	int pos;
-	lx_tsd_t *lxtsd = lx_get_tsd();
-	int i;
 
+	/*
+	 * Fetch configuration once:
+	 */
 	if (pagesize == 0) {
 		pagesize = _sysconf(_SC_PAGESIZE);
+		assert(pagesize > 0);
 	}
-
 	if (stackprot == 0) {
-		/*
-		 * XXX Should we use _sysconf(_SC_STACK_PROT) ?
-		 */
-		stackprot = PROT_READ | PROT_WRITE;
+		long lprot = _sysconf(_SC_STACK_PROT);
+
+		stackprot = lprot > 0 ? lprot : (PROT_READ | PROT_WRITE);
 	}
 
-	if (stacksize == 0) {
-		/*
-		 * XXX how many pages should this really be?
-		 */
-		stacksize = 64 * pagesize;
-	}
+	stacksize = lx_native_stack_page_count * pagesize;
 
 	if ((stack = mmap(NULL, stacksize, stackprot, MAP_PRIVATE |
 	    MAP_NORESERVE | MAP_ANON, -1, (off_t)0)) == MAP_FAILED) {
-		lx_err_fatal("could not allocate brand stack: %s",
+		int en = errno;
+		lx_debug("lx_alloc_stack: failed to allocate stack: %s",
 		    strerror(errno));
+		errno = en;
+		return (-1);
+	}
+
+	/*
+	 * Write a recognisable pattern into the allocated stack pages.
+	 * XXX DEBUG-only?
+	 */
+	for (pos = 0; pos < ((stacksize - 1) / 4); pos++) {
+		((uint32_t *)stack)[pos] = 0x0facade0;
+	}
+
+	*nstack = stack;
+	*nstack_size = stacksize;
+
+	return (0);
+}
+
+void
+lx_install_stack(void *stack, size_t stacksize)
+{
+	thread_t me = thr_self();
+	lx_tsd_t *lxtsd = lx_get_tsd();
+	int i;
+	void *stack_top;
+
+	if (stack == NULL) {
+		/*
+		 * If we were not passed a stack, then allocate one:
+		 */
+		if (lx_alloc_stack(&stack, &stacksize) == -1) {
+			lx_err_fatal("failed to allocate stack for thread "
+			    "%d: %s", me, strerror(errno));
+		}
 	}
 
 	/*
@@ -516,6 +550,7 @@ lx_alloc_stack(void)
 	 */
 	_sigoff();
 	mutex_lock(&stack_list_lock);
+
 	for (i = 0; i < stack_list_elems; i++) {
 		assert(stack_list[i].sle_tid != me);
 		if (stack_list[i].sle_tid == 0)
@@ -529,31 +564,18 @@ lx_alloc_stack(void)
 	stack_list[i].sle_tid = me;
 	stack_list[i].sle_stack = stack;
 	stack_list[i].sle_stack_size = stacksize;
+
 	mutex_unlock(&stack_list_lock);
 	_sigon();
-
-	/*
-	 * Should protect the last (first, stack grows down!) 128 bytes
-	 * of this region or whatever, as a protective barrier.
-	 */
-
-	stack_top = stack + stacksize;
-
-	lx_debug("stack %p stack_top %p\n", stack, stack_top);
-
-	/*
-	 * XXX Write a recognisable pattern, or whatever...
-	 */
-	for (pos = 0; pos < ((stacksize - 1) / 4); pos++) {
-		((uint32_t *)stack)[pos] = 0x0facade0;
-	}
 
 	/*
 	 * Inform the kernel of the location of the brand emulation
 	 * stack for this LWP:
 	 */
-	if (syscall(SYS_brand, B_SET_BRAND_STACK, stack_top - 0x100) != 0) {
-		lx_err_fatal("unable to set brand stack: %s", strerror(errno));
+	stack_top = stack + stacksize;
+	lx_debug("stack %p stack_top %p\n", stack, stack_top);
+	if (syscall(SYS_brand, B_SET_NATIVE_STACK, stack_top) != 0) {
+		lx_err_fatal("unable to set native stack: %s", strerror(errno));
 	}
 }
 
@@ -917,7 +939,7 @@ lx_init(int argc, char *argv[], char *envp[])
 	/*
 	 * Allocate the brand emulation stack for the main process thread.
 	 */
-	lx_alloc_stack();
+	lx_install_stack(NULL, 0);
 
 	/*
 	 * Save the current context of this thread.
