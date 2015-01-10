@@ -162,6 +162,7 @@ typedef enum lx_ptrace_options {
  * It is presently used in both the usermode and kernel emulation code,
  * so it is defined here.
  */
+/* BEGIN CSTYLED */
 #define	LX_STOL_ERRNO_INIT	{					\
 	  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,		\
 	 10,  11,  12,  13,  14,  15,  16,  17,  18,  19,		\
@@ -179,6 +180,7 @@ typedef enum lx_ptrace_options {
 	103, 104, 105, 106, 107,  22,  22,  22,  22,  22,		\
 	 22,  22,  22, 108, 109, 110, 111, 112, 113, 114, /* 149 */	\
 	115, 116 }
+/* END CSTYLED */
 
 #ifndef	_ASM
 

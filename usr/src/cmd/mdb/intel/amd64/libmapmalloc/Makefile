@@ -10,7 +10,7 @@
 #
 
 #
-# Copyright (c) 2014, Joyent, Inc. All rights reserved.
+# Copyright 2015, Joyent, Inc.
 #
 
 MODULE = libmapmalloc.so

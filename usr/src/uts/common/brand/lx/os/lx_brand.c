@@ -997,7 +997,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * arg1 = address for pointer to current ucontext_t
 		 */
 
-#if defined (_SYSCALL32_IMPL)
+#if defined(_SYSCALL32_IMPL)
 		if (get_udatamodel() != DATAMODEL_NATIVE) {
 			caddr32_t addr = (caddr32_t)lwp->lwp_oldcontext;
 

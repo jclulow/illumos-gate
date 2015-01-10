@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #include <sys/errno.h>
@@ -48,7 +48,7 @@ lx_read(int fd, void *buf, size_t nbyte)
 }
 
 long
-lx_write(int fd, void *cbuf, size_t nbyte)
+lx_write(int fd, void *buf, size_t nbyte)
 {
 	/*
 	 * If write(2) returns EINTR, we want to signal that restarting the

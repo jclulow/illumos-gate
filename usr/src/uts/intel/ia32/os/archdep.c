@@ -25,7 +25,7 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -640,7 +640,7 @@ static greg_t
 fix_segreg(greg_t sr, int iscs, model_t datamodel)
 {
 	kthread_t *t = curthread;
-	
+
 	switch (sr &= 0xffff) {
 
 	case 0:
@@ -676,7 +676,7 @@ fix_segreg(greg_t sr, int iscs, model_t datamodel)
 		break;
 	}
 
- 	/*
+	/*
 	 * Allow this process's brand to do any necessary segment register
 	 * manipulation.
 	 */
