@@ -37,54 +37,71 @@
  * initialization or else bad things will happen (i.e. ending up with a bad
  * schedctl page).  On Linux, there is no such thing as forkall(), so we use
  * fork1() here.
- */
-long
-lx_fork(void)
-{
-	int ret = fork1();
-
-	if (ret == 0) {
-		/*
-		 * We must free the stacks for every thread except
-		 * the one duplicated from the parent by fork1().
-		 */
-		lx_free_other_stacks();
-
-		if (lx_is_rpm)
-			(void) sleep(lx_rpm_delay);
-		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEFORK, B_TRUE, 0);
-	} else if (ret != -1) {
-		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEFORK, B_FALSE,
-		    (ulong_t)ret);
-	}
-
-	return (ret == -1 ? -errno : ret);
-}
-
-/*
+ *
  * For vfork(), we have a serious problem because the child is not allowed to
  * return from the current frame because it will corrupt the parent's stack.
  * Since the semantics of vfork() are rather ill-defined (other than "it's
  * faster than fork"), we should theoretically be safe by falling back to
  * fork1().
  */
-long
-lx_vfork(void)
+static long
+lx_fork_common(boolean_t is_vfork)
 {
-	int ret = fork1();
+	int ret;
+	int ptopt = is_vfork ? LX_PTRACE_O_TRACEVFORK : LX_PTRACE_O_TRACEFORK;
+
+	extern void _sigoff(void);
+	extern void _sigon(void);
+
+	/*
+	 * Suspend signal delivery and perform the fork operation.
+	 */
+	_sigoff();
+	ret = fork1();
 
 	if (ret == 0) {
 		/*
-		 * We must free the stacks for every thread except
-		 * the one duplicated from the parent by fork1().
+		 * In the child, we must free the stacks for the threads we
+		 * did not duplicate; i.e. every other thread.
 		 */
 		lx_free_other_stacks();
 
-		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_TRUE, 0);
-	} else if (ret != -1) {
-		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_FALSE,
-		    (ulong_t)ret);
+		if (!is_vfork && lx_is_rpm) {
+			(void) sleep(lx_rpm_delay);
+		}
+
+		lx_ptrace_stop_if_option(ptopt, B_TRUE, 0);
+
+		/*
+		 * Re-enable signal delivery in the child, and return to the
+		 * new process.
+		 */
+		_sigon();
+		return (0);
 	}
 
+	if (ret != -1) {
+		lx_ptrace_stop_if_option(ptopt, B_FALSE, (ulong_t)ret);
+	}
+
+	/*
+	 * Re-enable signal delivery in the parent.
+	 */
+	_sigon();
+
 	return (ret == -1 ? -errno : ret);
+}
+
+long
+lx_fork(void)
+{
+	return (lx_fork_common(B_FALSE));
+}
+
+/*
+ */
+long
+lx_vfork(void)
+{
+	return (lx_fork_common(B_TRUE));
 }

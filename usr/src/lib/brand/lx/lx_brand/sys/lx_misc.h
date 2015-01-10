@@ -185,7 +185,8 @@ extern int lx_check_alloca(size_t);
 extern int ltos_at_flag(int lflag, int allow, boolean_t enforce);
 
 extern void lx_init_tsd(lx_tsd_t *);
-extern void lx_alloc_stack(void);
+extern int lx_alloc_stack(void **, size_t *);
+extern void lx_install_stack(void *, size_t);
 extern void lx_free_stack(void);
 extern void lx_free_other_stacks(void);
 

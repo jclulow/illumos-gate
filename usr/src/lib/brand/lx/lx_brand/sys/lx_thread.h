@@ -59,6 +59,8 @@ typedef struct lx_tsd {
 	 * Alternate stack for Linux sigaltstack emulation:
 	 */
 	lx_stack_t	lxtsd_sigaltstack;
+
+	void		*lxtsd_clone_state;
 } lx_tsd_t;
 
 extern thread_key_t	lx_tsd_key;

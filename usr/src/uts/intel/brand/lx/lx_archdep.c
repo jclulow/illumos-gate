@@ -51,7 +51,7 @@ lx_runexe(klwp_t *lwp, void *ucp)
 	    lwpd->br_stack_mode == LX_STACK_MODE_INIT);
 
 #if defined(__amd64)
-	if (get_udatamodel() == DATAMODEL_NATIVE) {
+	if (lwp_getdatamodel(lwp) == DATAMODEL_NATIVE) {
 		struct pcb *pcb = &lwp->lwp_pcb;
 
 		/*
@@ -84,13 +84,16 @@ void
 lx_switch_to_native(klwp_t *lwp)
 {
 #if defined(__amd64)
-	/*
-	 * For 32-bit processes, we ensure that the correct %gs value is
-	 * loaded:
-	 */
-	if (get_udatamodel() == DATAMODEL_ILP32) {
+	model_t datamodel = lwp_getdatamodel(lwp);
+
+	switch (datamodel) {
+	case DATAMODEL_ILP32: {
 		struct pcb *pcb = &lwp->lwp_pcb;
 
+		/*
+		 * For 32-bit processes, we ensure that the correct %gs value
+		 * is loaded:
+		 */
 		kpreempt_disable();
 		if (pcb->pcb_rupdate == 1) {
 			/*
@@ -115,9 +118,16 @@ lx_switch_to_native(klwp_t *lwp)
 			}
 		}
 		kpreempt_enable();
-	} else if (get_udatamodel() == DATAMODEL_LP64) {
+		break;
+	}
+
+	case DATAMODEL_LP64: {
 		lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 
+		/*
+		 * For 64-bit processes we ensure that the correct %fsbase
+		 * value is loaded:
+		 */
 		if (lwpd->br_ntv_fsbase != 0) {
 			struct pcb *pcb = &lwp->lwp_pcb;
 
@@ -132,6 +142,11 @@ lx_switch_to_native(klwp_t *lwp)
 			}
 			kpreempt_enable();
 		}
+		break;
+	}
+
+	default:
+		VERIFY(0);
 	}
 #elif defined(__i386)
 	struct regs *rp = lwptoregs(lwp);

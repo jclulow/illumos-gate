@@ -83,7 +83,7 @@ extern "C" {
 #define	B_UNSUPPORTED		136
 #define	B_STORE_ARGS		137
 #define	B_EXIT_AS_SIG		138
-#define	B_SET_BRAND_STACK	139
+#define	B_SET_NATIVE_STACK	139
 #define	B_JUMP_TO_LINUX		140
 #define	B_GET_CURRENT_CONTEXT	141
 #define	B_EMULATION_DONE	142
@@ -177,6 +177,13 @@ extern "C" {
 	 22,  22,  22, 108, 109, 110, 111, 112, 113, 114, /* 149 */	\
 	115, 116 }
 /* END CSTYLED */
+
+/*
+ * Usermode emulation routines are run on an alternate stack allocated by
+ * the brand library.  Every LWP in a process will incur this overhead beyond
+ * the regular thread stack:
+ */
+#define	LX_NATIVE_STACK_PAGE_COUNT	64
 
 #ifndef	_ASM
 
