@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #ifndef _SYS__LX_MISC_H

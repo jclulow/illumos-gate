@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2014 Joyent, Inc.
+ * Copyright 2015, Joyent, Inc.
  */
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.

@@ -23,11 +23,12 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015, Joyent, Inc.
+ */
 
 #ifndef	_LX_THUNK_SERVER_H
 #define	_LX_THUNK_SERVER_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {

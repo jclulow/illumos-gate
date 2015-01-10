@@ -22,7 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #include <sys/kmem.h>
@@ -51,8 +51,8 @@
 #define	LX_SYS_EBPARG6		0x08
 
 /*
- * Flags that denote the specific reason we do not have a particular system call.
- * These reasons are only valid if the function is NULL.
+ * Flags that denote the specific reason we do not have a particular system
+ * call.  These reasons are only valid if the function is NULL.
  */
 #define	NOSYS_USERMODE		0
 #define	NOSYS_NULL		1
@@ -342,7 +342,8 @@ lx_syscall_hook(void)
 	switch (unsup_reason = (s->sy_flags & LX_SYS_NOSYS_REASON)) {
 	case NOSYS_USERMODE:
 		/*
-		 * Pass to the usermode emulation routine and return immediately.
+		 * Pass to the usermode emulation routine and return
+		 * immediately.
 		 */
 #if defined(_LP64)
 		if (get_udatamodel() != DATAMODEL_NATIVE) {
@@ -645,7 +646,9 @@ lx_sysent_t lx_sysent32[] = {
 	{"fstatfs64",	NULL,			0,		2}, /* 269 */
 	{"tgkill",	lx_tgkill,		0,		3}, /* 270 */
 
- /* The following system calls only exist in kernel 2.6 and greater */
+/*
+ * The following system calls only exist in kernel 2.6 and greater:
+ */
 	{"utimes",	NULL,			0,		2}, /* 271 */
 	{"fadvise64_64", NULL, 			0,		4}, /* 272 */
 	{"vserver",	NULL,			NOSYS_NULL,	0}, /* 273 */

@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright (c) 2014, Joyent, Inc.
+ * Copyright 2015, Joyent, Inc.
  */
 
 /*

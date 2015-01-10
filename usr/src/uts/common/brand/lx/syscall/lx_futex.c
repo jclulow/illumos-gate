@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -40,6 +40,8 @@
 #include <sys/condvar.h>
 #include <sys/inttypes.h>
 #include <sys/cmn_err.h>
+#include <sys/brand.h>
+#include <sys/lx_brand.h>
 #include <sys/lx_futex.h>
 #include <sys/lx_impl.h>
 

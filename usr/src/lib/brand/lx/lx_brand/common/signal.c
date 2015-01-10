@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2014 Joyent, Inc. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -684,8 +684,8 @@ lx_sigaltstack(uintptr_t ssp, uintptr_t oss)
 		 * User provided old and new stack_t pointers may point to
 		 * the same location.  Copy out before we modify.
 		 */
-		if (uucopy(&lxtsd->lxtsd_sigaltstack, (void *)oss, sizeof
-		    (lxtsd->lxtsd_sigaltstack)) != 0) {
+		if (uucopy(&lxtsd->lxtsd_sigaltstack, (void *)oss,
+		    sizeof (lxtsd->lxtsd_sigaltstack)) != 0) {
 			return (-EFAULT);
 		}
 	}
@@ -1143,7 +1143,7 @@ lx_rt_sigreturn(void)
 	sigucp->uc_mcontext.gregs[REG_RDX] = lx_ucp->uc_sigcontext.sc_rdx;
 	sigucp->uc_mcontext.gregs[REG_RCX] = lx_ucp->uc_sigcontext.sc_rcx;
 	sigucp->uc_mcontext.gregs[REG_RAX] = lx_ucp->uc_sigcontext.sc_rax;
-	sigucp->uc_mcontext.gregs[REG_TRAPNO] =lx_ucp->uc_sigcontext.sc_trapno;
+	sigucp->uc_mcontext.gregs[REG_TRAPNO] = lx_ucp->uc_sigcontext.sc_trapno;
 	sigucp->uc_mcontext.gregs[REG_ERR] = lx_ucp->uc_sigcontext.sc_err;
 	sigucp->uc_mcontext.gregs[REG_RIP] = lx_ucp->uc_sigcontext.sc_rip;
 	sigucp->uc_mcontext.gregs[REG_CS] = lx_ucp->uc_sigcontext.sc_cs;
@@ -1504,8 +1504,8 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 			lx_debug("restarting interrupted system call %d",
 			    (int)(uintptr_t)ucp->uc_brand_data[0]);
 			LX_REG(ucp, REG_PC) -= 2;
-			LX_REG(ucp, REG_R0) = (int)(uintptr_t)
-			    ucp->uc_brand_data[2];
+			LX_REG(ucp, REG_R0) =
+			    (int)(uintptr_t)ucp->uc_brand_data[2];
 		}
 	}
 }
@@ -1640,16 +1640,14 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	 * Allocate space on the Linux process stack for our delivery frame,
 	 * including:
 	 *
-	 *     ------------------------- old %sp
-	 *     - lx_sigdeliver_frame_t (includes ucontext_t pointers
-	 *     -                        and stack magic)
-	 *     -------------------------
-	 *     - (amd64-only 8-byte alignment gap)
-	 *     -------------------------
-	 *     - frame of size "stacksz"
-	 *     - from the stack builder
-	 *     - function
-	 *     ------------------------- new %sp
+	 *   ----------------------------------------------------- old %sp
+	 *   - lx_sigdeliver_frame_t
+	 *   - (ucontext_t pointers and stack magic)
+	 *   -----------------------------------------------------
+	 *   - (amd64-only 8-byte alignment gap)
+	 *   -----------------------------------------------------
+	 *   - frame of size "stacksz" from the stack builder
+	 *   ----------------------------------------------------- new %sp
 	 */
 #if defined(_LP64)
 	/*
@@ -1784,10 +1782,9 @@ after_signal_handler:
 	_sigon();
 
 	/*
-	 * We return so that libc may clean up and
-	 * restore the context originally interrupted by this signal.
+	 * Here we return to libc so that it may clean up and restore the
+	 * context originally interrupted by this signal.
 	 */
-	return;
 }
 
 /*
