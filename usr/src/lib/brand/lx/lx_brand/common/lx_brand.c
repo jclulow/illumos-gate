@@ -146,17 +146,6 @@ static int stol_errno[] = LX_STOL_ERRNO_INIT;
 char lx_release[LX_VERS_MAX];
 char lx_cmd_name[MAXNAMLEN];
 
-
-typedef struct stack_list_ent {
-	thread_t sle_tid;
-	void *sle_stack;
-	size_t sle_stack_size;
-} stack_list_ent_t;
-
-static mutex_t stack_list_lock = DEFAULTMUTEX;
-static stack_list_ent_t *stack_list = NULL;
-static unsigned int stack_list_elems = 0;
-
 /*
  * Map a linux locale ending string to the solaris equivalent.
  */
@@ -186,7 +175,7 @@ struct lx_locale_ending {
 
 typedef long (*lx_syscall_handler_t)();
 
-static lx_syscall_handler_t handlers[LX_NSYSCALLS + 1];
+static lx_syscall_handler_t lx_handlers[LX_NSYSCALLS + 1];
 
 static uintptr_t stack_bottom;
 
@@ -200,11 +189,6 @@ int lx_rpm_delay = 1;
 int lx_strict = 0;		/* "strict" mode enabled if non-zero */
 int lx_verbose = 0;		/* verbose mode enabled if non-zero */
 int lx_debug_enabled = 0;	/* debugging output enabled if non-zero */
-
-/*
- * Usermode emulation alternate stack size, expressed as a page count:
- */
-int lx_native_stack_page_count = LX_NATIVE_STACK_PAGE_COUNT;
 
 pid_t zoneinit_pid;		/* zone init PID */
 long max_pid;			/* native maximum PID */
@@ -380,201 +364,6 @@ lx_check_alloca(size_t sz)
 	return ((end < sp) && (end >= stack_bottom));
 }
 
-/*
- * Free the alternate stack for this thread.
- */
-void
-lx_free_stack(void)
-{
-	thread_t me = thr_self();
-	lx_tsd_t *lxtsd = lx_get_tsd();
-	int i;
-
-	_sigoff();
-	mutex_lock(&stack_list_lock);
-
-	/*
-	 * Find this thread's stack in the list of stacks.
-	 */
-	for (i = 0; i < stack_list_elems; i++) {
-		if (stack_list[i].sle_tid != me) {
-			continue;
-		}
-
-		(void) munmap(stack_list[i].sle_stack,
-		    stack_list[i].sle_stack_size);
-
-		/*
-		 * Free up this stack list entry:
-		 */
-		bzero(&stack_list[i], sizeof (stack_list[i]));
-
-		mutex_unlock(&stack_list_lock);
-		_sigon();
-		return;
-	}
-
-	/*
-	 * Did not find the stack in the list.
-	 */
-	assert(0);
-}
-
-/*
- * After fork1(), we must unmap the stack of every thread other than the
- * one copied into the child process.
- */
-void
-lx_free_other_stacks(void)
-{
-	int i, this_stack = -1;
-	thread_t me = thr_self();
-
-	_sigoff();
-	mutex_lock(&stack_list_lock);
-
-	for (i = 0; i < stack_list_elems; i++) {
-		if (stack_list[i].sle_tid == me) {
-			/*
-			 * Do not unmap the stack for this LWP.
-			 */
-			this_stack = i;
-			continue;
-		} else if (stack_list[i].sle_tid == 0) {
-			/*
-			 * Skip any holes in the list.
-			 */
-			continue;
-		}
-
-		/*
-		 * Unmap the stack of every other LWP.
-		 */
-		(void) munmap(stack_list[i].sle_stack,
-		    stack_list[i].sle_stack_size);
-	}
-	/*
-	 * Did not find the stack for this LWP in the list.
-	 */
-	assert(this_stack != -1);
-
-	/*
-	 * Ensure the stack data for this LWP is in the first slot and shrink
-	 * the list.
-	 */
-	if (this_stack != 0)
-		stack_list[0] = stack_list[this_stack];
-	stack_list_elems = 1;
-	stack_list = realloc(stack_list, stack_list_elems *
-	    sizeof (stack_list[0]));
-
-	mutex_unlock(&stack_list_lock);
-	_sigon();
-}
-
-/*
- * Allocate an alternate stack for the execution of native emulation routines.
- * Elements of this routine are based on find_stack() in libc.
- */
-int
-lx_alloc_stack(void **nstack, size_t *nstack_size)
-{
-	static int pagesize = 0;
-	static int stackprot = 0;
-	int stacksize = 0;
-	void *stack;
-	int pos;
-
-	/*
-	 * Fetch configuration once:
-	 */
-	if (pagesize == 0) {
-		pagesize = _sysconf(_SC_PAGESIZE);
-		assert(pagesize > 0);
-	}
-	if (stackprot == 0) {
-		long lprot = _sysconf(_SC_STACK_PROT);
-
-		stackprot = lprot > 0 ? lprot : (PROT_READ | PROT_WRITE);
-	}
-
-	stacksize = lx_native_stack_page_count * pagesize;
-
-	if ((stack = mmap(NULL, stacksize, stackprot, MAP_PRIVATE |
-	    MAP_NORESERVE | MAP_ANON, -1, (off_t)0)) == MAP_FAILED) {
-		int en = errno;
-		lx_debug("lx_alloc_stack: failed to allocate stack: %s",
-		    strerror(errno));
-		errno = en;
-		return (-1);
-	}
-
-	/*
-	 * Write a recognisable pattern into the allocated stack pages.
-	 * XXX DEBUG-only?
-	 */
-	for (pos = 0; pos < ((stacksize - 1) / 4); pos++) {
-		((uint32_t *)stack)[pos] = 0x0facade0;
-	}
-
-	*nstack = stack;
-	*nstack_size = stacksize;
-
-	return (0);
-}
-
-void
-lx_install_stack(void *stack, size_t stacksize)
-{
-	thread_t me = thr_self();
-	lx_tsd_t *lxtsd = lx_get_tsd();
-	int i;
-	void *stack_top;
-
-	if (stack == NULL) {
-		/*
-		 * If we were not passed a stack, then allocate one:
-		 */
-		if (lx_alloc_stack(&stack, &stacksize) == -1) {
-			lx_err_fatal("failed to allocate stack for thread "
-			    "%d: %s", me, strerror(errno));
-		}
-	}
-
-	/*
-	 * Install the stack in the global list of thread stacks.
-	 */
-	_sigoff();
-	mutex_lock(&stack_list_lock);
-
-	for (i = 0; i < stack_list_elems; i++) {
-		assert(stack_list[i].sle_tid != me);
-		if (stack_list[i].sle_tid == 0)
-			break;
-	}
-	if (i >= stack_list_elems) {
-		stack_list_elems++;
-		stack_list = realloc(stack_list, stack_list_elems *
-		    sizeof (stack_list[0]));
-	}
-	stack_list[i].sle_tid = me;
-	stack_list[i].sle_stack = stack;
-	stack_list[i].sle_stack_size = stacksize;
-
-	mutex_unlock(&stack_list_lock);
-	_sigon();
-
-	/*
-	 * Inform the kernel of the location of the brand emulation
-	 * stack for this LWP:
-	 */
-	stack_top = stack + stacksize;
-	lx_debug("stack %p stack_top %p\n", stack, stack_top);
-	if (syscall(SYS_brand, B_SET_NATIVE_STACK, stack_top) != 0) {
-		lx_err_fatal("unable to set native stack: %s", strerror(errno));
-	}
-}
-
 /*PRINTFLIKE1*/
 void
 lx_unsupported(char *msg, ...)
@@ -645,8 +434,8 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	 * The kernel ensures that the syscall_num is sane; Use it as is.
 	 */
 	assert(syscall_num >= 0);
-	assert(syscall_num < (sizeof (handlers) / sizeof (handlers[0])));
-	if (handlers[syscall_num] == NULL) {
+	assert(syscall_num < (sizeof (lx_handlers) / sizeof (lx_handlers[0])));
+	if (lx_handlers[syscall_num] == NULL) {
 		lx_err_fatal("lx_emulate: kernel sent us a call we cannot "
 		    "emulate (%d)", syscall_num);
 	}
@@ -654,7 +443,7 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	/*
 	 * Call our handler function:
 	 */
-	emu_ret = handlers[syscall_num](args[0], args[1], args[2], args[3],
+	emu_ret = lx_handlers[syscall_num](args[0], args[1], args[2], args[3],
 	    args[4], args[5]);
 
 	/*
@@ -1004,8 +793,8 @@ lx_init(int argc, char *argv[], char *envp[])
 		/*
 		 * If the thread is exiting, but not the entire process, we
 		 * must free the stack we allocated for usermode emulation.
-		 * This is safe to do, here, because the setcontext() put us
-		 * back on the BRAND stack for this process.
+		 * This is safe to do here because the setcontext() put us back
+		 * on the BRAND stack for this process.
 		 */
 		lx_free_stack();
 		thr_exit((void *)(long)lx_tsd.lxtsd_exit_status);
@@ -1084,9 +873,9 @@ lx_syscall_regs(void)
 	assert(ucp != NULL);
 
 	/*
-	 * XXX Use of the lx_syscall_regs() function implies that the
-	 * topmost (i.e. current) context is for a system call emulation
-	 * request from the kernel, rather than a signal handling frame.
+	 * Use of the lx_syscall_regs() function implies that the topmost (i.e.
+	 * current) context is for a system call emulation request from the
+	 * kernel, rather than a signal handling frame.
 	 */
 	flags = (uintptr_t)ucp->uc_brand_data[0];
 	assert(flags & LX_UC_FRAME_IS_SYSCALL);
@@ -1163,7 +952,7 @@ lx_fd_to_path(int fd, char *buf, int buf_size)
 #if defined(_LP64)
 /* The following is the 64-bit syscall table */
 
-static lx_syscall_handler_t handlers[] = {
+static lx_syscall_handler_t lx_handlers[] = {
 	NULL,		/*   0: read */
 	NULL,		/*   1: write */
 	lx_open,
@@ -1481,6 +1270,12 @@ static lx_syscall_handler_t handlers[] = {
 	NULL,		/* 314: sched_setattr */
 	NULL,		/* 315: sched_getattr */
 	NULL,		/* 316: renameat2 */
+	NULL,		/* 317: seccomp */
+	NULL,		/* 318: getrandom */
+	NULL,		/* 319: memfd_create */
+	NULL,		/* 320: kexec_file_load */
+	NULL,		/* 321: bpf */
+	NULL,		/* 322: execveat */
 
 	/* XXX TBD gap then x32 syscalls from 512 - 544 */
 };
@@ -1488,7 +1283,7 @@ static lx_syscall_handler_t handlers[] = {
 #else
 /* The following is the 32-bit syscall table */
 
-static lx_syscall_handler_t handlers[] = {
+static lx_syscall_handler_t lx_handlers[] = {
 	NULL,		/*   0: nosys */
 	lx_exit,
 	lx_fork,
@@ -1842,5 +1637,11 @@ static lx_syscall_handler_t handlers[] = {
 	NULL,		/* 350: finit_module */
 	NULL,		/* 351: sched_setattr */
 	NULL,		/* 352: sched_getattr */
+	NULL,		/* 353: renameat2 */
+	NULL,		/* 354: seccomp */
+	NULL,		/* 355: getrandom */
+	NULL,		/* 356: memfd_create */
+	NULL,		/* 357: bpf */
+	NULL,		/* 358: execveat */
 };
 #endif

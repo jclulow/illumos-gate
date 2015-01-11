@@ -54,6 +54,7 @@ COBJS	=	capabilities.o			\
 		sendfile.o		\
 		signal.o		\
 		socket.o		\
+		stack.o			\
 		stat.o			\
 		statfs.o		\
 		sysctl.o		\
