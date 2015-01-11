@@ -98,7 +98,7 @@ struct clone_state {
 	int		c_ptrace_event;	/* ptrace(2) event for child stop */
 	void		*c_ntv_stk;	/* native stack for this thread */
 	size_t		c_ntv_stk_sz;	/* native stack size */
-	lx_tsd_t	*c_lx_tsd;	/* thread tsd area */
+	lx_tsd_t	*c_lx_tsd;	/* tsd area for thread */
 };
 
 /*
@@ -206,10 +206,7 @@ clone_start(void *arg)
 	 *
 	 * We already created the thread using the thr_create(3C) library
 	 * call, so most of the work required to emulate lx_clone(2) has
-	 * been done by the time we get to this point.  Instead of creating
-	 * a new brandsys(2) subcommand to perform the last few bits of
-	 * bookkeeping, we just use the lx_clone() slot in the syscall
-	 * table.
+	 * been done by the time we get to this point.
 	 */
 	lx_debug("\tre-vectoring to lx kernel module to complete lx_clone()");
 	lx_debug("\tB_HELPER_CLONE(0x%x, 0x%p, 0x%p, 0x%p)",
@@ -227,6 +224,8 @@ clone_start(void *arg)
 	if (rval < 0) {
 		*(cs->c_clone_res) = -errno;
 		lx_debug("\tkernel clone failed, errno %d\n", errno);
+		free(cs->c_lx_tsd);
+		free(cs);
 		return (NULL);
 	}
 
@@ -244,21 +243,6 @@ clone_start(void *arg)
 	lxtsd = cs->c_lx_tsd;
 	lx_init_tsd(lxtsd);
 	lxtsd->lxtsd_clone_state = cs;
-
-	/*
-	 * Use the address of the stack-allocated lx_tsd as the
-	 * per-thread storage area to cache various values for later
-	 * use.
-	 *
-	 * This address is only used by this thread, so there is no
-	 * danger of other threads using this storage area, nor of it
-	 * being accessed once this stack frame has been freed.
-	 */
-	if (thr_setspecific(lx_tsd_key, lxtsd) != 0) {
-		*(cs->c_clone_res) = -errno;
-		lx_err_fatal("Unable to set thread-specific ptr for clone: %s",
-		    strerror(rval));
-	}
 
 	/*
 	 * Install the emulation stack for this thread.
@@ -348,8 +332,8 @@ after_exit:
 		/*
 		 * If the thread is exiting, but not the entire process, we
 		 * must free the stack we allocated for usermode emulation.
-		 * This is safe to do, here, because the setcontext() put us
-		 * back on the BRAND stack for this process.
+		 * This is safe to do here because the setcontext() put us back
+		 * on the BRAND stack for this process.
 		 */
 		lx_free_stack();
 
@@ -563,23 +547,21 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		}
 
 		/*
-		 * Re-enable signal delivery in the child process.
-		 */
-		_sigon();
-
-		/*
-		 * Stop for ptrace if required.
-		 * XXX Should we do this _after_ we set the new stack
-		 * pointer into the context below?!
-		 */
-		lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0);
-
-		/*
 		 * If provided, the child needs its new stack set up.
 		 */
 		if (cldstk != 0) {
 			LX_REG(ucp, REG_SP) = (uintptr_t)cldstk;
 		}
+
+		/*
+		 * Stop for ptrace if required.
+		 */
+		lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0);
+
+		/*
+		 * Re-enable signal delivery in the child process.
+		 */
+		_sigon();
 
 		/*
 		 * The child process returns via the regular emulated system
