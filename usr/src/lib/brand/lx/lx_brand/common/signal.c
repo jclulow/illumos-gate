@@ -1154,7 +1154,7 @@ lx_rt_sigreturn(void)
 	sigucp->uc_mcontext.gregs[REG_GS] = lx_ucp->uc_sigcontext.sc_gs;
 
 #else /* is _ILP32 */
-	lx_ucp = lx_ssp->ucp;
+	lx_ucp = &lx_ssp->uc;
 
 	/*
 	 * Illumos and Linux both follow the SysV i386 ABI layout for the
