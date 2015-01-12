@@ -124,7 +124,7 @@ static int is_vforked = 0;
 long
 lx_exit(uintptr_t p1)
 {
-	int		ret, status = (int)p1;
+	int		status = (int)p1;
 	lx_tsd_t	*lx_tsd;
 
 	/*
@@ -168,7 +168,7 @@ lx_exit(uintptr_t p1)
 long
 lx_group_exit(uintptr_t p1)
 {
-	int		ret, status = (int)p1;
+	int		status = (int)p1;
 	lx_tsd_t	*lx_tsd;
 
 	/*

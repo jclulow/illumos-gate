@@ -286,7 +286,7 @@ futex_wait(memid_t *memid, caddr_t addr, int val, timespec_t *timeout)
 			 * According to signal(7), a futex(2) call with the
 			 * FUTEX_WAIT operation is restartable.
 			 */
-			ttolxlwp(curthread)->br_syscall_restart = 1;
+			ttolxlwp(curthread)->br_syscall_restart = B_TRUE;
 			err = set_errno(EINTR);
 		}
 	}
