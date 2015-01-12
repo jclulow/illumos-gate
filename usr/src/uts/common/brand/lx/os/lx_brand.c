@@ -472,7 +472,6 @@ lx_savecontext(ucontext_t *ucp)
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	struct regs *rp = lwptoregs(lwp);
 	uintptr_t flags = 0;
-	uintptr_t sp = 0;
 
 	/*
 	 * The ucontext_t affords us two private pointer-sized members in
@@ -489,7 +488,7 @@ lx_savecontext(ucontext_t *ucp)
 		 * when returning to this branded context:
 		 */
 		flags |= LX_UC_RESTORE_NATIVE_SP;
-		sp = lwpd->br_ntv_stack_current;
+		ucp->uc_brand_data[1] = (void *)lwpd->br_ntv_stack_current;
 	}
 
 	/*
@@ -508,7 +507,7 @@ lx_savecontext(ucontext_t *ucp)
 	if (lwpd->br_stack_mode == LX_STACK_MODE_BRAND) {
 		ucp->uc_brand_data[2] =
 		    (void *)(uintptr_t)lwpd->br_syscall_num;
-		if (lwpd->br_syscall_restart != 0) {
+		if (lwpd->br_syscall_restart) {
 			flags |= LX_UC_RESTART_SYSCALL;
 		}
 	} else {
@@ -516,7 +515,6 @@ lx_savecontext(ucontext_t *ucp)
 	}
 
 	ucp->uc_brand_data[0] = (void *)flags;
-	ucp->uc_brand_data[1] = (void *)sp;
 }
 
 #if defined(_SYSCALL32_IMPL)
@@ -527,7 +525,6 @@ lx_savecontext32(ucontext32_t *ucp)
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	struct regs *rp = lwptoregs(lwp);
 	unsigned int flags = 0;
-	caddr32_t sp = 0;
 
 	/*
 	 * The ucontext_t affords us two private pointer-sized members in
@@ -544,7 +541,7 @@ lx_savecontext32(ucontext32_t *ucp)
 		 * when returning to this branded context:
 		 */
 		flags |= LX_UC_RESTORE_NATIVE_SP;
-		sp = lwpd->br_ntv_stack_current;
+		ucp->uc_brand_data[1] = (caddr32_t)lwpd->br_ntv_stack_current;
 	}
 
 	/*
@@ -562,7 +559,7 @@ lx_savecontext32(ucontext32_t *ucp)
 	 */
 	if (lwpd->br_stack_mode == LX_STACK_MODE_BRAND) {
 		ucp->uc_brand_data[2] = (caddr32_t)lwpd->br_syscall_num;
-		if (lwpd->br_syscall_restart != 0) {
+		if (lwpd->br_syscall_restart) {
 			flags |= LX_UC_RESTART_SYSCALL;
 		}
 	} else {
@@ -570,7 +567,6 @@ lx_savecontext32(ucontext32_t *ucp)
 	}
 
 	ucp->uc_brand_data[0] = flags;
-	ucp->uc_brand_data[1] = sp;
 }
 #endif
 

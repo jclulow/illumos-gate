@@ -42,7 +42,7 @@ lx_read(int fd, void *buf, size_t nbyte)
 	 * If read(2) returns EINTR, we want to signal that restarting the
 	 * system call is acceptable:
 	 */
-	ttolxlwp(curthread)->br_syscall_restart = 1;
+	ttolxlwp(curthread)->br_syscall_restart = B_TRUE;
 
 	return (read(fd, buf, nbyte));
 }
@@ -54,7 +54,7 @@ lx_write(int fd, void *buf, size_t nbyte)
 	 * If write(2) returns EINTR, we want to signal that restarting the
 	 * system call is acceptable:
 	 */
-	ttolxlwp(curthread)->br_syscall_restart = 1;
+	ttolxlwp(curthread)->br_syscall_restart = B_TRUE;
 
 	return (write(fd, buf, nbyte));
 }

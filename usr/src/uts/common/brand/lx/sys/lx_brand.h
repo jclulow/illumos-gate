@@ -288,12 +288,12 @@ typedef struct lx_elf_data64 {
 } lx_elf_data64_t;
 
 typedef struct lx_elf_data32 {
-	int	ed_phdr;
-	int	ed_phent;
-	int	ed_phnum;
-	int	ed_entry;
-	int	ed_base;
-	int	ed_ldentry;
+	uint32_t	ed_phdr;
+	uint32_t	ed_phent;
+	uint32_t	ed_phnum;
+	uint32_t	ed_entry;
+	uint32_t	ed_base;
+	uint32_t	ed_ldentry;
 } lx_elf_data32_t;
 
 #if defined(_LP64)
@@ -458,12 +458,13 @@ struct lx_lwp_data {
 
 
 	int	br_syscall_num;		/* current system call number */
-	uint_t	br_syscall_restart;	/* should restart on EINTR */
+	boolean_t br_syscall_restart;	/* should restart on EINTR */
 
 	/*
 	 * Store the LX_STACK_MODE for this lwp, and the current extent of the
 	 * native (emulation) stack.  This is similar, in principle, to the
-	 * sigaltstack mechanism for signal handling.
+	 * sigaltstack mechanism for signal handling.  We also use this mode
+	 * flag to determine how to process system calls from this LWP.
 	 */
 	lx_stack_mode_t	br_stack_mode;
 	uintptr_t br_ntv_stack;

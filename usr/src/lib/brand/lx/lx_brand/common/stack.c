@@ -62,7 +62,6 @@ void
 lx_free_stack(void)
 {
 	thread_t me = thr_self();
-	lx_tsd_t *lxtsd = lx_get_tsd();
 	int i;
 
 	_sigoff();
@@ -206,9 +205,8 @@ void
 lx_install_stack(void *stack, size_t stacksize)
 {
 	thread_t me = thr_self();
-	lx_tsd_t *lxtsd = lx_get_tsd();
 	int i;
-	void *stack_top;
+	uintptr_t stack_top;
 
 	if (stack == NULL) {
 		/*
@@ -247,7 +245,7 @@ lx_install_stack(void *stack, size_t stacksize)
 	 * Inform the kernel of the location of the brand emulation
 	 * stack for this LWP:
 	 */
-	stack_top = stack + stacksize;
+	stack_top = (uintptr_t)stack + stacksize;
 	lx_debug("stack %p stack_top %p\n", stack, stack_top);
 	if (syscall(SYS_brand, B_SET_NATIVE_STACK, stack_top) != 0) {
 		lx_err_fatal("unable to set native stack: %s", strerror(errno));

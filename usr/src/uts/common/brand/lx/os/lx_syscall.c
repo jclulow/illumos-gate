@@ -212,7 +212,7 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 		 * call restart flag before lx_setcontext() can pass it to
 		 * usermode.
 		 */
-		lwpd->br_syscall_restart = 0;
+		lwpd->br_syscall_restart = B_FALSE;
 	}
 
 	if (error != 0) {
@@ -312,7 +312,7 @@ lx_syscall_hook(void)
 	 * in the saved context if required.
 	 */
 	lwpd->br_syscall_num = syscall_num;
-	lwpd->br_syscall_restart = 0;
+	lwpd->br_syscall_restart = B_FALSE;
 
 	/*
 	 * Process the arguments for this system call, and fire ptrace
@@ -321,6 +321,10 @@ lx_syscall_hook(void)
 	error = lx_emulate_args(lwp, s, args);
 	lx_trace_sysenter(syscall_num, args);
 	if (error != 0) {
+		/*
+		 * Could not read and process the arguments.  Return the error
+		 * to the process.
+		 */
 		set_errno(error);
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
@@ -342,8 +346,7 @@ lx_syscall_hook(void)
 	switch (unsup_reason = (s->sy_flags & LX_SYS_NOSYS_REASON)) {
 	case NOSYS_USERMODE:
 		/*
-		 * Pass to the usermode emulation routine and return
-		 * immediately.
+		 * Pass to the usermode emulation routine.
 		 */
 #if defined(_LP64)
 		if (get_udatamodel() != DATAMODEL_NATIVE) {

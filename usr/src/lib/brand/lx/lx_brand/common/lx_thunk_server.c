@@ -262,7 +262,6 @@ static cond_t		lxt_req_cv = DEFAULTCV;
 static lxt_req_t	*lxt_req_ptr = NULL;
 
 static mutex_t		lxt_pid_lock = DEFAULTMUTEX;
-static pid_t		lxt_pid = NULL;
 
 /*
  * Interfaces used to call from lx_brand.so into Linux code.

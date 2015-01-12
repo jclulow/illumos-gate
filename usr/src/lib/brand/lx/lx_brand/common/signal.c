@@ -1112,7 +1112,6 @@ lx_rt_sigreturn(void)
 {
 	lx_sigdeliver_frame_t *lxsdf;
 	struct lx_sigstack *lx_ssp;
-	lx_regs_t *rp;
 	lx_ucontext_t *lx_ucp;
 	ucontext_t *ucp;
 	ucontext_t *sigucp;
