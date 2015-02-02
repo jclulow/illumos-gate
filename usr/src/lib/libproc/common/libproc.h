@@ -443,6 +443,7 @@ extern	int	proc_get_ldt(pid_t, struct ssd *, int);
 
 extern int Plwp_getpsinfo(struct ps_prochandle *, lwpid_t, lwpsinfo_t *);
 extern int Plwp_getspymaster(struct ps_prochandle *, lwpid_t, psinfo_t *);
+extern int Plwp_getbrandstatus(struct ps_prochandle *, lwpid_t, void *, size_t);
 
 extern int Plwp_stack(struct ps_prochandle *, lwpid_t, stack_t *);
 extern int Plwp_main_stack(struct ps_prochandle *, lwpid_t, stack_t *);

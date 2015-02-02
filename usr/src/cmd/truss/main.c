@@ -1010,6 +1010,7 @@ worker_thread(void *arg)
 
 		switch (Lsp->pr_why) {
 		case PR_REQUESTED:
+		case PR_BRANDPRIVATE:
 			break;
 		case PR_SIGNALLED:
 			req_flag = signalled(pri, req_flag, dotrace);

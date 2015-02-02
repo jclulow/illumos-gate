@@ -139,6 +139,12 @@ struct brand_ops {
 	void	(*b_restorecontext)(ucontext_t *);
 	caddr_t	(*b_sendsig_stack)(int);
 	void	(*b_sendsig)(int);
+	size_t	b_brandstatus_size;
+	void	(*b_brandstatus)(klwp_t *, void *);
+#if defined(_SYSCALL32_IMPL)
+	size_t	b_brandstatus32_size;
+	void	(*b_brandstatus32)(klwp_t *, void *);
+#endif
 };
 
 /*

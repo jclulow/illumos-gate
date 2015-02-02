@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 /*	Copyright (c) 1984,	 1986, 1987, 1988, 1989 AT&T	*/
@@ -174,28 +174,30 @@ static prdirent_t piddir[] = {
  * Contents of a /proc/<pid>/lwp/<lwpid> directory.
  */
 static prdirent_t lwpiddir[] = {
-	{ PR_LWPIDDIR,	 1 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPIDDIR,		 1 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"." },
-	{ PR_LWPDIR,	 2 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPDIR,		 2 * sizeof (prdirent_t), sizeof (prdirent_t),
 		".." },
-	{ PR_LWPCTL,	 3 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPCTL,		 3 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpctl" },
-	{ PR_LWPSTATUS,	 4 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPSTATUS,		 4 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpstatus" },
-	{ PR_LWPSINFO,	 5 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPSINFO,		 5 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpsinfo" },
-	{ PR_LWPUSAGE,	 6 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPUSAGE,		 6 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpusage" },
-	{ PR_XREGS,	 7 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_XREGS,	j	 7 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"xregs" },
-	{ PR_TMPLDIR,	 8 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_TMPLDIR,		 8 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"templates" },
-	{ PR_SPYMASTER,	 9 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_SPYMASTER,		 9 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"spymaster" },
+	{ PR_BRANDSTATUS,	10 * sizeof (prdirent_t), sizeof (prdirent_t),
+		"brandstatus" },
 #if defined(__sparc)
-	{ PR_GWINDOWS,	10 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_GWINDOWS,		11 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"gwindows" },
-	{ PR_ASRS,	11 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_ASRS,		12 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"asrs" },
 #endif
 };
@@ -546,6 +548,9 @@ prclose(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr,
 		killproc = (p->p_proc_flag & P_PR_KILLCL);
 		p->p_proc_flag &= ~(P_PR_RUNLCL|P_PR_KILLCL|P_PR_TRACE);
 		/*
+		 * XXX INJECT BRAND HOOK HERE?
+		 */
+		/*
 		 * Cancel any outstanding single-step requests.
 		 */
 		if ((t = p->p_tlist) != NULL) {
@@ -585,7 +590,7 @@ static int pr_read_inval(), pr_read_as(), pr_read_status(),
 	pr_read_usage(), pr_read_lusage(), pr_read_pagedata(),
 	pr_read_watch(), pr_read_lwpstatus(), pr_read_lwpsinfo(),
 	pr_read_lwpusage(), pr_read_xregs(), pr_read_priv(),
-	pr_read_spymaster(),
+	pr_read_spymaster(), pr_read_brandstatus(),
 #if defined(__sparc)
 	pr_read_gwindows(), pr_read_asrs(),
 #endif
@@ -630,6 +635,7 @@ static int (*pr_read_function[PR_NFILES])() = {
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>/templates	*/
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>/templates/<id> */
 	pr_read_spymaster,	/* /proc/<pid>/lwp/<lwpid>/spymaster	*/
+	pr_read_brandstatus,	/* /proc/<pid>/lwp/<lwpid>/brandstatus	*/
 #if defined(__sparc)
 	pr_read_gwindows,	/* /proc/<pid>/lwp/<lwpid>/gwindows	*/
 	pr_read_asrs,		/* /proc/<pid>/lwp/<lwpid>/asrs		*/
@@ -1577,6 +1583,43 @@ out:
 }
 
 static int
+pr_read_brandstatus(prnode_t *pnp, uio_t *uiop)
+{
+	void *data;
+	size_t dsz = 0;
+	klwp_t *lwp;
+	int ret = 0;
+
+	VERIFY(pnp->pr_type == PR_BRANDSTATUS);
+
+	if ((error = prlock(pnp, ZNO)) != 0)
+		return (error);
+
+	lwp = pnp->pr_common->prc_thread->t_lwp;
+
+	if (!PROC_IS_BRANDED(pnp->pr_common->prc_proc) ||
+	    (dsz = BROP(pnp->pr_common->prc_proc)->b_brandstatus_size) == 0 ||
+	    BROP(pnp->pr_common->prc_proc)->b_brandstatus == NULL) {
+		/*
+		 * Not a branded process, or not a brand which provides
+		 * brandstatus.
+		 */
+		goto out;
+	}
+
+	data = kmem_zalloc(dsz, KM_SLEEP);
+
+	BROP(pnp->pr_common->prc_proc)->b_brandstatus(lwp, data);
+	ret = pr_uioread(data, dsz, uiop);
+
+	kmem_free(data, dsz);
+
+out:
+	prunlock(pnp);
+	return (ret);
+}
+
+static int
 pr_read_spymaster(prnode_t *pnp, uio_t *uiop)
 {
 	psinfo_t psinfo;
@@ -1742,7 +1785,7 @@ static int pr_read_status_32(),
 	pr_read_sigact_32(), pr_read_auxv_32(),
 	pr_read_usage_32(), pr_read_lusage_32(), pr_read_pagedata_32(),
 	pr_read_watch_32(), pr_read_lwpstatus_32(), pr_read_lwpsinfo_32(),
-	pr_read_lwpusage_32(), pr_read_spymaster_32(),
+	pr_read_lwpusage_32(), pr_read_spymaster_32(), pr_read_brandstatus_32(),
 #if defined(__sparc)
 	pr_read_gwindows_32(),
 #endif
@@ -1787,6 +1830,7 @@ static int (*pr_read_function_32[PR_NFILES])() = {
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>/templates	*/
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>/templates/<id> */
 	pr_read_spymaster_32,	/* /proc/<pid>/lwp/<lwpid>/spymaster	*/
+	pr_read_brandstatus_32,	/* /proc/<pid>/lwp/<lwpid>/brandstatus	*/
 #if defined(__sparc)
 	pr_read_gwindows_32,	/* /proc/<pid>/lwp/<lwpid>/gwindows	*/
 	pr_read_asrs,		/* /proc/<pid>/lwp/<lwpid>/asrs		*/
@@ -2586,6 +2630,43 @@ out:
 }
 
 static int
+pr_read_brandstatus32(prnode_t *pnp, uio_t *uiop)
+{
+	void *data;
+	size_t dsz = 0;
+	klwp_t *lwp;
+	int ret = 0;
+
+	VERIFY(pnp->pr_type == PR_BRANDSTATUS);
+
+	if ((error = prlock(pnp, ZNO)) != 0)
+		return (error);
+
+	lwp = pnp->pr_common->prc_thread->t_lwp;
+
+	if (!PROC_IS_BRANDED(pnp->pr_common->prc_proc) ||
+	    (dsz = BROP(pnp->pr_common->prc_proc)->b_brandstatus32_size) == 0 ||
+	    BROP(pnp->pr_common->prc_proc)->b_brandstatus32 == NULL) {
+		/*
+		 * Not a branded process, or not a brand which provides
+		 * brandstatus.
+		 */
+		goto out;
+	}
+
+	data = kmem_zalloc(dsz, KM_SLEEP);
+
+	BROP(pnp->pr_common->prc_proc)->b_brandstatus32(lwp, data);
+	ret = pr_uioread(data, dsz, uiop);
+
+	kmem_free(data, dsz);
+
+out:
+	prunlock(pnp);
+	return (ret);
+}
+
+static int
 pr_read_spymaster_32(prnode_t *pnp, uio_t *uiop)
 {
 	psinfo32_t psinfo;
@@ -3226,6 +3307,20 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			vap->va_size = 0;
 		}
 		break;
+	case PR_BRANDSTATUS:
+		if (PROC_IS_BRANDED(pnp->pr_common->prc_proc)) {
+			struct brand_ops bops = BROP(pnp->pr_common->prc_proc);
+
+#if defined(_SYSCALL32_IMPL)
+			vap->va_size = iam32bit ? bops->b_brandstatus32_size :
+			    bops->b_brandstatus_size;
+#else
+			vap->va_size = bops->b_brandstatus_size;
+#endif
+		} else {
+			vap->va_size = 0;
+		}
+		break;
 #if defined(__sparc)
 	case PR_GWINDOWS:
 	{
@@ -3427,6 +3522,7 @@ static vnode_t *(*pr_lookup_function[PR_NFILES])() = {
 	pr_lookup_tmpldir,	/* /proc/<pid>/lwp/<lwpid>/templates	*/
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/templates/<id> */
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/spymaster	*/
+	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/brandstatus	*/
 #if defined(__sparc)
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/gwindows	*/
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/asrs		*/
@@ -4779,6 +4875,7 @@ static int (*pr_readdir_function[PR_NFILES])() = {
 	pr_readdir_tmpldir,	/* /proc/<pid>/lwp/<lwpid>/templates	*/
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/templates/<id> */
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/spymaster	*/
+	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/brandstatus	*/
 #if defined(__sparc)
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/gwindows	*/
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/asrs		*/

@@ -1156,6 +1156,16 @@ stop(int why, int what)
 	if (why == PR_CHECKPOINT)
 		del_one_utstop();
 
+	/*
+	 * This brand hook must be called before stopping the thread so that
+	 * it may (temporarily) drop p_lock if required.
+	 */
+	if (why == PR_BRANDPRIVATE) {
+		if (PROC_IS_BRANDED(p) && BROP(p)->b_stop_notify != NULL) {
+			BROP(p)->b_stop_notify(what);
+		}
+	}
+
 	thread_lock(t);
 	ASSERT((t->t_schedflag & TS_ALLSTART) == 0);
 	t->t_schedflag |= flags;

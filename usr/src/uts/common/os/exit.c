@@ -707,11 +707,28 @@ proc_exit(int why, int what)
 			}
 			q->p_sibling = initp->p_child;
 			initp->p_child = q;
+
+			/*
+			 * If the exiting process was tracing this child using
+			 * the legacy ptrace(3C) framework then kill it now.
+			 */
 			if (q->p_proc_flag & P_PR_PTRACE) {
 				mutex_enter(&q->p_lock);
 				sigtoproc(q, NULL, SIGKILL);
 				mutex_exit(&q->p_lock);
 			}
+
+			/*
+			 * Give the brand a chance to clean up the child
+			 * when its parent goes away.
+			 */
+			mutex_enter(&q->p_lock);
+			if (PROC_IS_BRANDED(q) && BROP(q)->b_parent_exit !=
+			    NULL) {
+				BROP(q)->b_parent_exit(q);
+			}
+			mutex_enter(&q->p_lock);
+
 			/*
 			 * sigcld() will add the child to parents
 			 * newstate list.
@@ -996,8 +1013,8 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 {
 	int found;
 	proc_t *cp, *pp;
-	int proc_gone;
 	int waitflag = !(options & WNOWAIT);
+	boolean_t have_brand_helper = B_FALSE;
 
 	/*
 	 * Obsolete flag, defined here only for binary compatibility
@@ -1023,6 +1040,8 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 	}
 
 	pp = ttoproc(curthread);
+	have_brand_helper = (PROC_IS_BRANDED(pp) &&
+	    BROP(pp)->b_waitid_helper != NULL);
 
 	/*
 	 * Anytime you are looking for a process, you take pidlock to prevent
@@ -1046,9 +1065,23 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 		return (ECHILD);
 	}
 
-	while (pp->p_child != NULL) {
+	while (pp->p_child != NULL || brand_helper) {
+		boolean_t brand_wants_wait = B_FALSE;
+		int proc_gone = 0;
 
-		proc_gone = 0;
+		if (have_brand_helper) {
+			int ret = 0;
+
+			/*
+			 * Allow the brand to inject synthetic responses
+			 * from waitid().
+			 */
+			if (BROP(pp)->b_waitid_helper(idtype, id, ip, options,
+			    &brand_wants_wait, &ret) == 0) {
+				mutex_exit(&pidlock);
+				return (ret);
+			}
+		}
 
 		for (cp = pp->p_child_ns; cp != NULL; cp = cp->p_sibling_ns) {
 			if (idtype != P_PID && (cp->p_pidflag & CLDWAITPID))
@@ -1189,7 +1222,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 		 * If we found no interesting processes at all,
 		 * break out and return ECHILD.
 		 */
-		if (found + proc_gone == 0)
+		if (!brand_wants_wait && (found + proc_gone == 0))
 			break;
 
 		if (options & WNOHANG) {
@@ -1208,7 +1241,7 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 		 * change state while we wait, we don't wait at all.
 		 * Get out with ECHILD according to SVID.
 		 */
-		if (found == proc_gone)
+		if (!brand_wants_wait && (found == proc_gone))
 			break;
 
 		if (!cv_wait_sig_swap(&pp->p_cv, &pidlock)) {

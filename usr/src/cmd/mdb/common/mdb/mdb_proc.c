@@ -1545,6 +1545,10 @@ pt_print_reason(const lwpstatus_t *psp)
 	case PR_CHECKPOINT:
 		mdb_printf("suspended by the kernel");
 		break;
+	case PR_BRANDPRIVATE:
+		mdb_printf("stopped for brand-private reason (%d)",
+		    psp->pr_what);
+		break;
 	default:
 		mdb_printf("stopped for unknown reason (%d/%d)",
 		    psp->pr_why, psp->pr_what);

@@ -262,6 +262,8 @@ lx_initlwp(klwp_t *lwp)
 	lwpd->br_set_ctidp = NULL;
 	lwpd->br_signal = 0;
 	lwpd->br_stack_mode = LX_STACK_MODE_PREINIT;
+	list_create(&lwpd->br_ptrace_tracees, sizeof (lx_lwp_data_t),
+	    offsetof(lx_lwp_data_t, br_ptrace_linkage));
 
 	/*
 	 * lwpd->br_affinitymask was zeroed by kmem_zalloc()

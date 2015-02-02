@@ -950,6 +950,7 @@ gcore_prchoose(mdb_proc_t *p)
 				else if (t_req == NULL)
 					t_req = t_addr;
 				break;
+			case PR_BRANDPRIVATE:
 			case PR_SYSENTRY:
 			case PR_SYSEXIT:
 			case PR_SIGNALLED:

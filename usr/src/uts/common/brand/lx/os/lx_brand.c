@@ -63,6 +63,7 @@
 #include <sys/x86_archext.h>
 #include <sys/controlregs.h>
 #include <sys/stack.h>
+#include <sys/procfs.h>
 #include <lx_signum.h>
 
 int	lx_debug = 0;
@@ -114,8 +115,10 @@ static void lx_savecontext(ucontext_t *);
 static void lx_restorecontext(ucontext_t *);
 static caddr_t lx_sendsig_stack(int);
 static void lx_sendsig(int);
+static void lx_brandstatus(klwp_t *, void *);
 #if defined(_SYSCALL32_IMPL)
 static void lx_savecontext32(ucontext32_t *);
+static void lx_brandstatus32(klwp_t *, void *);
 #endif
 
 
@@ -151,7 +154,13 @@ struct brand_ops lx_brops = {
 #endif
 	lx_restorecontext,
 	lx_sendsig_stack,
-	lx_sendsig
+	lx_sendsig,
+	sizeof (lx_brandstatus_t),
+	lx_brandstatus,
+#if defined(_SYSCALL32_IMPL)
+	sizeof (lx_brandstatus32_t),
+	lx_brandstatus32,
+#endif
 };
 
 struct brand_mach_ops lx_mops = {
@@ -327,39 +336,55 @@ lx_ptrace_syscall_set(pid_t pid, id_t lwpid, int set)
 		return (ESRCH);
 	}
 
-	if (set) {
-		/*
-		 * Enable the ptrace flag for this LWP and this process. Note
-		 * that we will turn off the LWP's ptrace flag, but we don't
-		 * turn off the process's ptrace flag.
-		 */
-		lldp->br_ptrace = 1;
-		lpdp->l_ptrace = 1;
-	} else {
-		lldp->br_ptrace = 0;
-	}
+	/*
+	 * Set (or clear) the ptrace flag for this LWP and this process.
+	 */
+	lldp->br_ptrace = set ? B_TRUE : B_FALSE;
 
 	sprunlock(p);
 
 	return (0);
 }
 
-static void
-lx_ptrace_fire(void)
+/*
+ * If this LWP is being traced via the emulated Linux ptrace interface, this
+ * routine will stop and notify the tracer.
+ *
+ * If the LWP was stopped to process this event, return B_TRUE; otherwise
+ * return B_FALSE.
+ */
+boolean_t
+lx_ptrace_fire(lx_lwp_data_t *lwpd, int what)
 {
-	kthread_t *t = curthread;
-	klwp_t *lwp = ttolwp(t);
-	lx_lwp_data_t *lldp = lwp->lwp_brand;
+	boolean_t ret = B_FALSE;
+
+	VERIFY(what == LX_PR_SYSENTRY || what == LX_PR_SYSEXIT);
 
 	/*
-	 * The ptrace flag only applies until the next event is encountered
-	 * for the given LWP. If it's set, turn off the flag and poke the
-	 * controlling process by raising a signal.
+	 * If the ptrace flag is on for this
 	 */
-	if (lldp->br_ptrace) {
-		lldp->br_ptrace = 0;
-		tsignal(t, SIGTRAP);
+	if (lwpd->br_ptrace) {
+		proc_t *p = lwpd->br_lwp->lwp_procp;
+
+		mutex_enter(&p->p_lock);
+		if (lwpd->br_ptrace_syscall) {
+			/*
+			 * The ptrace flag only applies until the next event is encountered
+			 * for the given LWP.
+			 */
+			lwpd->br_ptrace_syscall = B_FALSE;
+
+			/*
+			 * Stop the process and notify tracers:
+			 */
+			stop(PR_BRANDPRIVATE, what);
+
+			ret = B_TRUE;
+		}
+		mutex_exit(&p->p_lock);
 	}
+
+	return (ret);
 }
 
 /*
@@ -852,6 +877,50 @@ lx_savecontext32(ucontext32_t *ucp)
 #endif
 
 void
+lx_brandstatus(klwp_t *lwp, void *data)
+{
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+	lx_brandstatus_t *lxbs = data;
+
+	VERIFY(lwpd != NULL);
+
+	bcopy("lx", lxbs->lxbs_brand, sizeof ("lx"));
+	lxbs->lxbs_syscall_num = lwpd->br_syscall_num;
+	lxbs->lxbs_stack_mode = lwpd->br_stack_mode;
+
+	lxbs->lxbs_ntv_stack = lwpd->br_ntv_stack;
+	lxbs->lxbs_ntv_stack_current = lwpd->br_ntv_stack_current;
+
+#if defined(__amd64)
+	lxbs->lxbs_lx_fsbase = lwpd->br_lx_fsbase;
+	lxbs->lxbs_ntv_fsbase = lwpd->br_ntv_fsbase;
+#endif
+}
+
+#if defined(_SYSCALL32_IMPL)
+void
+lx_brandstatus32(klwp_t *lwp, void *data)
+{
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+	lx_brandstatus32_t *lxbs = data;
+
+	VERIFY(lwpd != NULL);
+
+	bcopy("lx", lxbs->lxbs_brand, sizeof ("lx"));
+	lxbs->lxbs_syscall_num = lwpd->br_syscall_num;
+	lxbs->lxbs_stack_mode = lwpd->br_stack_mode;
+
+	if (lwp_getdatamodel(lwp) == DATAMODEL_ILP32) {
+		/*
+		 * We expose only 32-bit-safe values to 32-bit processes.
+		 */
+		lxbs->lxbs_ntv_stack = lwpd->br_ntv_stack;
+		lxbs->lxbs_ntv_stack_current = lwpd->br_ntv_stack_current;
+	}
+}
+#endif
+
+void
 lx_init_brand_data(zone_t *zone)
 {
 	lx_zone_data_t *data;
@@ -887,8 +956,6 @@ lx_trace_sysenter(int syscall_num, uintptr_t *args)
 		(*lx_systrace_entry_ptr)(syscall_num, args[0], args[1],
 		    args[2], args[3], args[4], args[5]);
 	}
-
-	lx_ptrace_fire();
 }
 
 void
@@ -899,8 +966,6 @@ lx_trace_sysreturn(int syscall_num, long ret)
 
 		(*lx_systrace_return_ptr)(syscall_num, ret, ret, 0, 0, 0, 0);
 	}
-
-	lx_ptrace_fire();
 }
 
 /*
@@ -1109,6 +1174,44 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		lx_ptrace_geteventmsg((pid_t)arg1, (ulong_t *)arg2);
 		return (0);
 
+	case B_PTRACE_STOP_FOR_SIGNAL: {
+		/*
+		 * B_PTRACE_STOP_FOR_SIGNAL subcommand
+		 * arg1 = address of current preserved Linux context
+		 * arg2 = Linux signal number
+		 */
+		VERIFY(lwpd->br_ptrace_ucp == NULL);
+		VERIFY(lwpd->br_ptrace_sig == 0);
+
+		if (arg1 == NULL || arg2 == 0)
+			return (EINVAL);
+
+		if (!(p->p_proc_flag & P_PR_TRACE)) {
+			/*
+			 * XXX We will have the brand hook disable the
+			 * trace flags maybe?
+			 */
+		}
+
+		/*
+		 * Store pointer to current ucontext for this LWP so that
+		 * tracers may modify the register state before restarting the
+		 * process.
+		 */
+		lwpd->br_ptrace_ucp = arg1;
+		lwpd->br_ptrace_sig = (int)arg2;
+
+		/*
+		 * Stop the LWP and wait for the tracing process.
+		 */
+		stop(PR_BRANDPRIVATE, LX_PR_SIGNALLED);
+
+		lwpd->br_ptrace_ucp = NULL;
+		lwpd->br_ptrace_sig = 0;
+
+		return (0);
+	}
+
 	case B_UNSUPPORTED: {
 		char dmsg[256];
 
@@ -1161,6 +1264,10 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		*rval = arg2;
 		return (0);
 	}
+
+	case B_PTRACE_TRACEME:
+		return (lx_ptrace_traceme());
+		break;
 
 	case B_HELPER_CLONE:
 		return (lx_helper_clone(rval, arg1, (void *)arg2, (void *)arg3,

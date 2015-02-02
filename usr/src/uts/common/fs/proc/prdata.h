@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -147,6 +147,7 @@ typedef enum prnodetype {
 	PR_TMPLDIR,		/* /proc/<pid>/lwp/<lwpid>/templates	*/
 	PR_TMPL,		/* /proc/<pid>/lwp/<lwpid>/templates/<id> */
 	PR_SPYMASTER,		/* /proc/<pid>/lwp/<lwpid>/spymaster	*/
+	PR_BRANDSTATUS,		/* /proc/<pid>/lwp/<lwpid>/brandstatus	*/
 #if defined(__sparc)
 	PR_GWINDOWS,		/* /proc/<pid>/lwp/<lwpid>/gwindows	*/
 	PR_ASRS,		/* /proc/<pid>/lwp/<lwpid>/asrs		*/

@@ -104,6 +104,8 @@ extern "C" {
 #define	PCSPRIV  29L	/* set process privileges from prpriv_t argument */
 #define	PCSZONE  30L	/* set zoneid from zoneid_t argument */
 #define	PCSCREDX 31L	/* as PCSCRED but with supplemental groups */
+#define	PCBRAND  32L	/* brand-private process or lwp control */
+
 /*
  * PCRUN long operand flags.
  */
@@ -233,6 +235,7 @@ typedef struct pstatus {
 #define	PR_FAULTED	6
 #define	PR_SUSPENDED	7
 #define	PR_CHECKPOINT	8
+#define	PR_BRANDPRIVATE	9
 
 /*
  * lwp ps(1) information file.  /proc/<pid>/lwp/<lwpid>/lwpsinfo

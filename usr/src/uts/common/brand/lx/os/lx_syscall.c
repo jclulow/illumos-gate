@@ -230,14 +230,7 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	rp->r_r0 = ret;
 
 	/*
-	 * Fire ptrace and DTrace probes:
-	 * XXX is it correct to do this for interrupted system calls that
-	 * we are restarting?
-	 */
-	lx_trace_sysreturn(syscall_num, ret);
-
-	/*
-	 * Clear errno and reset restart flag for next time:
+	 * Clear errno flag for next time:
 	 */
 	lwp->lwp_errno = 0;
 
@@ -248,6 +241,18 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	lwp->lwp_eosys = JUSTRETURN;
 	curthread->t_post_sys = 1;
 	aston(curthread);
+
+	/*
+	 * Fire DTrace probes:
+	 */
+	lx_trace_sysreturn(syscall_num, ret);
+
+	/*
+	 * If this Linux process is being traced by another with
+	 * PTRACE_SYSCALL, stop here for the "syscall-exit-stop" as per
+	 * ptrace(2).
+	 */
+	(void) lx_ptrace_fire(lwpd, LX_PR_SYSEXIT);
 
 	return (0);
 }
@@ -283,8 +288,17 @@ lx_syscall_hook(void)
 	}
 
 	/*
-	 * Determine system call number and check that it is within the bounds
-	 * we expect.
+	 * If this Linux process is being traced by another with
+	 * PTRACE_SYSCALL, stop here for the "syscall-enter-stop" as per
+	 * ptrace(2).  The ptrace emulation code will handle substituting
+	 * (-ENOSYS) into %eax/%rax for trace consumers, so we need not deal
+	 * with it here.
+	 */
+	(void) lx_ptrace_fire(lwpd, LX_PR_SYSENTRY);
+
+	/*
+	 * Determine system call number (which may have been changed by ptrace)
+	 * and check that it is within the bounds we expect.
 	 */
 	syscall_num = (int)rp->r_r0;
 	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
@@ -315,8 +329,7 @@ lx_syscall_hook(void)
 	lwpd->br_syscall_restart = B_FALSE;
 
 	/*
-	 * Process the arguments for this system call, and fire ptrace
-	 * and DTrace probes:
+	 * Process the arguments for this system call, and fire DTrace probes:
 	 */
 	error = lx_emulate_args(lwp, s, args);
 	lx_trace_sysenter(syscall_num, args);

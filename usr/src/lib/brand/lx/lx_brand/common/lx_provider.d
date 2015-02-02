@@ -27,7 +27,9 @@ provider lx {
 	probe signal_altstack_enable(uintptr_t alt_sp);
 	probe signal_altstack_disable();
 
-	probe emulate_enter(void *ucp, int syscall_num, uintptr_t *args);
+	probe emulate_enter(void *ucp, int syscall_num, uintptr_t arg0,
+	    uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4,
+	    uintptr_t arg5);
 	probe emulate_return(void *ucp, int syscall_num, uintptr_t ret,
 	    uintptr_t errn);
 };

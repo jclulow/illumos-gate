@@ -469,6 +469,9 @@ prwhy(int why)
 	case PR_SUSPENDED:
 		str = "PR_SUSPENDED";
 		break;
+	case PR_BRANDPRIVATE:
+		str = "PR_BRANDPRIVATE";
+		break;
 	default:
 		str = buf;
 		(void) sprintf(str, "%d", why);

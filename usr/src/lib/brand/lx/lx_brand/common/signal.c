@@ -1449,6 +1449,14 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
 	lx_debug("lxsap @ 0x%p", lxsap);
 
+	/*
+	 * We bounce into the kernel for the Linux ptrace(2)
+	 * "signal-delivery-stop".  If we are being traced, the tracer may
+	 * modify the topmost BRAND-mode ucontext before we are restarted.
+	 */
+	(void) syscall(SYS_brand, B_PTRACE_STOP_FOR_SIGNAL, lx_find_brand_uc(),
+	    lx_sig);
+
 	if ((sig == SIGPWR) && (lxsap->lxsa_handler == SIG_DFL)) {
 		/*
 		 * Linux SIG_DFL for SIGPWR is to terminate. The lx wait
@@ -1484,24 +1492,31 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	if (lxsap->lxsa_flags & LX_SA_RESETHAND)
 		lxsap->lxsa_handler = SIG_DFL;
 
+	/*
+	 * Construct the signal handling stack frame and deliver the signal.
+	 * This routine will not return until the Linux signal handler has
+	 * completed execution.
+	 */
 	lx_sigdeliver(lx_sig, sip, ucp, stksize, stk_builder, user_handler,
 	    lxsap);
 
 	/*
-	 * We need to handle restarting system calls if requested by the
-	 * program:
+	 * We need to handle restarting interrupted system calls if requested
+	 * by the program:
 	 */
 	if (lxsap->lxsa_flags & LX_SA_RESTART) {
 		unsigned int flags = (uintptr_t)ucp->uc_brand_data[0];
-		long ret;
+		long ret = (long)LX_REG(ucp, REG_R0);
 
-		/*
-		 * XXX
-		 */
-		ret = (long)LX_REG(ucp, REG_R0);
-		if (flags & LX_UC_RESTART_SYSCALL && ret == -4) {
+		if (flags & LX_UC_RESTART_SYSCALL && ret == -lx_errno(EINTR)) {
 			lx_debug("restarting interrupted system call %d",
 			    (int)(uintptr_t)ucp->uc_brand_data[0]);
+			/*
+			 * Both the "int80" and "syscall" instructions are
+			 * two bytes long.  If we wind back by two bytes,
+			 * the system call will fire again when we restore
+			 * the context.
+			 */
 			LX_REG(ucp, REG_PC) -= 2;
 			LX_REG(ucp, REG_R0) =
 			    (int)(uintptr_t)ucp->uc_brand_data[2];
@@ -1640,12 +1655,12 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	 * including:
 	 *
 	 *   ----------------------------------------------------- old %sp
-	 *   - lx_sigdeliver_frame_t
-	 *   - (ucontext_t pointers and stack magic)
-	 *   -----------------------------------------------------
-	 *   - (amd64-only 8-byte alignment gap)
-	 *   -----------------------------------------------------
-	 *   - frame of size "stacksz" from the stack builder
+	 *   | lx_sigdeliver_frame_t
+	 *   | (ucontext_t pointers and stack magic)
+	 *   |----------------------------------------------------
+	 *   | (amd64-only 8-byte alignment gap)
+	 *   |----------------------------------------------------
+	 *   V frame of size "stacksz" from the stack builder
 	 *   ----------------------------------------------------- new %sp
 	 */
 #if defined(_LP64)
@@ -1819,6 +1834,8 @@ lx_sigaction_common(int lx_sig, struct lx_sigaction *lxsp,
 			return (-errno);
 
 		if ((sig = ltos_signo[lx_sig]) != -1) {
+			if (sig == SIGABRT)
+				return (0);
 			/*
 			 * Block this signal while messing with its dispostion
 			 */

@@ -195,9 +195,6 @@ long max_pid;			/* native maximum PID */
 
 thread_key_t lx_tsd_key;
 
-extern void _sigon(void);
-extern void _sigoff(void);
-
 int
 lx_errno(int err)
 {
@@ -376,7 +373,6 @@ lx_unsupported(char *msg, ...)
 
 	/* make a brand call so we can easily dtrace unsupported actions */
 	va_start(ap, msg);
-	/* LINTED [possible expansion issues] */
 	(void) vsnprintf(dmsg, sizeof (dmsg), msg, ap);
 	dmsg[255] = '\0';
 	lastc = strlen(dmsg) - 1;
@@ -428,7 +424,8 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	long emu_ret;
 	int emu_errno = 0;
 
-	LX_EMULATE_ENTER(ucp, syscall_num, args);
+	LX_EMULATE_ENTER(ucp, syscall_num, args[0], args[1], args[2], args[3],
+	    args[4], args[5]);
 
 	/*
 	 * The kernel ensures that the syscall_num is sane; Use it as is.
@@ -751,8 +748,8 @@ lx_init(int argc, char *argv[], char *envp[])
 		 * The brand linker expects the stack pointer to point to
 		 * "argc", which is just before &argv[0].
 		 */
-		void *sp = ((void *)argv) - sizeof (void *);
-		void *entry = (void *)edp.ed_ldentry;
+		uintptr_t sp = (uintptr_t)argv - sizeof (void *);
+		uintptr_t entry = edp.ed_ldentry;
 		ucontext_t jump_uc;
 
 		if (getcontext(&jump_uc) != 0) {
@@ -767,8 +764,8 @@ lx_init(int argc, char *argv[], char *envp[])
 		jump_uc.uc_flags = UC_CPU;
 		jump_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
 
-		jump_uc.uc_mcontext.gregs[REG_FP] = (uintptr_t)NULL;
-		jump_uc.uc_mcontext.gregs[REG_SP] = (uintptr_t)sp;
+		jump_uc.uc_mcontext.gregs[REG_FP] = NULL;
+		jump_uc.uc_mcontext.gregs[REG_SP] = sp;
 		jump_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)entry;
 
 		lx_debug("starting Linux program sp %p ldentry %p", sp, entry);
@@ -862,7 +859,6 @@ lx_find_brand_sp(void)
 ucontext_t *
 lx_syscall_regs(void)
 {
-	int ret;
 	ucontext_t *ucp = NULL;
 	uintptr_t flags;
 

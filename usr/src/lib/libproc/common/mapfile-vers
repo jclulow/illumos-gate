@@ -133,6 +133,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	Plookup_by_addr;
 	Plookup_by_name;
 	Plwp_alt_stack;
+	Plwp_getbrandstatus;
 	Plwp_getfpregs;
 	Plwp_getpsinfo;
 	Plwp_getregs;

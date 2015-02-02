@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_debug.h>
 #include <sys/lx_syscall.h>
@@ -197,6 +198,8 @@ typedef struct lx_user_regs {
 	long lxur_xfs;
 	long lxur_xgs;
 } lx_user_regs_t;
+#define	lxur_r0		lxur_rax
+#define	lxur_orig_r0	lxur_orig_rax
 #else
 typedef struct lx_user_regs {
 	long lxur_ebx;
@@ -217,6 +220,8 @@ typedef struct lx_user_regs {
 	long lxur_esp;
 	long lxur_xss;
 } lx_user_regs_t;
+#define	lxur_r0		lxur_eax
+#define	lxur_orig_r0	lxur_orig_eax
 #endif
 
 typedef struct lx_user {
@@ -333,246 +338,114 @@ get_lwpstatus(pid_t pid, lwpid_t lwpid, lwpstatus_t *lsp)
 	return (0);
 }
 
-static uintptr_t
-syscall_regs(int fd, uintptr_t fp, pid_t pid)
+static int
+get_brandstatus(pid_t pid, lwpid_t lwpid, lx_brandstatus_t *lxbs)
 {
-	uintptr_t addr, done;
-	struct frame fr;
-	auxv_t auxv;
-	int afd;
-#if defined(_LP64)
-	Elf64_Phdr phdr;
-#elif defined(_ILP32)
-	Elf32_Phdr phdr;
-#endif
+	int fd;
 
-	/*
-	 * XXX this mechanism will require a rework.
-	 */
-	assert(0);
+	if ((fd = open_lwpfile(pid, lwpid, O_RDONLY, "brandstatus")) < 0)
+		return (-ESRCH);
+
+	if (read(fd, lxbs, sizeof (lx_brandstatus_t)) !=
+	    sizeof (lx_brandstatus_t)) {
+		(void) close(fd);
+		return (-EIO);
+	}
+
+	(void) close(fd);
+
 	return (0);
-
-#if 0
-	/*
-	 * Try to walk the stack looking for a return address that corresponds
-	 * to the traced process's lx_emulate_done symbol. This relies on the
-	 * fact that the brand library in the traced process is the same as the
-	 * brand library in this process (indeed, this is true of all processes
-	 * in a given branded zone).
-	 */
-
-	/*
-	 * Find the base address for the brand library in the traced process
-	 * by grabbing the AT_PHDR auxv entry, reading in the program header
-	 * at that location and subtracting off the p_vaddr member. We use
-	 * this to compute the location of lx_emulate done in the traced
-	 * process.
-	 */
-	if ((afd = open_procfile(pid, O_RDONLY, "auxv")) < 0)
-		return (0);
-
-	do {
-		if (read(afd, &auxv, sizeof (auxv)) != sizeof (auxv)) {
-			(void) close(afd);
-			return (0);
-		}
-	} while (auxv.a_type != AT_PHDR);
-
-	(void) close(afd);
-
-	if (pread(fd, &phdr, sizeof (phdr), auxv.a_un.a_val) != sizeof (phdr)) {
-		lx_debug("failed to read brand library's phdr");
-		return (0);
-	}
-
-	addr = auxv.a_un.a_val - phdr.p_vaddr;
-	done = (uintptr_t)&lx_emulate_done - (uintptr_t)&_START_ + addr;
-
-	fr.fr_savfp = fp;
-
-	do {
-		addr = fr.fr_savfp;
-		if (pread(fd, &fr, sizeof (fr), addr) != sizeof (fr)) {
-			lx_debug("ptrace read failed for stack walk");
-			return (0);
-		}
-
-		if (addr >= fr.fr_savfp) {
-			lx_debug("ptrace stack not monotonically increasing "
-			    "%p %p (%p)", addr, fr.fr_savfp, done);
-			return (0);
-		}
-	} while (fr.fr_savpc != done);
-
-	/*
-	 * The first argument to lx_emulate is known to be an lx_regs_t
-	 * structure and the ABI specifies that it will be placed on the stack
-	 * immediately preceeding the return address.
-	 */
-	addr += sizeof (fr);
-
-	/*
-	 * On i386 we need to perform an additional read as we used the stack
-	 * to pass the argument to lx_emulate.  On amd64 we passed the argument
-	 * in %rdi so addr already contains the correct address.
-	 */
-#if defined(_ILP32)
-	if (pread(fd, &addr, sizeof (addr), addr) != sizeof (addr)) {
-		lx_debug("ptrace stack failed to read register set address");
-		return (0);
-	}
-#endif
-
-	return (addr);
-#endif
 }
 
 static int
 getregs(pid_t pid, lwpid_t lwpid, lx_user_regs_t *rp)
 {
+	lx_brandstatus_t lxbs;
 	lwpstatus_t status;
 	uintptr_t addr;
-	int fd, ret;
+	int ret;
 
-	if ((ret = get_lwpstatus(pid, lwpid, &status)) != 0)
+	if ((ret = get_lwpstatus(pid, lwpid, &status)) != 0 ||
+	    (ret = get_brandstatus(pid, lwpid, &lxbs)) != 0) {
 		return (ret);
+	}
 
-	if ((fd = open_procfile(pid, O_RDONLY, "as")) < 0)
-		return (-ESRCH);
+	if (status.pr_why != PR_BRANDPRIVATE) {
+		/*
+		 * The Linux process register state is only loaded into the LWP
+		 * "struct regs" when we are stopped for PR_BRANDPRIVATE.
+		 */
+		lx_debug("process not stopped for PR_BRANDPRIVATE");
+		abort();
+	}
 
 	/*
-	 * If we find the syscall regs (and are therefore in an emulated
-	 * syscall, use the register set at given address. Otherwise, use the
-	 * registers as reported by /proc.
+	 * Copy the register state we loaded from the LWP status:
 	 */
-	if ((addr = syscall_regs(fd, status.pr_reg[REG_FP], pid)) != 0) {
-		lx_regs_t regs;
-
-		if (pread(fd, &regs, sizeof (regs), addr) != sizeof (regs)) {
-			(void) close(fd);
-			lx_debug("ptrace failed to read register set");
-			return (-EIO);
-		}
-
-		(void) close(fd);
-
 #if defined(_LP64)
-		rp->lxur_r15 = regs.lxr_r15;
-		rp->lxur_r14 = regs.lxr_r14;
-		rp->lxur_r13 = regs.lxr_r13;
-		rp->lxur_r12 = regs.lxr_r12;
-		rp->lxur_rbp = regs.lxr_rbp;
-		rp->lxur_rbx = regs.lxr_rbx;
-		rp->lxur_r11 = regs.lxr_r11;
-		rp->lxur_r10 = regs.lxr_r10;
-		rp->lxur_r9 = regs.lxr_r9;
-		rp->lxur_r8 = regs.lxr_r8;
-		rp->lxur_rax = regs.lxr_rax;
-		rp->lxur_rcx = regs.lxr_rcx;
-		rp->lxur_rdx = regs.lxr_rdx;
-		rp->lxur_rsi = regs.lxr_rsi;
-		rp->lxur_rdi = regs.lxr_rdi;
-		rp->lxur_orig_rax = regs.lxr_orig_rax;
-		rp->lxur_rip = regs.lxr_rip;
-		rp->lxur_xcs = status.pr_reg[REG_CS];
-		rp->lxur_rflags = status.pr_reg[REG_RFL];
-		rp->lxur_rsp = regs.lxr_rsp;
-		rp->lxur_xss = status.pr_reg[REG_SS];
-		rp->lxur_xfs_base = status.pr_reg[REG_FSBASE];
-		rp->lxur_xgs_base = status.pr_reg[REG_GSBASE];
-		rp->lxur_xds = status.pr_reg[REG_DS];
-		rp->lxur_xes = status.pr_reg[REG_ES];
-		rp->lxur_xfs = regs.lxr_fs;
-		rp->lxur_xgs = status.pr_reg[REG_GS];
+	rp->lxur_rax = status.pr_reg[REG_RAX];
+	rp->lxur_orig_rax = 0;
+	rp->lxur_r15 = status.pr_reg[REG_R15];
+	rp->lxur_r14 = status.pr_reg[REG_R14];
+	rp->lxur_r13 = status.pr_reg[REG_R13];
+	rp->lxur_r12 = status.pr_reg[REG_R12];
+	rp->lxur_rbp = status.pr_reg[REG_RBP];
+	rp->lxur_rbx = status.pr_reg[REG_RBX];
+	rp->lxur_r11 = status.pr_reg[REG_R11];
+	rp->lxur_r10 = status.pr_reg[REG_R10];
+	rp->lxur_r9 = status.pr_reg[REG_R9];
+	rp->lxur_r8 = status.pr_reg[REG_R8];
+	rp->lxur_rcx = status.pr_reg[REG_RCX];
+	rp->lxur_rdx = status.pr_reg[REG_RDX];
+	rp->lxur_rsi = status.pr_reg[REG_RSI];
+	rp->lxur_rdi = status.pr_reg[REG_RDI];
+	rp->lxur_rip = status.pr_reg[REG_RIP];
+	rp->lxur_xcs = status.pr_reg[REG_CS];
+	rp->lxur_rflags = status.pr_reg[REG_RFL];
+	rp->lxur_rsp = status.pr_reg[REG_RSP];
+	rp->lxur_xss = status.pr_reg[REG_SS];
+	rp->lxur_xfs = status.pr_reg[REG_FSBASE];
+	rp->lxur_xgs = status.pr_reg[REG_GSBASE];
+	rp->lxur_xds = status.pr_reg[REG_DS];
+	rp->lxur_xes = status.pr_reg[REG_ES];
+	rp->lxur_xfs = status.pr_reg[REG_FSBASE];
+	rp->lxur_xgs = status.pr_reg[REG_GSBASE];
 #elif defined(_ILP32)
-		rp->lxur_ebx = regs.lxr_ebx;
-		rp->lxur_ecx = regs.lxr_ecx;
-		rp->lxur_edx = regs.lxr_edx;
-		rp->lxur_esi = regs.lxr_esi;
-		rp->lxur_edi = regs.lxr_edi;
-		rp->lxur_ebp = regs.lxr_ebp;
-		rp->lxur_eax = regs.lxr_eax;
-		rp->lxur_xds = status.pr_reg[DS];
-		rp->lxur_xes = status.pr_reg[ES];
-		rp->lxur_xfs = status.pr_reg[FS];
-		rp->lxur_xgs = regs.lxr_gs;
-		rp->lxur_orig_eax = regs.lxr_orig_eax;
-		rp->lxur_eip = regs.lxr_eip;
-		rp->lxur_xcs = status.pr_reg[CS];
-		rp->lxur_eflags = status.pr_reg[EFL];
-		rp->lxur_esp = regs.lxr_esp;
-		rp->lxur_xss = status.pr_reg[SS];
+	rp->lxur_eax = status.pr_reg[EAX];
+	rp->lxur_orig_eax = 0;
+	rp->lxur_ebx = status.pr_reg[EBX];
+	rp->lxur_ecx = status.pr_reg[ECX];
+	rp->lxur_edx = status.pr_reg[EDX];
+	rp->lxur_esi = status.pr_reg[ESI];
+	rp->lxur_edi = status.pr_reg[EDI];
+	rp->lxur_ebp = status.pr_reg[EBP];
+	rp->lxur_xds = status.pr_reg[DS];
+	rp->lxur_xes = status.pr_reg[ES];
+	rp->lxur_xfs = status.pr_reg[FS];
+	rp->lxur_xgs = status.pr_reg[GS];
+	rp->lxur_eip = status.pr_reg[EIP];
+	rp->lxur_xcs = status.pr_reg[CS];
+	rp->lxur_eflags = status.pr_reg[EFL];
+	rp->lxur_esp = status.pr_reg[UESP];
+	rp->lxur_xss = status.pr_reg[SS];
 #endif
 
-	} else {
-		(void) close(fd);
-
-#if defined(_LP64)
-		rp->lxur_r15 = status.pr_reg[REG_R15];
-		rp->lxur_r14 = status.pr_reg[REG_R14];
-		rp->lxur_r13 = status.pr_reg[REG_R13];
-		rp->lxur_r12 = status.pr_reg[REG_R12];
-		rp->lxur_rbp = status.pr_reg[REG_RBP];
-		rp->lxur_rbx = status.pr_reg[REG_RBX];
-		rp->lxur_r11 = status.pr_reg[REG_R11];
-		rp->lxur_r10 = status.pr_reg[REG_R10];
-		rp->lxur_r9 = status.pr_reg[REG_R9];
-		rp->lxur_r8 = status.pr_reg[REG_R8];
-		rp->lxur_rax = status.pr_reg[REG_RAX];
-		rp->lxur_rcx = status.pr_reg[REG_RCX];
-		rp->lxur_rdx = status.pr_reg[REG_RDX];
-		rp->lxur_rsi = status.pr_reg[REG_RSI];
-		rp->lxur_rdi = status.pr_reg[REG_RDI];
-		rp->lxur_orig_rax = 0;
-		rp->lxur_rip = status.pr_reg[REG_RIP];
-		rp->lxur_xcs = status.pr_reg[REG_CS];
-		rp->lxur_rflags = status.pr_reg[REG_RFL];
-		rp->lxur_rsp = status.pr_reg[REG_RSP];
-		rp->lxur_xss = status.pr_reg[REG_SS];
-		rp->lxur_xfs = status.pr_reg[REG_FSBASE];
-		rp->lxur_xgs = status.pr_reg[REG_GSBASE];
-		rp->lxur_xds = status.pr_reg[REG_DS];
-		rp->lxur_xes = status.pr_reg[REG_ES];
-		rp->lxur_xfs = status.pr_reg[REG_FSBASE];
-		rp->lxur_xgs = status.pr_reg[REG_GSBASE];
-#elif defined(_ILP32)
-		rp->lxur_ebx = status.pr_reg[EBX];
-		rp->lxur_ecx = status.pr_reg[ECX];
-		rp->lxur_edx = status.pr_reg[EDX];
-		rp->lxur_esi = status.pr_reg[ESI];
-		rp->lxur_edi = status.pr_reg[EDI];
-		rp->lxur_ebp = status.pr_reg[EBP];
-		rp->lxur_eax = status.pr_reg[EAX];
-		rp->lxur_xds = status.pr_reg[DS];
-		rp->lxur_xes = status.pr_reg[ES];
-		rp->lxur_xfs = status.pr_reg[FS];
-		rp->lxur_xgs = status.pr_reg[GS];
-		rp->lxur_orig_eax = 0;
-		rp->lxur_eip = status.pr_reg[EIP];
-		rp->lxur_xcs = status.pr_reg[CS];
-		rp->lxur_eflags = status.pr_reg[EFL];
-		rp->lxur_esp = status.pr_reg[UESP];
-		rp->lxur_xss = status.pr_reg[SS];
-#endif
-
-		/*
-		 * If the target process has just returned from exec, it's not
-		 * going to be sitting in the emulation function. In that case
-		 * we need to manually fake up the values for %eax and orig_eax
-		 * to indicate a successful return and that the traced process
-		 * had called execve (respectively).
-		 */
-		if (status.pr_why == PR_SYSEXIT &&
-		    status.pr_what == SYS_execve) {
-#if defined(_LP64)
-			rp->lxur_rax = 0;
-			rp->lxur_orig_rax = LX_SYS_execve;
-#elif defined(_ILP32)
-			rp->lxur_eax = 0;
-			rp->lxur_orig_eax = LX_SYS_execve;
-#endif
-		}
+	switch (status.pr_what) {
+	case LX_PR_SYSENTRY:
+		rp->lxur_orig_r0 = rp->lxur_r0;
+		rp->lxur_r0 = -lx_errno(ENOSYS);
+		break;
+	case LX_PR_SYSEXIT:
+		rp->lxur_orig_r0 = lxbs.lxbs_syscall_num;
+		break;
+	default:
+		lx_debug("process stopped for unknown BRANDPRIVATE reason");
+		abort();
 	}
+
+	/*
+	 * XXX do we need special handling for tracing a return from execve(2)?
+	 */
 
 	return (0);
 }
@@ -582,78 +455,90 @@ setregs(pid_t pid, lwpid_t lwpid, const lx_user_regs_t *rp)
 {
 	long ctl[1 + sizeof (prgregset_t) / sizeof (long)];
 	lwpstatus_t status;
+	lx_brandstatus_t lxbs;
 	uintptr_t addr;
 	int fd, ret;
+	boolean_t use_orig = B_FALSE;
 
-	if ((ret = get_lwpstatus(pid, lwpid, &status)) != 0)
+	if ((ret = get_lwpstatus(pid, lwpid, &status)) != 0 ||
+	    (ret = get_brandstatus(pid, lwpid, &lxbs)) != 0) {
 		return (ret);
+	}
 
-	if ((fd = open_procfile(pid, O_RDWR, "as")) < 0)
-		return (-ESRCH);
+	if (status.pr_why != PR_BRANDPRIVATE) {
+		/*
+		 * The Linux process register state is only loaded into the LWP
+		 * "struct regs" when we are stopped for PR_BRANDPRIVATE.
+		 */
+		lx_debug("process not stopped for PR_BRANDPRIVATE");
+		abort();
+	}
+
+	switch (status.pr_what) {
+	case LX_PR_SYSENTRY:
+		/*
+		 * The in-kernel argument processing routine does not copy
+		 * the system call number from %eax/%rax until after the
+		 * ptrace stop point.  Set the register to the value from
+		 * the "orig" member.
+		 */
+		use_orig = B_TRUE;
+		break;
+	case LX_PR_SYSEXIT:
+		break;
+	default:
+		lx_debug("process stopped for unknown BRANDPRIVATE reason");
+		abort();
+	}
 
 	/*
-	 * If we find the syscall regs (and are therefore in an emulated
-	 * syscall, modify the register set at given address and set the
-	 * remaining registers through the /proc interface. Otherwise just use
-	 * the /proc interface to set register values;
+	 * Copy the registers to the LWP state:
 	 */
-	if ((addr = syscall_regs(fd, status.pr_reg[REG_FP], pid)) != 0) {
-#if defined(_ILP32)
-		lx_regs_t regs;
-
-		regs.lxr_ebx = rp->lxur_ebx;
-		regs.lxr_ecx = rp->lxur_ecx;
-		regs.lxr_edx = rp->lxur_edx;
-		regs.lxr_esi = rp->lxur_esi;
-		regs.lxr_edi = rp->lxur_edi;
-		regs.lxr_ebp = rp->lxur_ebp;
-		regs.lxr_eax = rp->lxur_eax;
-		regs.lxr_gs = rp->lxur_xgs;
-		regs.lxr_orig_eax = rp->lxur_orig_eax;
-		regs.lxr_eip = rp->lxur_eip;
-		regs.lxr_esp = rp->lxur_esp;
-
-		if (pwrite(fd, &regs, sizeof (regs), addr) != sizeof (regs)) {
-			(void) close(fd);
-			lx_debug("ptrace failed to write register set");
-			return (-EIO);
-		}
+#if defined(_LP64)
+	status.pr_reg[REG_RAX] = use_orig ? rp->lxur_orig_rax : rp->lxur_rax;
+	status.pr_reg[REG_R15] = rp->lxur_r15;
+	status.pr_reg[REG_R14] = rp->lxur_r14;
+	status.pr_reg[REG_R13] = rp->lxur_r13;
+	status.pr_reg[REG_R12] = rp->lxur_r12;
+	status.pr_reg[REG_RBP] = rp->lxur_rbp;
+	status.pr_reg[REG_RBX] = rp->lxur_rbx;
+	status.pr_reg[REG_R11] = rp->lxur_r11;
+	status.pr_reg[REG_R10] = rp->lxur_r10;
+	status.pr_reg[REG_R9] = rp->lxur_r9;
+	status.pr_reg[REG_R8] = rp->lxur_r8;
+	status.pr_reg[REG_RCX] = rp->lxur_rcx;
+	status.pr_reg[REG_RDX] = rp->lxur_rdx;
+	status.pr_reg[REG_RSI] = rp->lxur_rsi;
+	status.pr_reg[REG_RDI] = rp->lxur_rdi;
+	status.pr_reg[REG_RIP] = rp->lxur_rip;
+	status.pr_reg[REG_CS] = rp->lxur_xcs;
+	status.pr_reg[REG_RFL] = rp->lxur_rflags;
+	status.pr_reg[REG_RSP] = rp->lxur_rsp;
+	status.pr_reg[REG_SS] = rp->lxur_xss;
+	status.pr_reg[REG_FSBASE] = rp->lxur_xfs;
+	status.pr_reg[REG_GSBASE] = rp->lxur_xgs;
+	status.pr_reg[REG_DS] = rp->lxur_xds;
+	status.pr_reg[REG_ES] = rp->lxur_xes;
+	status.pr_reg[REG_FSBASE] = rp->lxur_xfs;
+	status.pr_reg[REG_GSBASE] = rp->lxur_xgs;
+#elif defined(_ILP32)
+	status.pr_reg[EAX] = use_orig ? rp->lxur_orig_eax : rp->lxur_eax;
+	status.pr_reg[EBX] = rp->lxur_ebx;
+	status.pr_reg[ECX] = rp->lxur_ecx;
+	status.pr_reg[EDX] = rp->lxur_edx;
+	status.pr_reg[ESI] = rp->lxur_esi;
+	status.pr_reg[EDI] = rp->lxur_edi;
+	status.pr_reg[EBP] = rp->lxur_ebp;
+	status.pr_reg[DS] = rp->lxur_xds;
+	status.pr_reg[ES] = rp->lxur_xes;
+	status.pr_reg[FS] = rp->lxur_xfs;
+	status.pr_reg[GS] = rp->lxur_xgs;
+	status.pr_reg[EIP] = rp->lxur_eip;
+	status.pr_reg[CS] = rp->lxur_xcs;
+	status.pr_reg[EFL] = rp->lxur_eflags;
+	status.pr_reg[UESP] = rp->lxur_esp;
+	status.pr_reg[SS] = rp->lxur_xss;
 #endif
-
-		(void) close(fd);
-
-#if defined(_ILP32)
-		status.pr_reg[DS] = rp->lxur_xds;
-		status.pr_reg[ES] = rp->lxur_xes;
-		status.pr_reg[FS] = rp->lxur_xfs;
-		status.pr_reg[CS] = rp->lxur_xcs;
-		status.pr_reg[EFL] = rp->lxur_eflags;
-		status.pr_reg[SS] = rp->lxur_xss;
-#endif
-
-	} else {
-		(void) close(fd);
-
-#if defined(_ILP32)
-		status.pr_reg[EBX] = rp->lxur_ebx;
-		status.pr_reg[ECX] = rp->lxur_ecx;
-		status.pr_reg[EDX] = rp->lxur_edx;
-		status.pr_reg[ESI] = rp->lxur_esi;
-		status.pr_reg[EDI] = rp->lxur_edi;
-		status.pr_reg[EBP] = rp->lxur_ebp;
-		status.pr_reg[EAX] = rp->lxur_eax;
-		status.pr_reg[DS] = rp->lxur_xds;
-		status.pr_reg[ES] = rp->lxur_xes;
-		status.pr_reg[FS] = rp->lxur_xfs;
-		status.pr_reg[GS] = rp->lxur_xgs;
-		status.pr_reg[EIP] = rp->lxur_eip;
-		status.pr_reg[CS] = rp->lxur_xcs;
-		status.pr_reg[EFL] = rp->lxur_eflags;
-		status.pr_reg[UESP] = rp->lxur_esp;
-		status.pr_reg[SS] = rp->lxur_xss;
-		status.pr_reg[SS] = rp->lxur_xss;
-#endif
-	}
 
 	if ((fd = open_lwpfile(pid, lwpid, O_WRONLY, "lwpctl")) < 0)
 		return (-ESRCH);
@@ -2262,7 +2147,8 @@ lx_ptrace_wait(siginfo_t *infop)
 	ptrace_monitor_map_t *p, **pp;
 	pid_t lxpid, pid = infop->si_pid;
 	lwpid_t lwpid;
-	int fd;
+	int ret;
+	lx_brandstatus_t lxbs;
 	pstatus_t status;
 
 	/*
@@ -2282,6 +2168,12 @@ lx_ptrace_wait(siginfo_t *infop)
 		}
 	}
 	(void) mutex_unlock(&ptrace_map_mtx);
+
+	if (get_brandstatus(pid, lwpid, &lxbs) != 0) {
+		/*
+		 * XXX ERROR?
+		 */
+	}
 
 	if (infop->si_code == CLD_TRAPPED) {
 		/*
@@ -2344,22 +2236,15 @@ found:
 	/*
 	 * If we can't find the traced process, kill off its monitor.
 	 */
-	if ((fd = open_lwpfile(pid, lwpid, O_RDONLY, "lwpstatus")) < 0) {
-		assert(errno == ENOENT);
+	if ((ret = get_lwpstatus(pid, lwpid, &status.pr_lwp)) != 0 ||
+	    (ret = get_brandstatus(pid, lwpid, &lxbs)) != 0) {
+		assert(ret == -ESRCH);
 		monitor_kill(lxpid, pid);
 		infop->si_code = CLD_EXITED;
 		infop->si_status = 0;
 		infop->si_pid = lxpid;
 		return (0);
 	}
-
-	if (read(fd, &status.pr_lwp, sizeof (status.pr_lwp)) !=
-	    sizeof (status.pr_lwp)) {
-		lx_err("read lwpstatus failed %d %s", fd, strerror(errno));
-		assert(0);
-	}
-
-	(void) close(fd);
 
 	/*
 	 * If the traced process isn't stopped, this is a truly spurious
@@ -2372,6 +2257,41 @@ found:
 	}
 
 	switch (status.pr_lwp.pr_why) {
+	case PR_BRANDPRIVATE:
+		/*
+		 * This is an explicit ptrace stop point.  Determine which
+		 * type.
+		 */
+		switch (status.pr_lwp.pr_what) {
+		case LX_PR_SYSENTRY:
+		case LX_PR_SYSEXIT:
+			/*
+			 * The process stopped for "syscall-enter-stop" or
+			 * "syscall-exit-stop", as described in the Linux
+			 * ptrace(2) manual page.
+			 */
+			infop->si_code = CLD_TRAPPED;
+			infop->si_status = SIGTRAP;
+			break;
+
+		case LX_PR_SIGNALLED:
+			/*
+			 * The process is stopped in lx_call_user_handler(),
+			 * about to deliver a signal.  This is the ptrace(2)
+			 * "signal-stop".
+			 */
+			assert(lxbs.lxbs_ptrace_sig != 0);
+			infop->si_code = CLD_TRAPPED;
+			infop->si_status = lxbs.lxbs_ptrace_sig;
+			break;
+
+		default:
+			lx_err("unexpected BRANDPRIVATE %d",
+			    status.pr_lwp.pr_what);
+			assert(0);
+		}
+		break;
+
 	case PR_SIGNALLED:
 		/*
 		 * If the traced process got a SIGWAITING, we must be in the

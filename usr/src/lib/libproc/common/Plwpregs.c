@@ -386,6 +386,23 @@ Plwp_getspymaster(struct ps_prochandle *P, lwpid_t lwpid, psinfo_t *ps)
 }
 
 int
+Plwp_getbrandstatus(struct ps_prochandle *P, lwpid_t lwpid, void *data,
+    size_t datasz)
+{
+	if (P->state == PS_IDLE) {
+		errno = ENODATA;
+		return (-1);
+	}
+
+	if (P->state != PS_DEAD) {
+		return (getlwpfile(P, lwpid, "brandstatus", data, datasz));
+	}
+
+	errno = ENODATA;
+	return (-1);
+}
+
+int
 Plwp_stack(struct ps_prochandle *P, lwpid_t lwpid, stack_t *stkp)
 {
 	uintptr_t addr;

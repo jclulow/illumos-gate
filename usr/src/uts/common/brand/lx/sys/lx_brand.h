@@ -94,6 +94,9 @@ extern "C" {
 #define	B_HELPER_SIGQUEUE	147
 #define	B_HELPER_TGSIGQUEUE	148
 #define	B_PTRACE_GETEVENTMSG	149
+#define	B_PTRACE_STOP		150
+#define	B_PTRACE_TRACEME	151
+#define	B_PTRACE_ATTACH		152
 
 /* B_PTRACE_EXT_OPTS subcommands */
 #define	 B_PTRACE_EXT_OPTS_SET	1
@@ -131,6 +134,16 @@ extern "C" {
 #define	LX_PTRACE_EVENT_VFORK_DONE	0x500
 #define	LX_PTRACE_EVENT_EXIT		0x600
 #define	LX_PTRACE_EVENT_SECCOMP		0x700
+
+/*
+ * Brand-private values for the "pr_what" member of lwpstatus, for use with
+ * the PR_BRANDPRIVATE stop reason.  These reasons are validated in
+ * lx_stop_notify(); update it if you add new reasons here.
+ */
+#define	LX_PR_SYSENTRY		1
+#define	LX_PR_SYSEXIT		2
+#define	LX_PR_SIGNALLED		3
+
 
 #define	LX_VERSION_1		1
 #define	LX_VERSION		LX_VERSION_1
@@ -300,7 +313,6 @@ typedef lx_elf_data32_t lx_elf_data_t;
 typedef struct lx_proc_data {
 	uintptr_t l_handler;	/* address of user-space handler */
 	pid_t l_ppid;		/* pid of originating parent proc */
-	uint64_t l_ptrace;	/* process being observed with ptrace */
 	uint_t l_ptrace_opts;	/* process's extended ptrace options */
 	uint_t l_ptrace_event;	/* extended ptrace option trap event */
 	uint_t l_ptrace_is_traced; /* set if traced due to ptrace setoptions */
@@ -323,6 +335,32 @@ typedef ulong_t lx_affmask_t[LX_AFF_ULONGS];
 
 /* Max. length of kernel version string */
 #define	LX_VERS_MAX	16
+
+/*
+ * Layout of /proc/<pid>/lwp/<lwpid>/brandstatus" file.
+ */
+typedef struct lx_brandstatus {
+	char		lxbs_brand[8];
+	uint8_t		lxbs_stack_mode;
+	uintptr_t	lxbs_ntv_stack;
+	uintptr_t	lxbs_ntv_stack_current;
+	uintptr_t	lxbs_lx_fsbase;
+	uintptr_t	lxbs_ntv_fsbase;
+	int32_t		lxbs_syscall_num;
+} lx_brandstatus_t;
+
+#if defined(_SYSCALL32_IMPL)
+typedef struct lx_brandstatus32 {
+	char		lxbs_brand[8];
+	uint8_t		lxbs_stack_mode;
+	uint32_t	lxbs_ntv_stack;
+	uint32_t	lxbs_ntv_stack_current;
+	uint32_t	lxbs_lx_fsbase;
+	uint32_t	lxbs_ntv_fsbase;
+	int32_t		lxbs_syscall_num;
+} lx_brandstatus32_t;
+#endif
+
 
 /*
  * Flag values for uc_brand_data[0] in the ucontext_t:
@@ -373,7 +411,24 @@ typedef struct lx_lwp_data {
 	void	*br_scall_args;
 	int	br_args_size; /* size in bytes of br_scall_args */
 
-	uint_t	br_ptrace;		/* ptrace is active for this LWP */
+	/*
+	 * ptrace(2) tracking:
+	 */
+	boolean_t br_ptrace_exiting;
+	lx_ptrace_accord_t *br_ptrace_tracer;
+	lx_ptrace_accord_t *br_ptrace_accord;
+	list_node_t br_ptrace_linkage;
+
+	boolean_t br_ptrace;		/* ptrace is active for this LWP */
+
+	/*
+	 * If usermode emulation wishes to stop the process for ptrace
+	 * tracers, this member will point to the ucontext_t for the
+	 * current preserved Linux process state.  The tracer may use
+	 * this pointer to modify the context before restarting the
+	 * LWP.
+	 */
+	uintptr_t br_ptrace_ucp;
 
 	int	br_syscall_num;		/* current system call number */
 	boolean_t br_syscall_restart;	/* should restart on EINTR */
@@ -438,6 +493,7 @@ extern void lx_switch_to_native(klwp_t *);
 extern int lx_syscall_hook(void);
 extern int lx_syscall_return(klwp_t *, int, long);
 
+extern boolean_t lx_ptrace_fire(lx_lwp_data_t *, int);
 extern void lx_trace_sysenter(int, uintptr_t *);
 extern void lx_trace_sysreturn(int, long);
 
