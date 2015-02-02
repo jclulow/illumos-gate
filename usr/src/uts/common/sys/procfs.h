@@ -233,6 +233,7 @@ typedef struct pstatus {
 #define	PR_FAULTED	6
 #define	PR_SUSPENDED	7
 #define	PR_CHECKPOINT	8
+#define	PR_BRANDPRIVATE	9
 
 /*
  * lwp ps(1) information file.  /proc/<pid>/lwp/<lwpid>/lwpsinfo

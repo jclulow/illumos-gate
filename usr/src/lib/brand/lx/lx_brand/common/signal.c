@@ -1550,7 +1550,14 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	ucontext_t *ucp = (ucontext_t *)p;
 	uintptr_t gs;
 	size_t stksize;
-	int lx_sig;
+	int32_t lx_sig;
+	boolean_t siglwp = B_FALSE;
+
+	if (sig == SIGLWP) {
+		siglwp = B_TRUE;
+		lx_debug("received SIGLWP! pretending this is SIGSTOP.\n");
+		sig = SIGSTOP;
+	}
 
 	/*
 	 * If Illumos signal has no Linux equivalent, effectively ignore it.
@@ -1558,6 +1565,29 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	if ((lx_sig = stol_signo[sig]) == -1) {
 		lx_unsupported("caught Illumos signal %d, no Linux equivalent",
 		    sig);
+		return;
+	}
+
+	/*
+	 * Allow ptrace(2) to interpose on emulated signals.  The interface
+	 * allows the tracer to replace, or potentially surpress, the signal
+	 * we would otherwise deliver.
+	 */
+	assert(syscall(SYS_brand, B_PTRACE_STOP_FOR_SIG, LX_PR_SIGNALLED,
+	    &lx_sig) == 0);
+	if (lx_sig < 1) {
+		lx_debug("interposed signal was cleared by ptrace(2)");
+		return;
+	} else {
+		lx_debug("post-ptrace the signal is %d", lx_sig);
+	}
+
+	/*
+	 * XXX do we want to raise a _real_ SIGSTOP here?
+	 */
+	if (siglwp) {
+		lx_debug("raising real SIGSTOP!");
+		raise(SIGSTOP);
 		return;
 	}
 
