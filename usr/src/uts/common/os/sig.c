@@ -939,6 +939,16 @@ stop(int why, int what)
 		}
 		break;
 
+	case PR_BRANDPRIVATE:
+		/*
+		 * We have been stopped by the brand code for a brand-private
+		 * reason.  This is an asynchronous stop affecting only this
+		 * LWP.
+		 */
+		VERIFY(PROC_IS_BRANDED(p));
+		flags &= ~TS_BSTART;
+		break;
+
 	default:	/* /proc stop */
 		flags &= ~TS_PSTART;
 		/*
@@ -1050,7 +1060,8 @@ stop(int why, int what)
 		}
 	}
 
-	if (why != PR_JOBCONTROL && why != PR_CHECKPOINT) {
+	if (why != PR_JOBCONTROL && why != PR_CHECKPOINT &&
+	    why != PR_BRANDPRIVATE) {
 		/*
 		 * Do process-level notification when all lwps are
 		 * either stopped on events of interest to /proc
@@ -1155,6 +1166,13 @@ stop(int why, int what)
 	 */
 	if (why == PR_CHECKPOINT)
 		del_one_utstop();
+
+	/*
+	 * Allow the brand to post notification of this stop condition.
+	 */
+	if (PROC_IS_BRANDED(p) && BROP(p)->b_stop_notify != NULL) {
+		BROP(p)->b_stop_notify(p, lwp, why, what);
+	}
 
 	thread_lock(t);
 	ASSERT((t->t_schedflag & TS_ALLSTART) == 0);

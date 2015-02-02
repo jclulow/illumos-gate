@@ -455,6 +455,13 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 
 	ptrace_event = ptrace_clone_event(flags);
 
+	/*
+	 * Inform the kernel whether we wish to inherit a ptrace tracer on
+	 * the next fork/thr_create:
+	 */
+	assert(syscall(SYS_brand, B_PTRACE_CLONE_INHERIT,
+	    !!(flags & LX_CLONE_PTRACE)) == 0);
+
 	/* See if this is a fork() operation or a thr_create().  */
 	if (IS_FORK(flags) || IS_VFORK(flags)) {
 		if (flags & LX_CLONE_PARENT) {
@@ -462,9 +469,6 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			    "for threads.\n");
 			return (-ENOTSUP);
 		}
-
-		if (flags & LX_CLONE_PTRACE)
-			lx_ptrace_fork();
 
 		if ((flags & LX_CSIGNAL) == 0)
 			fork_flags |= FORK_NOSIGCHLD;
@@ -508,7 +512,6 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 				    (ulong_t)rval);
 			return ((rval < 0) ? -errno : rval);
 		}
-
 
 		/*
 		 * Set up additional data in the lx_proc_data structure as

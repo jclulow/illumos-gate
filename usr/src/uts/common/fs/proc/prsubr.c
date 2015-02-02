@@ -201,6 +201,7 @@ prchoose(proc_t *p)
 			case PR_SYSEXIT:
 			case PR_SIGNALLED:
 			case PR_FAULTED:
+			case PR_BRANDPRIVATE:
 				/*
 				 * Make an lwp calling exit() be the
 				 * last lwp seen in the process.

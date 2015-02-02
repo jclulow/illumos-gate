@@ -950,9 +950,10 @@ lx_init(int argc, char *argv[], char *envp[])
 	lx_tsd.lxtsd_gs = LWPGS_SEL;
 #endif
 
-	if ((err = thr_setspecific(lx_tsd_key, &lx_tsd)) != 0)
+	if ((err = thr_setspecific(lx_tsd_key, &lx_tsd)) != 0) {
 		lx_err_fatal("Unable to initialize thread-specific data: %s",
 		    strerror(err));
+	}
 
 	/*
 	 * Save the current context of this thread.

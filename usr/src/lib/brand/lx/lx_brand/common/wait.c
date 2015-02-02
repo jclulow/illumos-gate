@@ -101,7 +101,7 @@
 extern long max_pid;
 
 static int
-ltos_options(uintptr_t options)
+ltos_options(uintptr_t options, int *native_options, int *extra_options)
 {
 	int newoptions = 0;
 	int rval;
@@ -112,20 +112,8 @@ ltos_options(uintptr_t options)
 	    LX_WCLONE)) != 0) {
 		return (-1);
 	}
-	/*
-	 * We use the B_STORE_ARGS command to store any of LX_WNOTHREAD,
-	 * LX_WALL, and LX_WCLONE that have been set as options on this waitid
-	 * call. These flags are stored as part of the lwp_brand_data, so that
-	 * when there is a later syscall to waitid, the brand code there can
-	 * detect that we added extra flags here and use them as appropriate.
-	 * We pass them in here rather than the normal channel for flags to
-	 * prevent polluting the namespace.
-	 */
-	extra.waitid_flags = options & (LX_WNOTHREAD | LX_WALL | LX_WCLONE);
-	rval = syscall(SYS_brand, B_STORE_ARGS, &extra,
-	    sizeof (lx_waitid_args_t), NULL, NULL, NULL, NULL);
-	if (rval < 0)
-		return (rval);
+
+	*extra_options = options & (LX_WNOTHREAD | LX_WALL | LX_WCLONE);
 
 	if (options & LX_WNOHANG)
 		newoptions |= WNOHANG;
@@ -141,7 +129,8 @@ ltos_options(uintptr_t options)
 	/* The trapped option is implicit on Linux */
 	newoptions |= WTRAPPED;
 
-	return (newoptions);
+	*native_options = newoptions;
+	return (0);
 }
 
 static int
@@ -177,36 +166,6 @@ lx_wstat(int code, int status)
 	return (stat);
 }
 
-/* wrapper to make solaris waitid work properly with ptrace */
-static int
-lx_waitid_helper(idtype_t idtype, id_t id, siginfo_t *info, int options)
-{
-	do {
-		/*
-		 * It's possible that we return EINVAL here if the idtype is
-		 * P_PID or P_PGID and id is out of bounds for a valid pid or
-		 * pgid, but Linux expects to see ECHILD. No good way occurs to
-		 * handle this so we'll punt for now.
-		 */
-		if (waitid(idtype, id, info, options) < 0)
-			return (-errno);
-
-		/*
-		 * If the WNOHANG flag was specified and no child was found
-		 * return 0.
-		 */
-		if ((options & WNOHANG) && info->si_pid == 0)
-			return (0);
-
-		/*
-		 * It's possible that we may have a spurious return for one of
-		 * the child processes created by the ptrace subsystem. If
-		 * that's the case, we simply try again.
-		 */
-	} while (lx_ptrace_wait(info) == -1);
-	return (0);
-}
-
 long
 lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 {
@@ -214,11 +173,12 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	struct rusage ru = { 0 };
 	idtype_t idtype;
 	id_t id;
-	int options, status = 0;
+	int status = 0;
 	pid_t pid = (pid_t)p1;
 	int rval;
+	int native_options, extra_options;
 
-	if ((options = ltos_options(p3)) == -1)
+	if (ltos_options(p3, &native_options, &extra_options) == -1)
 		return (-EINVAL);
 
 	if (pid > max_pid)
@@ -260,14 +220,20 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 		id = pid;
 	}
 
-	options |= WEXITED | WTRAPPED;
+	native_options |= WEXITED | WTRAPPED;
 
-	if ((rval = lx_waitid_helper(idtype, id, &info, options)) < 0)
-		return (rval);
+	/*
+	 * Call into our in-kernel waitid() wrapper:
+	 */
+	if ((rval = syscall(SYS_brand, B_HELPER_WAITID, idtype, id, &info,
+	    native_options, extra_options)) < 0) {
+		return (-errno);
+	}
+
 	/*
 	 * If the WNOHANG flag was specified and no child was found return 0.
 	 */
-	if ((options & WNOHANG) && info.si_pid == 0)
+	if ((native_options & WNOHANG) && info.si_pid == 0)
 		return (0);
 
 	status = lx_wstat(info.si_code, info.si_status);
@@ -297,9 +263,11 @@ lx_waitpid(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 long
 lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 {
-	int rval, options;
+	int rval;
+	int native_options, extra_options;
 	siginfo_t s_info = {0};
-	if ((options = ltos_options(opt)) == -1)
+
+	if (ltos_options(opt, &native_options, &extra_options) == -1)
 		return (-EINVAL);
 
 	if (((opt) & (LX_WEXITED | LX_WSTOPPED | LX_WCONTINUED)) == 0)
@@ -318,11 +286,17 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 	default:
 		return (-EINVAL);
 	}
-	if ((rval = lx_waitid_helper(idtype, (id_t)id, &s_info, options)) < 0)
-		return (rval);
+
+	/*
+	 * Call into our in-kernel waitid() wrapper:
+	 */
+	if ((rval = syscall(SYS_brand, B_HELPER_WAITID, idtype, id, &s_info,
+	    native_options, extra_options)) < 0) {
+		return (-errno);
+	}
 
 	/* If the WNOHANG flag was specified and no child was found return 0. */
-	if ((options & WNOHANG) && s_info.si_pid == 0)
+	if ((native_options & WNOHANG) && s_info.si_pid == 0)
 		return (0);
 
 	return (stol_siginfo(&s_info, (lx_siginfo_t *)infop));

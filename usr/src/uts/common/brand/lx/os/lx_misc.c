@@ -137,7 +137,7 @@ void
 lx_exitlwp(klwp_t *lwp)
 {
 	struct lx_lwp_data *lwpd = lwptolxlwp(lwp);
-	proc_t *p;
+	proc_t *p = lwptoproc(lwp);;
 	kthread_t *t;
 	sigqueue_t *sqp = NULL;
 	pid_t ppid;
@@ -145,6 +145,10 @@ lx_exitlwp(klwp_t *lwp)
 
 	if (lwpd == NULL)
 		return;		/* second time thru' */
+
+	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+
+	lx_ptrace_exit();
 
 	if (lwpd->br_clear_ctidp != NULL) {
 		(void) suword32(lwpd->br_clear_ctidp, 0);
@@ -226,9 +230,13 @@ lx_freelwp(klwp_t *lwp)
 	if (lwpd != NULL) {
 		(void) removectx(lwptot(lwp), lwp, lx_save, lx_restore,
 		    NULL, NULL, lx_save, NULL);
-		if (lwpd->br_pid != 0)
+		if (lwpd->br_pid != 0) {
 			lx_pid_rele(lwptoproc(lwp)->p_pid,
 			    lwptot(lwp)->t_tid);
+		}
+
+		VERIFY(lwpd->br_ptrace_tracer == NULL);
+		VERIFY(lwpd->br_ptrace_accord == NULL);
 
 		lwp->lwp_brand = NULL;
 		kmem_free(lwpd, sizeof (struct lx_lwp_data));
@@ -310,6 +318,8 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 	dst->br_ppid = src->br_pid;
 	dst->br_ptid = lwptot(srclwp)->t_tid;
 	bcopy(src->br_tls, dst->br_tls, sizeof (dst->br_tls));
+
+	lx_ptrace_inherit_tracer(src, dst);
 
 	/*
 	 * copy only these flags
@@ -535,29 +545,39 @@ lx_exit_with_sig(proc_t *cp, sigqueue_t *sqp, void *brand_data)
 boolean_t
 lx_wait_filter(proc_t *pp, proc_t *cp)
 {
-	int flags;
+	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
+	int flags = lwpd->br_waitid_flags;
 	boolean_t ret;
+	boolean_t _wclone = !!(flags & LX_WCLONE);
 
-	if (LX_ARGS(waitid) != NULL) {
-		flags = LX_ARGS(waitid)->waitid_flags;
-		mutex_enter(&cp->p_lock);
-		if (flags & LX_WALL) {
-			ret = B_TRUE;
-		} else if (cp->p_stat == SZOMB ||
-		    cp->p_brand == &native_brand) {
-			ret = (((!!(flags & LX_WCLONE)) ^
-			    (stol_signo[SIGCHLD] == cp->p_exit_data))
-			    ? B_TRUE : B_FALSE);
-		} else {
-			ret = (((!!(flags & LX_WCLONE)) ^
-			    (stol_signo[SIGCHLD] == ptolxproc(cp)->l_signal))
-			    ? B_TRUE : B_FALSE);
-		}
-		mutex_exit(&cp->p_lock);
-		return (ret);
-	} else {
+	if (!lwpd->br_waitid_emulate) {
 		return (B_TRUE);
 	}
+
+	mutex_enter(&cp->p_lock);
+	if (flags & LX_WALL) {
+		ret = B_TRUE;
+
+	} else {
+		int exitsig;
+		boolean_t is_clone;
+
+		/*
+		 * Determine the exit signal for this process:
+		 */
+		if (cp->p_stat == SZOMB || cp->p_brand == &native_brand) {
+			exitsig = cp->p_exit_data;
+		} else {
+			exitsig = ptolxproc(cp)->l_signal;
+		}
+
+		is_clone = !!(stol_signo[SIGCHLD] == exitsig);
+
+		ret = (_wclone ^ is_clone) ? B_TRUE : B_FALSE;
+	}
+	mutex_exit(&cp->p_lock);
+
+	return (ret);
 }
 
 void
