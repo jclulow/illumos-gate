@@ -146,7 +146,7 @@ lx_exitlwp(klwp_t *lwp)
 	if (lwpd == NULL)
 		return;		/* second time thru' */
 
-	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+	VERIFY(MUTEX_HELD(&p->p_lock));
 
 	lx_ptrace_exit();
 

@@ -1081,7 +1081,7 @@ removectx(
 	 *    being (if curthread is not an agent) a thread being created
 	 *    as part of an lwp creation.
 	 */
-	ASSERT(t == curthread || ttoproc(t)->p_stat == SIDL ||
+	VERIFY(t == curthread || ttoproc(t)->p_stat == SIDL ||
 	    ttoproc(t)->p_agenttp == curthread || t->t_state == TS_STOPPED);
 
 	/*
