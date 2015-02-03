@@ -1249,8 +1249,6 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
  * This routine is called from lx_exitlwp() when an LWP is ready to exit.  If
  * this LWP is being traced, it will be detached from the tracer's accord.  The
  * routine will also detach any LWPs being traced by this LWP.
- *
- * The routine must be called without holding any process locks.
  */
 void
 lx_ptrace_exit(void)
@@ -1260,10 +1258,7 @@ lx_ptrace_exit(void)
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
 
-	/*
-	 * Lock the current process.
-	 */
-	mutex_enter(&p->p_lock);
+	VERIFY(MUTEX_HELD(&p->p_lock));
 
 	/*
 	 * Mark our LWP as exiting from a ptrace perspective.  This will
@@ -1291,8 +1286,6 @@ lx_ptrace_exit(void)
 		lx_ptrace_exit_tracer(p, lwpd, accord);
 		mutex_enter(&p->p_lock);
 	}
-
-	mutex_exit(&p->p_lock);
 }
 
 /*
@@ -1484,6 +1477,8 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	int error;
 	boolean_t found = B_FALSE;
 	boolean_t release_hold = B_FALSE;
+
+	return (ENOTSUP);
 
 	/*
 	 * These actions do not require the target LWP to be traced or stopped.

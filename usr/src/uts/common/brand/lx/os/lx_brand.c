@@ -178,6 +178,8 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 	ASSERT(p->p_brand == &lx_brand);
 	ASSERT(p->p_brand_data != NULL);
 
+	VERIFY(MUTEX_HELD(&p->p_lock));
+
 	/*
 	 * If init is dying and we aren't explicitly shutting down the zone
 	 * or the system, then Solaris is about to restart init.  The Linux
@@ -186,11 +188,14 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 	 * reboot the zone.
 	 */
 	if (p->p_pid == z->zone_proc_initpid) {
+		mutex_exit(&p->p_lock);
 		if (z->zone_boot_err == 0 &&
 		    z->zone_restart_init &&
 		    zone_status_get(z) < ZONE_IS_SHUTTING_DOWN &&
-		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN)
+		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN) {
 			(void) zone_kadmin(A_REBOOT, 0, NULL, CRED());
+		}
+		mutex_enter(&p->p_lock);
 	}
 
 	/*

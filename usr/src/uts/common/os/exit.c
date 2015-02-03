@@ -385,9 +385,7 @@ proc_exit(int why, int what)
 			brand_data = p->p_brand_data;
 		}
 		lwp_detach_brand_hdlrs(lwp);
-		mutex_exit(&p->p_lock);
 		brand_clearbrand(p, B_FALSE);
-		mutex_enter(&p->p_lock);
 	}
 	mutex_exit(&p->p_lock);
 
