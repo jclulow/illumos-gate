@@ -175,28 +175,15 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 	zone_t *z = p->p_zone;
 	int sig = ptolxproc(p)->l_signal;
 
-	ASSERT(p->p_brand == &lx_brand);
-	ASSERT(p->p_brand_data != NULL);
+	VERIFY(p->p_brand == &lx_brand);
+	VERIFY(p->p_brand_data != NULL);
 
 	VERIFY(MUTEX_HELD(&p->p_lock));
 
 	/*
-	 * If init is dying and we aren't explicitly shutting down the zone
-	 * or the system, then Solaris is about to restart init.  The Linux
-	 * init is not designed to handle a restart, which it interprets as
-	 * a reboot.  To give it a sane environment in which to run, we
-	 * reboot the zone.
+	 * XXX
 	 */
-	if (p->p_pid == z->zone_proc_initpid) {
-		mutex_exit(&p->p_lock);
-		if (z->zone_boot_err == 0 &&
-		    z->zone_restart_init &&
-		    zone_status_get(z) < ZONE_IS_SHUTTING_DOWN &&
-		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN) {
-			(void) zone_kadmin(A_REBOOT, 0, NULL, CRED());
-		}
-		mutex_enter(&p->p_lock);
-	}
+	z->zone_restart_init = B_FALSE;
 
 	/*
 	 * We might get here if fork failed (e.g. ENOMEM) so we don't always
@@ -735,15 +722,14 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 		lwpd = ttolxlwp(curthread);
 
-		if (arg1 != NULL && fuword32((void *)arg1,
+		if (fuword32((void *)arg1,
 		    (uint32_t *)&lwpd->br_ptrace_userstop) != 0) {
 			return (EFAULT);
 		}
 
-		stopped = lx_ptrace_stop(LX_PR_SIGNALLED);
+		(void) lx_ptrace_stop(LX_PR_SIGNALLED);
 
-		if (stopped && arg2 != NULL && suword32((void *)arg1,
-		    (uint32_t)lwpd->br_ptrace_userstop) != 0) {
+		if (suword32((void *)arg1, lwpd->br_ptrace_userstop) != 0) {
 			ret = EFAULT;
 		}
 		lwpd->br_ptrace_userstop = 0;
