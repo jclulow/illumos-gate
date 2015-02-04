@@ -1937,6 +1937,7 @@ Pstopstatus(struct ps_prochandle *P,
 	case PR_FAULTED:
 	case PR_JOBCONTROL:
 	case PR_SUSPENDED:
+	case PR_BRANDPRIVATE:
 		break;
 	default:
 		errno = EPROTO;
