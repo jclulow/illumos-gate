@@ -895,11 +895,8 @@ lwp_exit(void)
 	 * Perform any brand specific exit processing, then release any
 	 * brand data associated with the lwp
 	 */
-	if (PROC_IS_BRANDED(p)) {
-		mutex_enter(&p->p_lock);
+	if (PROC_IS_BRANDED(p))
 		BROP(p)->b_lwpexit(lwp);
-		mutex_exit(&p->p_lock);
-	}
 
 	lwp_pcb_exit();
 
