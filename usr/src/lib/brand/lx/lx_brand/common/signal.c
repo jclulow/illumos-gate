@@ -1573,8 +1573,7 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	 * allows the tracer to replace, or potentially surpress, the signal
 	 * we would otherwise deliver.
 	 */
-	assert(syscall(SYS_brand, B_PTRACE_STOP_FOR_SIG, LX_PR_SIGNALLED,
-	    &lx_sig) == 0);
+	assert(syscall(SYS_brand, B_PTRACE_STOP_FOR_SIG, &lx_sig) == 0);
 	if (lx_sig < 1) {
 		lx_debug("interposed signal was cleared by ptrace(2)");
 		return;
