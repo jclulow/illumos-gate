@@ -101,23 +101,28 @@ extern "C" {
 #define	 B_PTRACE_EXT_OPTS_GET	2
 #define	 B_PTRACE_EXT_OPTS_EVT	3
 
+#ifndef _ASM
 /*
  * Support for Linux PTRACE_SETOPTIONS handling.
  */
-#define	LX_PTRACE_O_TRACESYSGOOD	0x0001
-#define	LX_PTRACE_O_TRACEFORK		0x0002
-#define	LX_PTRACE_O_TRACEVFORK		0x0004
-#define	LX_PTRACE_O_TRACECLONE		0x0008
-#define	LX_PTRACE_O_TRACEEXEC		0x0010
-#define	LX_PTRACE_O_TRACEVFORKDONE	0x0020
-#define	LX_PTRACE_O_TRACEEXIT		0x0040
-#define	LX_PTRACE_O_TRACESECCOMP	0x0080
+typedef enum lx_ptrace_options {
+	LX_PTRACE_O_TRACESYSGOOD =	0x0001,
+	LX_PTRACE_O_TRACEFORK =		0x0002,
+	LX_PTRACE_O_TRACEVFORK =	0x0004,
+	LX_PTRACE_O_TRACECLONE =	0x0008,
+	LX_PTRACE_O_TRACEEXEC =		0x0010,
+	LX_PTRACE_O_TRACEVFORKDONE =	0x0020,
+	LX_PTRACE_O_TRACEEXIT =		0x0040,
+	LX_PTRACE_O_TRACESECCOMP =	0x0080
+} lx_ptrace_options_t;
 
 #define	LX_PTRACE_O_ALL						\
     (LX_PTRACE_O_TRACESYSGOOD | LX_PTRACE_O_TRACEFORK | 	\
     LX_PTRACE_O_TRACEVFORK | LX_PTRACE_O_TRACECLONE | 		\
     LX_PTRACE_O_TRACEEXEC | LX_PTRACE_O_TRACEVFORKDONE |	\
     LX_PTRACE_O_TRACEEXIT | LX_PTRACE_O_TRACESECCOMP)
+
+#endif
 
 /* siginfo si_status for traced events */
 #define	LX_PTRACE_EVENT_FORK		0x100
@@ -307,6 +312,7 @@ typedef enum lx_ptrace_state {
 	LX_PTRACE_EXITING = 0x02,
 	LX_PTRACE_STOPPING = 0x04,
 	LX_PTRACE_INHERIT = 0x08,
+	LX_PTRACE_STOPPED = 0x10,
 } lx_ptrace_state_t;
 
 /*
@@ -370,7 +376,7 @@ struct lx_lwp_data {
 	int br_waitid_flags;
 
 	lx_ptrace_state_t br_ptrace_flags; /* ptrace state for this LWP */
-	uintptr_t br_ptrace_options; /* PTRACE_SETOPTIONS options */
+	lx_ptrace_options_t br_ptrace_options; /* PTRACE_SETOPTIONS options */
 
 	lx_ptrace_accord_t *br_ptrace_accord; /* accord for this tracer LWP */
 	lx_ptrace_accord_t *br_ptrace_tracer; /* accord tracing this LWP */

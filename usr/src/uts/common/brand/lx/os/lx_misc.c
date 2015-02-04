@@ -137,18 +137,20 @@ void
 lx_exitlwp(klwp_t *lwp)
 {
 	struct lx_lwp_data *lwpd = lwptolxlwp(lwp);
-	proc_t *p = lwptoproc(lwp);;
+	proc_t *p = lwptoproc(lwp);
 	kthread_t *t;
 	sigqueue_t *sqp = NULL;
 	pid_t ppid;
 	id_t ptid;
 
+	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+
 	if (lwpd == NULL)
 		return;		/* second time thru' */
 
-	VERIFY(MUTEX_HELD(&p->p_lock));
-
-	lx_ptrace_exit();
+	mutex_enter(&p->p_lock);
+	lx_ptrace_exit(p, lwp);
+	mutex_exit(&p->p_lock);
 
 	if (lwpd->br_clear_ctidp != NULL) {
 		(void) suword32(lwpd->br_clear_ctidp, 0);
@@ -246,8 +248,8 @@ lx_freelwp(klwp_t *lwp)
 int
 lx_initlwp(klwp_t *lwp)
 {
-	struct lx_lwp_data *lwpd;
-	struct lx_lwp_data *plwpd;
+	lx_lwp_data_t *lwpd;
+	lx_lwp_data_t *plwpd;
 	kthread_t *tp = lwptot(lwp);
 
 	lwpd = kmem_zalloc(sizeof (struct lx_lwp_data), KM_SLEEP);
@@ -273,14 +275,19 @@ lx_initlwp(klwp_t *lwp)
 	if (tp->t_next == tp) {
 		lwpd->br_ppid = tp->t_procp->p_ppid;
 		lwpd->br_ptid = -1;
-	} else if (ttolxlwp(curthread) != NULL) {
-		plwpd = ttolxlwp(curthread);
+	} else if ((plwpd = ttolxlwp(curthread)) != NULL) {
 		bcopy(plwpd->br_tls, lwpd->br_tls, sizeof (lwpd->br_tls));
 		lwpd->br_ppid = plwpd->br_pid;
 		lwpd->br_ptid = curthread->t_tid;
 		/* The child inherits the 2 fsbase values from the parent */
 		lwpd->br_lx_fsbase = plwpd->br_lx_fsbase;
 		lwpd->br_ntv_fsbase = plwpd->br_ntv_fsbase;
+
+		/*
+		 * If the parent LWP had a ptrace(2) tracer, the new LWP may
+		 * need to inherit that same tracer.
+		 */
+		lx_ptrace_inherit_tracer(plwpd, lwpd);
 	} else {
 		/*
 		 * Oddball case: the parent thread isn't a Linux process.

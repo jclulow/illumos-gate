@@ -175,10 +175,9 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 	zone_t *z = p->p_zone;
 	int sig = ptolxproc(p)->l_signal;
 
+	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 	VERIFY(p->p_brand == &lx_brand);
 	VERIFY(p->p_brand_data != NULL);
-
-	VERIFY(MUTEX_HELD(&p->p_lock));
 
 	/*
 	 * XXX

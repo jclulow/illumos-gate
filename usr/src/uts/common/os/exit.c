@@ -378,7 +378,6 @@ proc_exit(int why, int what)
 	 * handler. In this case we free the brand_data later within this
 	 * function.
 	 */
-	mutex_enter(&p->p_lock);
 	if (PROC_IS_BRANDED(p)) {
 		orig_brand = p->p_brand;
 		if (p->p_brand_data != NULL && orig_brand->b_data_size > 0) {
@@ -387,7 +386,6 @@ proc_exit(int why, int what)
 		lwp_detach_brand_hdlrs(lwp);
 		brand_clearbrand(p, B_FALSE);
 	}
-	mutex_exit(&p->p_lock);
 
 	/*
 	 * Don't let init exit unless zone_start_init() failed its exec, or
