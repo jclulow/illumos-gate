@@ -336,6 +336,8 @@ brand_clearbrand(proc_t *p, boolean_t no_lwps)
 {
 	brand_t *bp = p->p_zone->zone_brand;
 	klwp_t *lwp = NULL;
+
+	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 	ASSERT(bp != NULL);
 	ASSERT(!no_lwps || (p->p_tlist == NULL));
 

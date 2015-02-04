@@ -78,12 +78,14 @@
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
 #include <sys/wait.h>
+#include <sys/prsystm.h>
 
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_pid.h>
 #include <lx_syscall.h>
+#include <lx_signum.h>
 
 
 typedef enum lx_ptrace_cont_flags_t {
@@ -326,7 +328,9 @@ lx_ptrace_accord_get(lx_ptrace_accord_t **accordp, boolean_t allocate_one)
 }
 
 /*
- * Restart an LWP if it is in "ptrace-stop".
+ * Restart an LWP if it is in "ptrace-stop".  This function may induce sleep,
+ * so do NOT hold any mutexes other than p_lock for the process containing
+ * the LWP.
  */
 static void
 lx_ptrace_restart_lwp(klwp_t *lwp)
@@ -337,6 +341,11 @@ lx_ptrace_restart_lwp(klwp_t *lwp)
 
 	VERIFY(rt != curthread);
 	VERIFY(MUTEX_HELD(&rproc->p_lock));
+
+	/*
+	 * Exclude potential meddling from procfs.
+	 */
+	prbarrier(rproc);
 
 	/*
 	 * Check that the LWP is still in "ptrace-stop" and, if so, restart it.
@@ -429,7 +438,15 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	 * is waiting for us to be done, we signal it here.
 	 */
 	lwpd->br_ptrace_flags &= ~LX_PTRACE_STOPPING;
+	lwpd->br_ptrace_flags |= LX_PTRACE_STOPPED;
 	cv_broadcast(&lx_ptrace_busy_cv);
+
+	/*
+	 * While holding pidlock, we attempt to wake our tracer from their
+	 * waitid() slumber.
+	 */
+	if (cvp != NULL)
+		cv_broadcast(cvp);
 
 	/*
 	 * We release pidlock, and return as we were called: with our p_lock
@@ -445,8 +462,7 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
  * successful, we return with the tracee p_lock held.
  */
 static int
-lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
-    int *whatp)
+lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote)
 {
 	klwp_t *rlwp = remote->br_lwp;
 	proc_t *rproc = lwptoproc(rlwp);
@@ -455,10 +471,10 @@ lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
 
 	/*
 	 * We must never check that we, ourselves, are stopped.  We must also
-	 * have the accord locked while we lock our tracees.
+	 * have the accord tracee list locked while we lock our tracees.
 	 */
 	VERIFY(curthread != rt);
-	VERIFY(MUTEX_HELD(&accord->lxpa_lock));
+	VERIFY(MUTEX_HELD(&accord->lxpa_tracees_lock));
 	VERIFY(accord->lxpa_tracer == ttolxlwp(curthread));
 
 	/*
@@ -477,30 +493,11 @@ lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
 		return (ESRCH);
 	}
 
-	/*
-	 * Lock the thread and check if it is in "ptrace-stop".  We represent
-	 * the "ptrace-stop" condition as a thread marked for /proc stop (i.e.
-	 * !TS_PSTART) with a stop reason of PR_BRANDPRIVATE.
-	 */
-	thread_lock(rt);
-	if (BSTOPPED(rt) && rt->t_whystop == PR_BRANDPRIVATE) {
-		/*
-		 * The tracee is in "ptrace-stop", and we may return it locked.
-		 */
-		stopped = B_TRUE;
-		if (whatp != NULL) {
-			*whatp = rt->t_whatstop;
-		}
-	}
-	thread_unlock(rt);
-
-	if (!stopped) {
+	if (!(remote->br_ptrace_flags & LX_PTRACE_STOPPED)) {
 		/*
 		 * The tracee is not in "ptrace-stop", so we release the
 		 * process.
 		 */
-		if (whatp != NULL)
-			*whatp = 0;
 		mutex_exit(&rproc->p_lock);
 		return (ESRCH);
 	}
@@ -528,7 +525,7 @@ lx_ptrace_setoptions(lx_lwp_data_t *remote, uintptr_t options)
 	/*
 	 * Set ptrace options on the target LWP.
 	 */
-	remote->br_ptrace_options = options;
+	remote->br_ptrace_options = (lx_ptrace_options_t)options;
 
 	return (0);
 }
@@ -558,6 +555,18 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
 {
 	int error;
 	klwp_t *lwp = remote->br_lwp;
+
+	/*
+	 * The tracer may choose to supress the delivery of a signal, or select
+	 * an alternative signal for delivery.  If this is an appropriate
+	 * ptrace(2) "signal-stop", br_ptrace_userstop will be used as the new
+	 * signal number.
+	 *
+	 * As with so many other aspects of the Linux ptrace(2) interface, this
+	 * may also fail silently if the state machine is not aligned
+	 * correctly.
+	 */
+	remote->br_ptrace_userstop = signo;
 
 	/*
 	 * Handle the syscall-stop flag if this is a PTRACE_SYSCALL restart:
@@ -742,10 +751,10 @@ lx_ptrace_attach(pid_t lx_pid)
 		mutex_exit(&accord->lxpa_tracees_lock);
 
 		/*
-		 * Send a thread-directed SIGLWP and have the usermode
+		 * Send a thread-directed SIGWAITING and have the usermode
 		 * emulation bring that back in as a fake SIGSTOP.
 		 */
-		sigtoproc(rproc, rthr, SIGLWP);
+		sigtoproc(rproc, rthr, SIGWAITING);
 		error = 0;
 	}
 
@@ -795,8 +804,15 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 {
 	lx_ptrace_accord_t *accord;
 
+	/*
+	 * XXX probably need to _lock_ the traced process until we can get a
+	 * hold on the accord.
+	 */
+#if 0
 	if ((accord = src->br_ptrace_tracer) == NULL ||
 	    !(src->br_ptrace_flags & LX_PTRACE_INHERIT)) {
+#endif
+	if ((accord = src->br_ptrace_tracer) == NULL) {
 		/*
 		 * Either the source LWP does not have a tracer to inherit,
 		 * or PTRACE_CLONE was not used in the current clone()
@@ -827,6 +843,11 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	 * This flag only lasts for the duration of a single clone.
 	 */
 	src->br_ptrace_flags &= ~LX_PTRACE_INHERIT;
+
+	/*
+	 * XXX Just copy trace options for now...
+	 */
+	dst->br_ptrace_options = src->br_ptrace_options;
 }
 
 static int
@@ -967,10 +988,9 @@ lx_ptrace_stop_common(klwp_t *lwp, proc_t *p, lx_lwp_data_t *lwpd,
 	stop(PR_BRANDPRIVATE, what);
 
 	/*
-	 * We are back from "ptrace-stop" with our process lock held.  We clear
-	 * the STOPPING flag in case we did not actually stop.
+	 * We are back from "ptrace-stop" with our process lock held.
 	 */
-	lwpd->br_ptrace_flags &= ~LX_PTRACE_STOPPING;
+	lwpd->br_ptrace_flags &= ~(LX_PTRACE_STOPPING | LX_PTRACE_STOPPED);
 	cv_broadcast(&lx_ptrace_busy_cv);
 	mutex_exit(&p->p_lock);
 
@@ -985,7 +1005,6 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 	proc_t *p = lwptoproc(lwp);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
-	ushort_t what = LX_PR_EVENT;
 
 	mutex_enter(&p->p_lock);
 	if (lwpd->br_ptrace_tracer == NULL) {
@@ -999,11 +1018,11 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 		case LX_PTRACE_O_TRACEFORK:
 		case LX_PTRACE_O_TRACEVFORK:
 			/*
-			 * Send the child LWP a directed SIGLWP.  This signal
-			 * will be presented by the brand code as a fake
+			 * Send the child LWP a directed SIGWAITING.  This
+			 * signal will be presented by the brand code as a fake
 			 * SIGSTOP.
 			 */
-			sigtoproc(p, t, SIGLWP);
+			sigtoproc(p, t, SIGWAITING);
 			mutex_exit(&p->p_lock);
 			return (B_FALSE);
 		default:
@@ -1038,7 +1057,7 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 		goto nostop;
 	}
 
-	return (lx_ptrace_stop_common(lwp, p, lwpd, what));
+	return (lx_ptrace_stop_common(lwp, p, lwpd, LX_PR_EVENT));
 
 nostop:
 	lwpd->br_ptrace_event = 0;
@@ -1105,7 +1124,6 @@ lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,
     lx_ptrace_accord_t *accord)
 {
 	int ret;
-	int drop_holds = 1;
 
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 
@@ -1123,20 +1141,32 @@ again:
 	 * Walk the list of tracees, detaching them and setting them runnable
 	 * if they are stopped.
 	 */
-	mutex_enter(&accord->lxpa_tracees_lock);
-	while (!list_is_empty(&accord->lxpa_tracees)) {
-		lx_lwp_data_t *remote = list_head(&accord->lxpa_tracees);
-		klwp_t *rlwp = remote->br_lwp;
-		proc_t *rproc = lwptoproc(rlwp);
+	for (;;) {
+		klwp_t *rlwp;
+		proc_t *rproc;
+		lx_lwp_data_t *remote;
+		kmutex_t *rmp;
+
+		mutex_enter(&accord->lxpa_tracees_lock);
+		if (list_is_empty(&accord->lxpa_tracees))
+			break;
 
 		/*
-		 * Lock the process containing this tracee LWP.
+		 * Fetch the first tracee LWP in the list and lock the process
+		 * which contains it.
 		 */
-		mutex_enter(&rproc->p_lock);
+		remote = list_head(&accord->lxpa_tracees);
+		rlwp = remote->br_lwp;
+		rproc = lwptoproc(rlwp);
+		/*
+		 * The p_lock mutex persists beyond the life of the process
+		 * itself.  We save the address, here, to prevent the need to
+		 * dereference the proc_t after awaking from sleep.
+		 */
+		rmp = &rproc->p_lock;
+		mutex_enter(rmp);
 
 		if (TRACEE_BUSY(remote)) {
-			kmutex_t *rmp = &rproc->p_lock;
-
 			/*
 			 * This LWP is currently detaching itself on exit, or
 			 * mid-way through stop().  We must wait for this
@@ -1151,7 +1181,7 @@ again:
 			 * Restart the walk to be sure we don't miss anything.
 			 */
 			mutex_exit(rmp);
-			goto again;
+			continue;
 		}
 
 		/*
@@ -1172,7 +1202,14 @@ again:
 		 * Unlink the accord.
 		 */
 		remote->br_ptrace_tracer = NULL;
-		drop_holds++;
+
+		/*
+		 * Let go of the list lock before we restart the LWP.  We must
+		 * not hold any locks other than the process p_lock when
+		 * we call lx_ptrace_restart_lwp() as it will thread_lock
+		 * the tracee.
+		 */
+		mutex_exit(&accord->lxpa_tracees_lock);
 
 		/*
 		 * Ensure that the LWP is not stopped on our account.
@@ -1182,25 +1219,30 @@ again:
 		/*
 		 * Unlock the former tracee.
 		 */
-		mutex_exit(&rproc->p_lock);
-	}
+		mutex_exit(rmp);
 
-	/*
-	 * Release our hold on the accord, and the hold of each tracee we
-	 * detached.  If we completely detached all tracee LWPs, this will free
-	 * the accord.  Otherwise, it will be freed when they complete their
-	 * cleanup.
-	 */
-	lx_ptrace_accord_enter(accord);
-	while (drop_holds-- > 0) {
+		/*
+		 * Drop the hold this tracee had on the accord.
+		 */
+		lx_ptrace_accord_enter(accord);
 		lx_ptrace_accord_rele(accord);
+		lx_ptrace_accord_exit(accord);
 	}
-	accord->lxpa_cvp = NULL;
-	lx_ptrace_accord_exit(accord);
 
 	mutex_enter(&p->p_lock);
 	lwpd->br_ptrace_accord = NULL;
 	mutex_exit(&p->p_lock);
+
+	/*
+	 * Clean up and release our hold on the accord If we completely
+	 * detached all tracee LWPs, this will free the accord.  Otherwise, it
+	 * will be freed when they complete their cleanup.
+	 */
+	lx_ptrace_accord_enter(accord);
+	accord->lxpa_cvp = NULL;
+	accord->lxpa_tracer = NULL;
+	lx_ptrace_accord_rele(accord);
+	lx_ptrace_accord_exit(accord);
 }
 
 static void
@@ -1251,10 +1293,8 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
  * routine will also detach any LWPs being traced by this LWP.
  */
 void
-lx_ptrace_exit(void)
+lx_ptrace_exit(proc_t *p, klwp_t *lwp)
 {
-	klwp_t *lwp = ttolwp(curthread);
-	proc_t *p = lwptoproc(lwp);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
 
@@ -1398,7 +1438,7 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 		 * Check if this LWP is in "ptrace-stop".  If in the correct
 		 * stop condition, lock the process containing the tracee LWP.
 		 */
-		if (lx_ptrace_lock_if_stopped(accord, remote, NULL) != 0) {
+		if (lx_ptrace_lock_if_stopped(accord, remote) != 0) {
 			continue;
 		}
 
@@ -1427,7 +1467,11 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 			break;
 		case LX_PR_SIGNALLED:
 			ip->si_code = CLD_TRAPPED;
-			ip->si_status = (int)remote->br_ptrace_userstop;
+			/*
+			 * XXX bounds check
+			 */
+			ip->si_status = ltos_signo[
+			    (int)remote->br_ptrace_userstop];
 			break;
 		case LX_PR_EVENT:
 			ip->si_code = CLD_TRAPPED;
@@ -1478,8 +1522,6 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	boolean_t found = B_FALSE;
 	boolean_t release_hold = B_FALSE;
 
-	return (ENOTSUP);
-
 	/*
 	 * These actions do not require the target LWP to be traced or stopped.
 	 */
@@ -1527,7 +1569,7 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	/*
 	 * Attempt to lock the target LWP.
 	 */
-	if ((error = lx_ptrace_lock_if_stopped(accord, remote, NULL)) != 0) {
+	if ((error = lx_ptrace_lock_if_stopped(accord, remote)) != 0) {
 		/*
 		 * The LWP was not in "ptrace-stop".
 		 */
