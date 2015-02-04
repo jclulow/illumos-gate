@@ -109,10 +109,10 @@ ltos_signo[LX_NSIG + 1] = {
 	SIGPIPE,
 	SIGALRM,
 	SIGTERM,
-	SIGEMT,			/* 16:  Linux SIGSTKFLT; use Solaris SIGEMT */
+	SIGEMT,			/* 16:  Linux SIGSTKFLT; use illumos SIGEMT */
 	SIGCHLD,
 	SIGCONT,
-	SIGSTOP,
+	SIGWAITING,		/* 19:  Linux SIGSTOP; use illumos SIGWAITING */
 	SIGTSTP,
 	SIGTTIN,
 	SIGTTOU,
@@ -199,7 +199,7 @@ stol_signo[NSIG] = {
 	LX_SIGPROF,
 	LX_SIGXCPU,
 	LX_SIGXFSZ,
-	-1,			/* 32:  Solaris SIGWAITING */
+	LX_SIGSTOP,		/* 32:  Solaris SIGWAITING */
 	-1,			/* 33:  Solaris SIGLWP */
 	-1,			/* 34:  Solaris SIGFREEZE */
 	-1,			/* 35:  Solaris SIGTHAW */
