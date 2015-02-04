@@ -1551,11 +1551,11 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	uintptr_t gs;
 	size_t stksize;
 	int32_t lx_sig;
-	boolean_t siglwp = B_FALSE;
+	boolean_t fake_stop = B_FALSE;
 
-	if (sig == SIGLWP) {
-		siglwp = B_TRUE;
-		lx_debug("received SIGLWP! pretending this is SIGSTOP.\n");
+	if (sig == SIGWAITING) {
+		fake_stop = B_TRUE;
+		lx_debug("received SIGWAITING! pretending this is SIGSTOP.\n");
 		sig = SIGSTOP;
 	}
 
@@ -1584,7 +1584,7 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	/*
 	 * XXX do we want to raise a _real_ SIGSTOP here?
 	 */
-	if (siglwp) {
+	if (fake_stop) {
 		lx_debug("raising real SIGSTOP!");
 		raise(SIGSTOP);
 		return;
@@ -1769,6 +1769,13 @@ lx_sigaction_common(int lx_sig, struct lx_sigaction *lxsp,
 			return (-errno);
 
 		if ((sig = ltos_signo[lx_sig]) != -1) {
+			/*
+			 * XXX
+			 */
+			if (sig == SIGSEGV || sig == SIGABRT) {
+				return (0);
+			}
+
 			/*
 			 * Block this signal while messing with its dispostion
 			 */
@@ -2175,6 +2182,14 @@ lx_siginit(void)
 
 	if (sigaction(SIGPWR, &sa, NULL) < 0)
 		lx_err_fatal("sigaction(SIGPWR) failed: %s", strerror(errno));
+
+	/*
+	 * Handle SIGWAITING, an unused signal with no Linux analogue, to allow
+	 * remote processes to bring an LWP to an orderly stop within
+	 * lx_call_user_handler() for the ptrace(2) "signal-stop".
+	 */
+	if (sigaction(SIGWAITING, &sa, NULL) < 0)
+		lx_err_fatal("sigaction(SIGWAITING failed: %s", strerror(errno));
 
 	/* SIGSEGV handler is needed for vsyscall emulation */
 #if defined(_LP64)
