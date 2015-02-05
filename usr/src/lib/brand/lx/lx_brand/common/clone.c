@@ -116,6 +116,7 @@ struct clone_state {
 	sigset_t	c_sigmask;	/* signal mask */
 	lx_affmask_t	c_affmask;	/* CPU affinity mask */
 	volatile int	*c_clone_res;	/* pid/error returned to cloner */
+	int		c_ptrace_event;	/* ptrace(2) event for child stop */
 };
 
 extern void lx_setup_clone(uintptr_t, void *, void *);
@@ -328,6 +329,11 @@ clone_start(void *arg)
 		 * completed.
 		 */
 		*(cs->c_clone_res) = rval;
+
+		/*
+		 * Fire the ptrace(2) event stop in the new thread:
+		 */
+		lx_ptrace_stop_if_option(cs->c_ptrace_event, B_TRUE, 0);
 
 #if defined(_LP64)
 		(void) syscall(SYS_brand, B_CLR_NTV_SYSC_FLAG);
@@ -587,6 +593,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	cs->c_ldtinfo = ldtinfo;
 	cs->c_ctidp = ctidp;
 	cs->c_clone_res = &clone_res;
+	cs->c_ptrace_event = ptrace_event;
 #if defined(_LP64)
 	/*
 	 * The AMD64 ABI says that the kernel clobbers %rcx and %r11. We
@@ -652,7 +659,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			;
 
 		rval = clone_res;
-		lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0);
+		lx_ptrace_stop_if_option(ptrace_event, B_FALSE, (ulong_t)rval);
 	}
 
 	return (rval);
