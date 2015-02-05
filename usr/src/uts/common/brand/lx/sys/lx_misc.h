@@ -55,7 +55,7 @@ extern int lx_waitid_helper(idtype_t, id_t, k_siginfo_t *, int, boolean_t *,
     int *);
 extern void lx_ptrace_exit(proc_t *, klwp_t *);
 extern void lx_ptrace_inherit_tracer(lx_lwp_data_t *, lx_lwp_data_t *);
-extern boolean_t lx_ptrace_stop_for_option(int, boolean_t, ulong_t);
+extern int lx_ptrace_stop_for_option(int, boolean_t, ulong_t);
 extern int lx_ptrace_set_clone_inherit(boolean_t);
 
 #endif

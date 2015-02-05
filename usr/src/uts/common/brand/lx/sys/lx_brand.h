@@ -269,10 +269,6 @@ typedef struct lx_proc_data {
 	uintptr_t l_traceflag;	/* address of 32-bit tracing flag */
 	pid_t l_ppid;		/* pid of originating parent proc */
 	uint64_t l_ptrace;	/* process being observed with ptrace */
-	uint_t l_ptrace_opts;	/* process's extended ptrace options */
-	uint_t l_ptrace_event;	/* extended ptrace option trap event */
-	uint_t l_ptrace_is_traced; /* set if traced due to ptrace setoptions */
-	ulong_t l_ptrace_eventmsg; /* extended ptrace event msg */
 	lx_elf_data_t l_elf_data; /* ELF data for linux executable */
 	int l_signal;		/* signal to deliver to parent when this */
 				/* thread group dies */
@@ -313,6 +309,7 @@ typedef enum lx_ptrace_state {
 	LX_PTRACE_STOPPING = 0x04,
 	LX_PTRACE_INHERIT = 0x08,
 	LX_PTRACE_STOPPED = 0x10,
+	LX_PTRACE_PARENT_WAIT = 0x20,
 } lx_ptrace_state_t;
 
 /*
