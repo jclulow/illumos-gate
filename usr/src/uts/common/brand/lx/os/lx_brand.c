@@ -761,6 +761,14 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		lwpd = ttolxlwp(curthread);
 
 		/*
+		 * Our brand-specific waitid helper only understands a subset of
+		 * the possible idtypes.  Ensure we keep to that subset here:
+		 */
+		if (idtype != P_ALL && idtype != P_PID && idtype != P_PGID) {
+			return (EINVAL);
+		}
+
+		/*
 		 * Enable the return of emulated ptrace(2) stop conditions
 		 * through lx_waitid_helper, and stash the Linux-specific
 		 * extra waitid() flags.

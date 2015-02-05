@@ -227,6 +227,8 @@ static mutex_t ptrace_map_mtx = DEFAULTMUTEX;
 
 extern void *_START_;
 
+extern int lx_traceflag;
+
 static sigset_t blockable_sigs;
 
 static long lx_ptrace_kernel(int, pid_t, uintptr_t, uintptr_t);
@@ -1219,8 +1221,19 @@ lx_ptrace_stop_if_option(int option, boolean_t child, ulong_t msg)
 	 * We call into the kernel to see if we need to stop for specific
 	 * ptrace(2) events.
 	 */
-	assert(syscall(SYS_brand, B_PTRACE_STOP_FOR_OPT, option, child,
-	    msg) == 0);
+	lx_debug("lx_ptrace_stop_if_option(%d, %s, %lu)", option,
+	    child ? "TRUE" : "FALSE", msg);
+	if (syscall(SYS_brand, B_PTRACE_STOP_FOR_OPT, option, child,
+	    msg) != 0) {
+		if (errno != ESRCH) {
+			/*
+			 * This should _only_ fail if we are not traced, or do
+			 * not have this option set.
+			 */
+			lx_err_fatal("B_PTRACE_STOP_FOR_OPT failed: %s",
+			    strerror(errno));
+		}
+	}
 }
 
 static long
@@ -1243,6 +1256,7 @@ lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	pid_t pid, lxpid = (pid_t)p2;
 	lwpid_t lwpid;
 	int ptrace_op = (int)p1;
+	long rval;
 
 	/*
 	 * Some of PTRACE_* requests are emulated entirely in the kernel.
@@ -1254,8 +1268,13 @@ lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	 * Both `data' and `addr' are ignored in both cases.
 	 */
 	case LX_PTRACE_TRACEME:
-		lxpid = 0;
-		return (lx_ptrace_kernel(ptrace_op, 0, 0, 0));
+		if ((rval = lx_ptrace_kernel(ptrace_op, 0, 0, 0)) == 0) {
+			/*
+			 * Enable the trace flag for this process.
+			 */
+			lx_traceflag = 1;
+		}
+		return (rval);
 
 	case LX_PTRACE_ATTACH:
 		return (lx_ptrace_kernel(ptrace_op, lxpid, 0, 0));

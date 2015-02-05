@@ -326,8 +326,6 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 	dst->br_ptid = lwptot(srclwp)->t_tid;
 	bcopy(src->br_tls, dst->br_tls, sizeof (dst->br_tls));
 
-	lx_ptrace_inherit_tracer(src, dst);
-
 	/*
 	 * copy only these flags
 	 */

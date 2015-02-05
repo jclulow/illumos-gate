@@ -153,9 +153,18 @@ lx_wstat(int code, int status)
 		break;
 	case CLD_TRAPPED:
 	case CLD_STOPPED:
-		stat = stol_signo[status];
+		/*
+		 * We mask out the top bit here in case PTRACE_O_TRACESYSGOOD
+		 * is in use and 0x80 has been ORed with the signal number.
+		 */
+		stat = stol_signo[status & 0x7f];
 		assert(stat != -1);
-		stat <<= 8;
+		/*
+		 * We must mix in the ptrace(2) event which may be stored in
+		 * the second byte of the status code.  We also re-include the
+		 * PTRACE_O_TRACESYSGOOD bit.
+		 */
+		stat = ((status & 0xff80) | stat) << 8;
 		stat |= WSTOPFLG;
 		break;
 	case CLD_CONTINUED:
