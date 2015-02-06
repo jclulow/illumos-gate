@@ -112,7 +112,7 @@ ltos_signo[LX_NSIG + 1] = {
 	SIGEMT,			/* 16:  Linux SIGSTKFLT; use illumos SIGEMT */
 	SIGCHLD,
 	SIGCONT,
-	SIGWAITING,		/* 19:  Linux SIGSTOP; use illumos SIGWAITING */
+	SIGSTOP,		/* 19:  Linux SIGSTOP */
 	SIGTSTP,
 	SIGTTIN,
 	SIGTTOU,
@@ -199,14 +199,14 @@ stol_signo[NSIG] = {
 	LX_SIGPROF,
 	LX_SIGXCPU,
 	LX_SIGXFSZ,
-	LX_SIGSTOP,		/* 32:  Solaris SIGWAITING */
+	-1,			/* 32:  Solaris SIGWAITING */
 	-1,			/* 33:  Solaris SIGLWP */
 	-1,			/* 34:  Solaris SIGFREEZE */
 	-1,			/* 35:  Solaris SIGTHAW */
 	-1,			/* 36:  Solaris SIGCANCEL */
 	-1,			/* 37:  Solaris SIGLOST */
 	-1,			/* 38:  Solaris SIGXRES */
-	LX_SIGTRAP,		/* 39:  Solaris SIGJVM1; use for fake SIGTRAP */
+	-1,			/* 39:  Solaris SIGJVM1 */
 	-1,			/* 40:  Solaris SIGJVM2 */
 	-1,			/* 41:  Solaris SIGINFO */
 	LX_SIGRTMIN,		/* 42:  Solaris _SIGRTMIN */

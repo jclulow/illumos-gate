@@ -875,10 +875,9 @@ lx_ptrace_attach(pid_t lx_pid)
 		mutex_exit(&accord->lxpa_tracees_lock);
 
 		/*
-		 * Send a thread-directed SIGWAITING and have the usermode
-		 * emulation bring that back in as a fake SIGSTOP.
+		 * Send a thread-directed SIGSTOP.
 		 */
-		sigtoproc(rproc, rthr, SIGWAITING);
+		sigtoproc(rproc, rthr, SIGSTOP);
 		error = 0;
 	}
 
@@ -946,6 +945,7 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 #if 0
 	if ((accord = src->br_ptrace_tracer) == NULL ||
 	    !(src->br_ptrace_flags & LX_PTRACE_INHERIT)) {
+	}
 #endif
 	if ((accord = src->br_ptrace_tracer) == NULL) {
 		/*
@@ -1180,10 +1180,9 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 		if (option == LX_PTRACE_O_TRACEEXEC) {
 			/*
 			 * Without PTRACE_O_TRACEEXEC, the Linux kernel will
-			 * send SIGJVM1 to the process, which we will translate
-			 * into an ordinary SIGTRAP for the tracer.
+			 * send SIGTRAP to the process.
 			 */
-			sigtoproc(p, t, SIGJVM1);
+			sigtoproc(p, t, SIGTRAP);
 			mutex_exit(&p->p_lock);
 			return (0);
 		}
@@ -1202,11 +1201,9 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 		case LX_PTRACE_O_TRACEFORK:
 		case LX_PTRACE_O_TRACEVFORK:
 			/*
-			 * Send the child LWP a directed SIGWAITING.  This
-			 * signal will be presented by the brand code as a fake
-			 * SIGSTOP.
+			 * Send the child LWP a directed SIGSTOP.
 			 */
-			sigtoproc(p, t, SIGWAITING);
+			sigtoproc(p, t, SIGSTOP);
 			mutex_exit(&p->p_lock);
 			return (ESRCH);
 		default:
@@ -1302,6 +1299,82 @@ lx_ptrace_stop(ushort_t what)
 	return (lx_ptrace_stop_common(lwp, p, lwpd, what));
 }
 
+int
+lx_issig_stop(proc_t *p, klwp_t *lwp)
+{
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+	int lx_sig;
+
+	VERIFY(MUTEX_HELD(&p->p_lock));
+
+	/*
+	 * If we do not have an accord, bail out now.  Additionally, if there
+	 * is no valid signal then we have no reason to stop.
+	 */
+	if (lwpd->br_ptrace_tracer == NULL || lwp->lwp_cursig == SIGKILL ||
+	    (lwp->lwp_cursig == 0 || lwp->lwp_cursig > NSIG) ||
+	    (lx_sig = stol_signo[lwp->lwp_cursig]) < 1) {
+		return (0);
+	}
+
+	/*
+	 * We stash the signal on the LWP where our waitid_helper will find it
+	 * and enter the ptrace "signal-delivery-stop" condition.
+	 */
+	lwpd->br_ptrace_userstop = lx_sig;
+	(void) lx_ptrace_stop_common(lwp, p, lwpd, LX_PR_SIGNALLED);
+	mutex_enter(&p->p_lock);
+
+	/*
+	 * When we return, the signal may have been altered or suppressed.
+	 */
+	if (lwpd->br_ptrace_userstop != lx_sig) {
+		int native_sig;
+		lx_sig = lwpd->br_ptrace_userstop;
+
+		if (lx_sig >= LX_NSIG) {
+			lx_sig = 0;
+		}
+
+		/*
+		 * Translate signal from Linux signal number back to
+		 * an illumos native signal.
+		 */
+		if (lx_sig >= LX_NSIG || lx_sig < 0 || (native_sig =
+		    ltos_signo[lx_sig]) < 1) {
+			/*
+			 * The signal is not deliverable.
+			 */
+			lwp->lwp_cursig = 0;
+			lwp->lwp_extsig = 0;
+			if (lwp->lwp_curinfo) {
+				siginfofree(lwp->lwp_curinfo);
+				lwp->lwp_curinfo = NULL;
+			}
+		} else {
+			/*
+			 * Alter the currently dispatching signal.
+			 */
+			if (native_sig == SIGKILL) {
+				/*
+				 * We mark ourselves the victim and request
+				 * a restart of signal processing.
+				 */
+				p->p_flag |= SKILLED;
+				p->p_flag &= ~SEXTKILLED;
+				return (-1);
+			}
+			lwp->lwp_cursig = native_sig;
+			lwp->lwp_extsig = 0;
+			if (lwp->lwp_curinfo != NULL) {
+				lwp->lwp_curinfo->sq_info.si_signo = native_sig;
+			}
+		}
+	}
+
+	lwpd->br_ptrace_userstop = 0;
+	return (0);
+}
 
 static void
 lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,

@@ -142,6 +142,7 @@ struct brand_ops lx_brops = {
 	lx_stop_notify,
 	lx_waitid_helper,
 	lx_sigcld_repost,
+	lx_issig_stop,
 };
 
 struct brand_mach_ops lx_mops = {
