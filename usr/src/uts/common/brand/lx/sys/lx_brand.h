@@ -333,6 +333,14 @@ typedef struct lx_ptrace_accord {
 	list_t			lxpa_tracees;
 } lx_ptrace_accord_t;
 
+typedef enum lx_ptrace_attach {
+	LX_PTA_NONE = 0,
+	LX_PTA_ATTACH,
+	LX_PTA_TRACEME,
+	LX_PTA_INHERIT_CLONE,
+	LX_PTA_INHERIT_OPTIONS,
+} lx_ptrace_attach_t;
+
 /*
  * lx-specific data in the klwp_t
  */
@@ -376,6 +384,7 @@ struct lx_lwp_data {
 	lx_ptrace_state_t br_ptrace_flags; /* ptrace state for this LWP */
 	lx_ptrace_options_t br_ptrace_options; /* PTRACE_SETOPTIONS options */
 
+	lx_ptrace_attach_t br_ptrace_attach; /* how did we get attached */
 	lx_ptrace_accord_t *br_ptrace_accord; /* accord for this tracer LWP */
 	lx_ptrace_accord_t *br_ptrace_tracer; /* accord tracing this LWP */
 	list_node_t br_ptrace_linkage;	/* linkage for lxpa_tracees list */
