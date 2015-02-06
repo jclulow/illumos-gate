@@ -745,6 +745,7 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
 	VERIFY(list_link_active(&remote->br_ptrace_linkage));
 	list_remove(&accord->lxpa_tracees, remote);
 
+	remote->br_ptrace_attach = LX_PTA_NONE;
 	remote->br_ptrace_tracer = NULL;
 	remote->br_ptrace_flags = 0;
 	*release_hold = B_TRUE;
@@ -860,6 +861,7 @@ lx_ptrace_attach(pid_t lx_pid)
 		 * Bond the tracee to the accord.
 		 */
 		VERIFY0(rlwpd->br_ptrace_flags & LX_PTRACE_EXITING);
+		rlwpd->br_ptrace_attach = LX_PTA_ATTACH;
 		rlwpd->br_ptrace_tracer = accord;
 
 		/*
@@ -973,6 +975,7 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	lx_ptrace_accord_hold(accord);
 	lx_ptrace_accord_exit(accord);
 
+	dst->br_ptrace_attach = LX_PTA_INHERIT_OPTIONS;
 	dst->br_ptrace_tracer = accord;
 
 	/*
@@ -1068,6 +1071,7 @@ lx_ptrace_traceme(void)
 		 * Bond ourselves to the accord.  We already bumped the accord
 		 * reference count.
 		 */
+		lwpd->br_ptrace_attach = LX_PTA_TRACEME;
 		lwpd->br_ptrace_tracer = accord;
 		did_attach = B_TRUE;
 		error = 0;
@@ -1117,6 +1121,7 @@ lx_ptrace_traceme(void)
 		VERIFY(!list_link_active(&lwpd->br_ptrace_linkage));
 		VERIFY(lwpd->br_ptrace_tracer == accord);
 
+		lwpd->br_ptrace_attach = LX_PTA_NONE;
 		lwpd->br_ptrace_tracer = NULL;
 	}
 	mutex_exit(&p->p_lock);
@@ -1375,6 +1380,7 @@ again:
 		/*
 		 * Unlink the accord and clear our trace flags.
 		 */
+		remote->br_ptrace_attach = LX_PTA_NONE;
 		remote->br_ptrace_tracer = NULL;
 		remote->br_ptrace_flags = 0;
 
@@ -1438,6 +1444,7 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
 	 * later.
 	 */
 	VERIFY(lwpd->br_ptrace_tracer == accord);
+	lwpd->br_ptrace_attach = LX_PTA_NONE;
 	lwpd->br_ptrace_tracer = NULL;
 
 	/*
