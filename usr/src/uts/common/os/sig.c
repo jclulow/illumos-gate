@@ -194,7 +194,7 @@ eat_signal(kthread_t *t, int sig)
 		    !(ttoproc(t)->p_proc_flag & P_PR_LOCK)) {
 			ttoproc(t)->p_stopsig = 0;
 			t->t_dtrace_stop = 0;
-			t->t_schedflag |= TS_XSTART | TS_PSTART;
+			t->t_schedflag |= TS_XSTART | TS_PSTART | TS_BSTART;
 			setrun_locked(t);
 		} else if (t != curthread && t->t_state == TS_ONPROC) {
 			aston(t);	/* make it do issig promptly */
@@ -1195,7 +1195,7 @@ stop(int why, int what)
 		    (p->p_flag & (SEXITLWPS|SKILLED))) {
 			p->p_stopsig = 0;
 			thread_lock(t);
-			t->t_schedflag |= TS_XSTART | TS_PSTART;
+			t->t_schedflag |= TS_XSTART | TS_PSTART | TS_BSTART;
 			setrun_locked(t);
 			thread_unlock_nopreempt(t);
 		} else if (why == PR_JOBCONTROL) {
