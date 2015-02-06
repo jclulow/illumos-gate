@@ -1883,12 +1883,10 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 	 * the queue and post another.
 	 */
 	if (waitflag) {
-		sigqueue_t *sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
-
+		mutex_exit(&pidlock);
 		sigcld_delete(ip);
-		if (lx_sigcld_repost(p, sqp) != 0) {
-			kmem_free(sqp, sizeof (sigqueue_t));
-		}
+		sigcld_repost();
+		mutex_enter(&pidlock);
 	}
 
 	*rval = 0;
