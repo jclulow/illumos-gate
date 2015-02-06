@@ -57,6 +57,7 @@ extern void lx_ptrace_exit(proc_t *, klwp_t *);
 extern void lx_ptrace_inherit_tracer(lx_lwp_data_t *, lx_lwp_data_t *);
 extern int lx_ptrace_stop_for_option(int, boolean_t, ulong_t);
 extern int lx_ptrace_set_clone_inherit(boolean_t);
+extern int lx_sigcld_repost(proc_t *, sigqueue_t *);
 
 #endif
 

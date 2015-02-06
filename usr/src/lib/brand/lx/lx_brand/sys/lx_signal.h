@@ -396,6 +396,7 @@ extern void lx_sigdeliver(int, siginfo_t *, void *, size_t, void (*)(),
     void (*)(), uintptr_t);
 
 extern int stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop);
+extern int stol_status(int);
 
 #endif	/* !defined(_ASM) */
 

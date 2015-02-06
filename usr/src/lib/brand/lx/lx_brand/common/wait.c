@@ -70,6 +70,7 @@
 #include <sys/wait.h>
 #include <sys/lx_types.h>
 #include <sys/lx_signal.h>
+#include <sys/lx_debug.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_syscall.h>
 #include <sys/syscall.h>
@@ -153,19 +154,7 @@ lx_wstat(int code, int status)
 		break;
 	case CLD_TRAPPED:
 	case CLD_STOPPED:
-		/*
-		 * We mask out the top bit here in case PTRACE_O_TRACESYSGOOD
-		 * is in use and 0x80 has been ORed with the signal number.
-		 */
-		stat = stol_signo[status & 0x7f];
-		assert(stat != -1);
-		/*
-		 * We must mix in the ptrace(2) event which may be stored in
-		 * the second byte of the status code.  We also re-include the
-		 * PTRACE_O_TRACESYSGOOD bit.
-		 */
-		stat = ((status & 0xff80) | stat) << 8;
-		stat |= WSTOPFLG;
+		stat = (stol_status(status) << 8) | WSTOPFLG;
 		break;
 	case CLD_CONTINUED:
 		stat = WCONTFLG;
@@ -173,6 +162,37 @@ lx_wstat(int code, int status)
 	}
 
 	return (stat);
+}
+
+static int
+lx_waitid_helper(idtype_t idtype, id_t id, siginfo_t *sip,
+    int native_options, int extra_options)
+{
+	extern __thread int lx_had_sigchild;
+	extern __thread int lx_do_syscall_restart;
+
+	/*
+	 * Call into our in-kernel waitid() wrapper:
+	 */
+restart:
+	lx_had_sigchild = 0;
+	if (syscall(SYS_brand, B_HELPER_WAITID, idtype, id, sip,
+	    native_options, extra_options) != 0) {
+		if (errno == EINTR && (lx_had_sigchild ||
+		    lx_do_syscall_restart)) {
+			/*
+			 * If we handled a SIGCLD while blocked in waitid(),
+			 * or the SA_RESTART flag was set, we should wait
+			 * again.
+			 */
+			lx_debug("lx_waitid_helper() restarting due to"
+			    " interrupted system call");
+			goto restart;
+		}
+		return (-1);
+	}
+
+	return (0);
 }
 
 long
@@ -231,11 +251,8 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 
 	native_options |= WEXITED | WTRAPPED;
 
-	/*
-	 * Call into our in-kernel waitid() wrapper:
-	 */
-	if ((rval = syscall(SYS_brand, B_HELPER_WAITID, idtype, id, &info,
-	    native_options, extra_options)) < 0) {
+	if (lx_waitid_helper(idtype, id, &info, native_options,
+	    extra_options) == -1) {
 		return (-errno);
 	}
 
@@ -296,11 +313,8 @@ lx_waitid(uintptr_t idtype, uintptr_t id, uintptr_t infop, uintptr_t opt)
 		return (-EINVAL);
 	}
 
-	/*
-	 * Call into our in-kernel waitid() wrapper:
-	 */
-	if ((rval = syscall(SYS_brand, B_HELPER_WAITID, idtype, id, &s_info,
-	    native_options, extra_options)) < 0) {
+	if (lx_waitid_helper(idtype, id, &s_info, native_options,
+	    extra_options) == -1) {
 		return (-errno);
 	}
 

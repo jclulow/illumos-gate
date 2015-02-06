@@ -172,6 +172,9 @@ struct lx_locale_ending {
 	int		se_size;	/* solaris ending string length */
 };
 
+__thread int lx_do_syscall_restart;
+__thread int lx_had_sigchild;
+
 #define	l2s_locale(lname, sname) \
 	{(lname), (sname), sizeof ((lname)) - 1, sizeof ((sname)) - 1}
 
@@ -647,6 +650,7 @@ lx_emulate(lx_regs_t *rp)
 	}
 #endif /* _ILP32 */
 
+restart_syscall:
 	if (s->sy_flags & LX_SYS_IKE) {
 		lx_debug("\tsyscall %d re-vectoring to lx kernel module "
 		    "for %s()", syscall_num, s->sy_name);
@@ -677,6 +681,11 @@ lx_emulate(lx_regs_t *rp)
 		}
 
 		ret = -stol_errno[-ret];
+	}
+
+	if (lx_do_syscall_restart && ret == -stol_errno[EINTR]) {
+		lx_debug("restarting system call due to signal interruption");
+		goto restart_syscall;
 	}
 
 out:

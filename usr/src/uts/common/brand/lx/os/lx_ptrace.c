@@ -16,6 +16,9 @@
 /*
  * Emulation of the Linux ptrace(2) interface.
  *
+ * XXX This comment is not quite right -- particularly the LOCK ORDERING
+ * RULES section.
+ *
  * ACCORD ALLOCATION AND MANAGEMENT
  *
  * The "lx_ptrace_accord_t" struct tracks the agreement between a tracer LWP
@@ -34,7 +37,13 @@
  * The accord is reference counted (lxpa_refcnt), starting at a count of one at
  * creation to represent the link from the tracer LWP to its accord.  The
  * accord is not freed until the reference count falls to zero.
+
+ * A tracer LWP may attach to a presently untraced target LWP at any time using
+ * PTRACE_ATTACH.  This action will induce a SIGSTOP.
+
+ * SIGNAL MISDIRECTION
  *
+
  * LOCK ORDERING RULES
  *
  * 1. It is not safe, in general, to hold p_lock for two
@@ -365,6 +374,63 @@ lx_ptrace_restart_lwp(klwp_t *lwp)
 	thread_unlock(rt);
 }
 
+static void
+lx_winfo(lx_lwp_data_t *remote, k_siginfo_t *ip, boolean_t waitflag,
+    pid_t *event_ppid, pid_t *event_pid)
+{
+	/*
+	 * Populate our k_siginfo_t with data about this "ptrace-stop"
+	 * condition:
+	 */
+	bzero(ip, sizeof (*ip));
+	ip->si_signo = SIGCLD;
+	ip->si_pid = remote->br_pid;
+	ip->si_code = CLD_TRAPPED;
+
+	switch (remote->br_ptrace_whatstop) {
+	case LX_PR_SYSENTRY:
+	case LX_PR_SYSEXIT:
+		ip->si_status = SIGTRAP;
+		if (remote->br_ptrace_options & LX_PTRACE_O_TRACESYSGOOD) {
+			ip->si_status |= 0x80;
+		}
+		break;
+	case LX_PR_SIGNALLED:
+		/*
+		 * XXX bounds check
+		 */
+		ip->si_status = ltos_signo[
+		    (int)remote->br_ptrace_userstop];
+		break;
+	case LX_PR_EVENT:
+		ip->si_status = SIGTRAP | remote->br_ptrace_event;
+		/*
+		 * Record the Linux pid of both this LWP and the create
+		 * event we are dispatching.  We will use this information
+		 * to unblock any subsequent ptrace(2) events that depend
+		 * on this one.
+		 */
+		if (event_ppid != NULL)
+			*event_ppid = remote->br_pid;
+		if (event_pid != NULL)
+			*event_pid = (pid_t)remote->br_ptrace_eventmsg;
+		break;
+	default:
+		cmn_err(CE_PANIC, "unxpected stop subreason: %d",
+		    remote->br_ptrace_whatstop);
+	}
+
+	/*
+	 * If WNOWAIT was specified, do not mark the event as posted
+	 * so that it may be re-fetched on another call to waitid().
+	 */
+	if (waitflag) {
+		remote->br_ptrace_whystop = 0;
+		remote->br_ptrace_whatstop = 0;
+		remote->br_ptrace_flags &= ~LX_PTRACE_CLDPEND;
+	}
+}
+
 /*
  * Receive notification from stop() of a PR_BRANDPRIVATE stop.
  */
@@ -374,6 +440,12 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
 	kcondvar_t *cvp;
+	klwp_t *plwp = NULL;
+	proc_t *pp = NULL;
+	lx_lwp_data_t *parent;
+	boolean_t cldpend = B_TRUE;
+	boolean_t cldpost = B_FALSE;
+	sigqueue_t *sqp = NULL;
 
 	/*
 	 * We currently only care about LX-specific stop reasons.
@@ -408,7 +480,18 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 
 	lx_ptrace_accord_enter(accord);
 	cvp = accord->lxpa_cvp;
+	parent = accord->lxpa_tracer;
+	if (parent != NULL) {
+		plwp = parent->br_lwp;
+	}
+	if (plwp != NULL) {
+		pp = lwptoproc(plwp);
+	}
 	lx_ptrace_accord_exit(accord);
+
+	if (pp != NULL) {
+		sqp = kmem_zalloc(sizeof (*sqp), KM_SLEEP);
+	}
 
 	/*
 	 * We re-take our process lock now.  The lock will then be held until
@@ -433,12 +516,37 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	lwpd->br_ptrace_whatstop = what;
 
 	/*
+	 * Populate the siginfo_t for the event pending on this tracee LWP.
+	 */
+	if (!(lwpd->br_ptrace_flags & LX_PTRACE_PARENT_WAIT) && pp != NULL) {
+		cldpost = B_TRUE;
+		lx_winfo(lwpd, &sqp->sq_info, B_FALSE, NULL, NULL);
+	}
+
+	/*
+	 * Post the SIGCLD to the tracer.
+	 */
+	mutex_exit(&p->p_lock);
+	if (cldpost && pp != NULL) {
+		mutex_enter(&pp->p_lock);
+		if (!sigismember(&pp->p_sig, SIGCLD)) {
+			sigaddqa(pp, plwp->lwp_thread, sqp);
+			cldpend = B_FALSE;
+			sqp = NULL;
+		}
+		mutex_exit(&pp->p_lock);
+	}
+	mutex_enter(&p->p_lock);
+
+	/*
 	 * We clear the STOPPING flag; stop() continues to hold our p_lock
 	 * until our thread stop state is visible.  If lx_ptrace_exit_tracer()
 	 * is waiting for us to be done, we signal it here.
 	 */
 	lwpd->br_ptrace_flags &= ~LX_PTRACE_STOPPING;
 	lwpd->br_ptrace_flags |= LX_PTRACE_STOPPED;
+	if (cldpend)
+		lwpd->br_ptrace_flags |= LX_PTRACE_CLDPEND;
 	cv_broadcast(&lx_ptrace_busy_cv);
 
 	/*
@@ -453,6 +561,10 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	 * held.
 	 */
 	mutex_exit(&pidlock);
+
+	if (sqp != NULL) {
+		kmem_free(sqp, sizeof (*sqp));
+	}
 }
 
 /*
@@ -478,20 +590,24 @@ lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote)
 	VERIFY(accord->lxpa_tracer == ttolxlwp(curthread));
 
 	/*
-	 * Lock the process containing the tracee LWP.  We must only check
-	 * whether tracees of the current LWP are stopped.
+	 * Lock the process containing the tracee LWP.
 	 */
 	mutex_enter(&rproc->p_lock);
-	VERIFY(remote->br_ptrace_tracer == accord);
-
 	if (!VISIBLE(remote)) {
 		/*
-		 * The tracee LWP is currently detaching itself from this
-		 * accord as it exits.  It is no longer visible to ptrace(2).
+		 * The tracee LWP is currently detaching itself as it exits.
+		 * It is no longer visible to ptrace(2).
 		 */
 		mutex_exit(&rproc->p_lock);
 		return (ESRCH);
 	}
+
+	/*
+	 * We must only check whether tracees of the current LWP are stopped.
+	 * We check this condition after confirming visibility as an exiting
+	 * tracee may no longer be completely consistent.
+	 */
+	VERIFY(remote->br_ptrace_tracer == accord);
 
 	if (!(remote->br_ptrace_flags & LX_PTRACE_STOPPED)) {
 		/*
@@ -839,6 +955,13 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	}
 
 	/*
+	 * XXX should handle this properly.
+	 */
+	if (!src->br_ptrace_options) {
+		return;
+	}
+
+	/*
 	 * We can be somewhat lax with locking, here.  The destination LWP is
 	 * not yet running, and we _are_ the source LWP.
 	 */
@@ -990,6 +1113,7 @@ lx_ptrace_traceme(void)
 	 * Verify that things were as we left them:
 	 */
 	VERIFY(lwpd->br_ptrace_tracer == accord);
+	VERIFY(!list_link_active(&lwpd->br_ptrace_linkage));
 
 	lwpd->br_ptrace_tracer = NULL;
 	mutex_exit(&p->p_lock);
@@ -1021,7 +1145,8 @@ lx_ptrace_stop_common(klwp_t *lwp, proc_t *p, lx_lwp_data_t *lwpd,
 	/*
 	 * We are back from "ptrace-stop" with our process lock held.
 	 */
-	lwpd->br_ptrace_flags &= ~(LX_PTRACE_STOPPING | LX_PTRACE_STOPPED);
+	lwpd->br_ptrace_flags &= ~(LX_PTRACE_STOPPING | LX_PTRACE_STOPPED |
+	    LX_PTRACE_CLDPEND);
 	cv_broadcast(&lx_ptrace_busy_cv);
 	mutex_exit(&p->p_lock);
 
@@ -1044,6 +1169,17 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 	}
 
 	if (!(lwpd->br_ptrace_options & option)) {
+		if (option == LX_PTRACE_O_TRACEEXEC) {
+			/*
+			 * Without PTRACE_O_TRACEEXEC, the Linux kernel will
+			 * send SIGJVM1 to the process, which we will translate
+			 * into an ordinary SIGTRAP for the tracer.
+			 */
+			sigtoproc(p, t, SIGJVM1);
+			mutex_exit(&p->p_lock);
+			return (0);
+		}
+
 		/*
 		 * The flag for this trace event is not enabled, so we will not
 		 * stop.
@@ -1364,6 +1500,112 @@ lx_ptrace_exit(proc_t *p, klwp_t *lwp)
 }
 
 /*
+ * Called when a SIGCLD signal is dispatched so that we may enqueue another.
+ * Return 0 if we enqueued a signal, or -1 if not.
+ */
+int
+lx_sigcld_repost(proc_t *pp, sigqueue_t *sqp)
+{
+	klwp_t *lwp = ttolwp(curthread);
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+	lx_ptrace_accord_t *accord;
+	lx_lwp_data_t *remote;
+	klwp_t *rlwp;
+	proc_t *rproc;
+	boolean_t found = B_FALSE;
+
+	VERIFY(MUTEX_HELD(&pidlock));
+	VERIFY(MUTEX_NOT_HELD(&pp->p_lock));
+	VERIFY(lwptoproc(lwp) == pp);
+
+	mutex_enter(&pp->p_lock);
+	if ((accord = lwpd->br_ptrace_accord) == NULL) {
+		/*
+		 * This LWP is not a tracer LWP, so there will be no
+		 * SIGCLD.
+		 */
+		mutex_exit(&pp->p_lock);
+		return (-1);
+	}
+	mutex_exit(&pp->p_lock);
+
+	mutex_enter(&accord->lxpa_tracees_lock);
+	for (remote = list_head(&accord->lxpa_tracees); remote != NULL;
+	    remote = list_next(&accord->lxpa_tracees, remote)) {
+		rlwp = remote->br_lwp;
+		rproc = lwptoproc(rlwp);
+
+		/*
+		 * Check if this LWP is in "ptrace-stop".  If in the correct
+		 * stop condition, lock the process containing the tracee LWP.
+		 */
+		if (lx_ptrace_lock_if_stopped(accord, remote) != 0) {
+			continue;
+		}
+
+		if (remote->br_ptrace_flags & LX_PTRACE_PARENT_WAIT) {
+			/*
+			 * This event depends on waitid() clearing out the
+			 * event of another LWP.  Skip it for now.
+			 */
+			mutex_exit(&rproc->p_lock);
+			continue;
+		}
+
+		if (!(remote->br_ptrace_flags & LX_PTRACE_CLDPEND)) {
+			/*
+			 * No SIGCLD is required for this LWP.
+			 */
+			mutex_exit(&rproc->p_lock);
+			continue;
+		}
+
+		if (remote->br_ptrace_whystop == 0 ||
+		    remote->br_ptrace_whatstop == 0) {
+			/*
+			 * No (new) stop reason to post for this LWP.
+			 */
+			mutex_exit(&rproc->p_lock);
+			continue;
+		}
+
+		/*
+		 * We found a process of interest.  Leave the process
+		 * containing the tracee LWP locked and break out of the loop.
+		 */
+		found = B_TRUE;
+		break;
+	}
+	mutex_exit(&accord->lxpa_tracees_lock);
+
+	if (!found) {
+		return (-1);
+	}
+
+	/*
+	 * Generate siginfo for this tracee LWP.
+	 */
+	lx_winfo(remote, &sqp->sq_info, B_FALSE, NULL, NULL);
+	remote->br_ptrace_flags &= ~LX_PTRACE_CLDPEND;
+	mutex_exit(&rproc->p_lock);
+
+	mutex_enter(&pp->p_lock);
+	if (sigismember(&pp->p_sig, SIGCLD)) {
+		mutex_exit(&pp->p_lock);
+
+		mutex_enter(&rproc->p_lock);
+		remote->br_ptrace_flags |= LX_PTRACE_CLDPEND;
+		mutex_exit(&rproc->p_lock);
+
+		return (-1);
+	}
+	sigaddqa(pp, curthread, sqp);
+	mutex_exit(&pp->p_lock);
+
+	return (0);
+}
+
+/*
  * Consume the next available ptrace(2) event queued against the accord for
  * this LWP.  The event will be emitted as if through waitid(), and converted
  * by lx_waitpid() and friends before the return to usermode.
@@ -1381,6 +1623,7 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 	klwp_t *rlwp = NULL;
 	proc_t *rproc = NULL;
 	pid_t event_pid = 0, event_ppid = 0;
+	boolean_t waitflag = !(options & WNOWAIT);
 
 	VERIFY(MUTEX_HELD(&pidlock));
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
@@ -1505,53 +1748,9 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 	}
 
 	/*
-	 * Populate our k_siginfo_t with data about this "ptrace-stop"
-	 * condition:
+	 * Populate the signal information.
 	 */
-	bzero(ip, sizeof (*ip));
-	ip->si_signo = SIGCLD;
-	ip->si_pid = remote->br_pid;
-	ip->si_code = CLD_TRAPPED;
-
-	switch (remote->br_ptrace_whatstop) {
-	case LX_PR_SYSENTRY:
-	case LX_PR_SYSEXIT:
-		ip->si_status = SIGTRAP;
-		if (remote->br_ptrace_options & LX_PTRACE_O_TRACESYSGOOD) {
-			ip->si_status |= 0x80;
-		}
-		break;
-	case LX_PR_SIGNALLED:
-		/*
-		 * XXX bounds check
-		 */
-		ip->si_status = ltos_signo[
-		    (int)remote->br_ptrace_userstop];
-		break;
-	case LX_PR_EVENT:
-		ip->si_status = SIGTRAP | remote->br_ptrace_event;
-		/*
-		 * Record the Linux pid of both this LWP and the create
-		 * event we are dispatching.  We will use this information
-		 * to unblock any subsequent ptrace(2) events that depend
-		 * on this one.
-		 */
-		event_ppid = remote->br_pid;
-		event_pid = (pid_t)remote->br_ptrace_eventmsg;
-		break;
-	default:
-		cmn_err(CE_PANIC, "unxpected stop subreason: %d",
-		    remote->br_ptrace_whatstop);
-	}
-
-	/*
-	 * If WNOWAIT was specified, do not mark the event as posted
-	 * so that it may be re-fetched on another call to waitid().
-	 */
-	if (!(options & WNOWAIT)) {
-		remote->br_ptrace_whystop = 0;
-		remote->br_ptrace_whatstop = 0;
-	}
+	lx_winfo(remote, ip, waitflag, &event_ppid, &event_pid);
 
 	/*
 	 * Unlock the tracee.
@@ -1583,6 +1782,19 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 			mutex_exit(&rproc->p_lock);
 		}
 		mutex_exit(&accord->lxpa_tracees_lock);
+	}
+
+	/*
+	 * If we are consuming this wait state, we remove the SIGCLD from
+	 * the queue and post another.
+	 */
+	if (waitflag) {
+		sigqueue_t *sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
+
+		sigcld_delete(ip);
+		if (lx_sigcld_repost(p, sqp) != 0) {
+			kmem_free(sqp, sizeof (sigqueue_t));
+		}
 	}
 
 	*rval = 0;

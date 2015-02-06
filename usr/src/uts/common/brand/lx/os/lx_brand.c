@@ -140,7 +140,8 @@ struct brand_ops lx_brops = {
 	NULL,
 	lx_map32limit,
 	lx_stop_notify,
-	lx_waitid_helper
+	lx_waitid_helper,
+	lx_sigcld_repost,
 };
 
 struct brand_mach_ops lx_mops = {

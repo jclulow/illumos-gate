@@ -497,6 +497,29 @@ ltos_sigcode(int si_code)
 	}
 }
 
+/*
+ * Convert the "status" field of a SIGCLD siginfo_t.  We need to extract the
+ * illumos signal number and convert it to a Linux signal number while leaving
+ * the ptrace(2) event bits intact.
+ */
+int
+stol_status(int s)
+{
+	/*
+	 * We mask out the top bit here in case PTRACE_O_TRACESYSGOOD
+	 * is in use and 0x80 has been ORed with the signal number.
+	 */
+	int stat = stol_signo[s & 0x7f];
+	assert(stat != -1);
+
+	/*
+	 * We must mix in the ptrace(2) event which may be stored in
+	 * the second byte of the status code.  We also re-include the
+	 * PTRACE_O_TRACESYSGOOD bit.
+	 */
+	return ((s & 0xff80) | stat);
+}
+
 int
 stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 {
@@ -530,7 +553,8 @@ stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 
 		case LX_SIGCHLD:
 			lx_siginfo.lsi_pid = siginfop->si_pid;
-			lx_siginfo.lsi_status = siginfop->si_status;
+			lx_siginfo.lsi_status = stol_status(
+			    siginfop->si_status);
 			lx_siginfo.lsi_utime = siginfop->si_utime;
 			lx_siginfo.lsi_stime = siginfop->si_stime;
 			break;
@@ -1552,11 +1576,25 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	size_t stksize;
 	int32_t lx_sig;
 	boolean_t fake_stop = B_FALSE;
+	boolean_t fake_trap = B_FALSE;
+	extern __thread int lx_do_syscall_restart;
+	extern __thread int lx_had_sigchild;
 
 	if (sig == SIGWAITING) {
 		fake_stop = B_TRUE;
 		lx_debug("received SIGWAITING! pretending this is SIGSTOP.\n");
 		sig = SIGSTOP;
+	} else if (sig == SIGJVM1) {
+		fake_trap = B_TRUE;
+		lx_debug("received SIGJVM1! pretending this is SIGTRAP.\n");
+		sig = SIGTRAP;
+	}
+
+	if (sig == SIGCLD) {
+		/*
+		 * Signal to waitpid() that it should restart on interruption.
+		 */
+		lx_had_sigchild = 1;
 	}
 
 	/*
@@ -1588,6 +1626,10 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 		lx_debug("raising real SIGSTOP!");
 		raise(SIGSTOP);
 		return;
+	} else if (fake_trap) {
+		lx_debug("raising real SIGTRAP!");
+		raise(SIGTRAP);
+		return;
 	}
 
 	lx_debug("interpose caught Illumos signal %d, translating to Linux "
@@ -1595,6 +1637,8 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
 	lx_debug("lxsap @ 0x%p", lxsap);
+
+	lx_do_syscall_restart = !!(lxsap->lxsa_flags & LX_SA_RESTART);
 
 	/*
 	 * Emulate vsyscall support.
@@ -2186,10 +2230,13 @@ lx_siginit(void)
 	/*
 	 * Handle SIGWAITING, an unused signal with no Linux analogue, to allow
 	 * remote processes to bring an LWP to an orderly stop within
-	 * lx_call_user_handler() for the ptrace(2) "signal-stop".
+	 * lx_call_user_handler() for the ptrace(2) "signal-stop".  Similarly
+	 * handle SIGJVM1 as a ptrace(2) stand-in for SIGTRAP.
 	 */
 	if (sigaction(SIGWAITING, &sa, NULL) < 0)
 		lx_err_fatal("sigaction(SIGWAITING failed: %s", strerror(errno));
+	if (sigaction(SIGJVM1, &sa, NULL) < 0)
+		lx_err_fatal("sigaction(SIGJVM1 failed: %s", strerror(errno));
 
 	/* SIGSEGV handler is needed for vsyscall emulation */
 #if defined(_LP64)
