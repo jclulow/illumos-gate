@@ -608,6 +608,21 @@ issig_forreal(void)
 		}
 
 		/*
+		 * Allow the brand the chance to alter (or suppress) delivery
+		 * of this signal.
+		 */
+		if (PROC_IS_BRANDED(p) && BROP(p)->b_issig_stop != NULL) {
+			/*
+			 * The brand hook will return 0 if it would like
+			 * us to drive on, or -1 if we should restart
+			 * the loop to check other conditions.
+			 */
+			if (BROP(p)->b_issig_stop(p, lwp) != 0) {
+				continue;
+			}
+		}
+
+		/*
 		 * Honor requested stop before dealing with the
 		 * current signal; a debugger may change it.
 		 * Do not want to go back to loop here since this is a special

@@ -136,6 +136,7 @@ struct brand_ops {
 	int	(*b_waitid_helper)(idtype_t, id_t, k_siginfo_t *, int,
 	    boolean_t *, int *);
 	int	(*b_sigcld_repost)(proc_t *, sigqueue_t *);
+	int	(*b_issig_stop)(proc_t *, klwp_t *);
 };
 
 /*

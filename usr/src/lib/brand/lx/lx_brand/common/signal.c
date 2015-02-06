@@ -1575,26 +1575,16 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	uintptr_t gs;
 	size_t stksize;
 	int32_t lx_sig;
-	boolean_t fake_stop = B_FALSE;
-	boolean_t fake_trap = B_FALSE;
 	extern __thread int lx_do_syscall_restart;
 	extern __thread int lx_had_sigchild;
 
-	if (sig == SIGWAITING) {
-		fake_stop = B_TRUE;
-		lx_debug("received SIGWAITING! pretending this is SIGSTOP.\n");
-		sig = SIGSTOP;
-	} else if (sig == SIGJVM1) {
-		fake_trap = B_TRUE;
-		lx_debug("received SIGJVM1! pretending this is SIGTRAP.\n");
-		sig = SIGTRAP;
-	}
-
-	if (sig == SIGCLD) {
+	switch (sig) {
+	case SIGCLD:
 		/*
 		 * Signal to waitpid() that it should restart on interruption.
 		 */
 		lx_had_sigchild = 1;
+		break;
 	}
 
 	/*
@@ -1603,32 +1593,6 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	if ((lx_sig = stol_signo[sig]) == -1) {
 		lx_unsupported("caught Illumos signal %d, no Linux equivalent",
 		    sig);
-		return;
-	}
-
-	/*
-	 * Allow ptrace(2) to interpose on emulated signals.  The interface
-	 * allows the tracer to replace, or potentially surpress, the signal
-	 * we would otherwise deliver.
-	 */
-	assert(syscall(SYS_brand, B_PTRACE_STOP_FOR_SIG, &lx_sig) == 0);
-	if (lx_sig < 1) {
-		lx_debug("interposed signal was cleared by ptrace(2)");
-		return;
-	} else {
-		lx_debug("post-ptrace the signal is %d", lx_sig);
-	}
-
-	/*
-	 * XXX do we want to raise a _real_ SIGSTOP here?
-	 */
-	if (fake_stop) {
-		lx_debug("raising real SIGSTOP!");
-		raise(SIGSTOP);
-		return;
-	} else if (fake_trap) {
-		lx_debug("raising real SIGTRAP!");
-		raise(SIGTRAP);
 		return;
 	}
 
@@ -2226,17 +2190,6 @@ lx_siginit(void)
 
 	if (sigaction(SIGPWR, &sa, NULL) < 0)
 		lx_err_fatal("sigaction(SIGPWR) failed: %s", strerror(errno));
-
-	/*
-	 * Handle SIGWAITING, an unused signal with no Linux analogue, to allow
-	 * remote processes to bring an LWP to an orderly stop within
-	 * lx_call_user_handler() for the ptrace(2) "signal-stop".  Similarly
-	 * handle SIGJVM1 as a ptrace(2) stand-in for SIGTRAP.
-	 */
-	if (sigaction(SIGWAITING, &sa, NULL) < 0)
-		lx_err_fatal("sigaction(SIGWAITING failed: %s", strerror(errno));
-	if (sigaction(SIGJVM1, &sa, NULL) < 0)
-		lx_err_fatal("sigaction(SIGJVM1 failed: %s", strerror(errno));
 
 	/* SIGSEGV handler is needed for vsyscall emulation */
 #if defined(_LP64)
