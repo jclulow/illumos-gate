@@ -1087,14 +1087,25 @@ lx_ptrace_traceme(void)
 		mutex_enter(&accord->lxpa_tracees_lock);
 
 		if (!(accord->lxpa_flags & LX_ACC_TOMBSTONE)) {
+			lx_proc_data_t *procd = ttolxproc(curthread);
+
 			/*
-			 * Put ourselves in the tracee list for this accord
-			 * and return success to the caller.
+			 * Put ourselves in the tracee list for this accord.
 			 */
 			VERIFY(!list_link_active(&lwpd->br_ptrace_linkage));
 			list_insert_tail(&accord->lxpa_tracees, lwpd);
 			mutex_exit(&accord->lxpa_tracees_lock);
 			lx_ptrace_accord_exit(accord);
+
+			/*
+			 * Set the in-kernel process-wide ptrace(2) enable
+			 * flag.  Attempt also to write the usermode trace flag
+			 * so that the process knows to enter the kernel for
+			 * potential ptrace(2) syscall-stops.
+			 */
+			procd->l_ptrace = 1;
+			(void) suword32((void *)procd->l_traceflag, 1);
+
 			return (0);
 		}
 		mutex_exit(&accord->lxpa_tracees_lock);
