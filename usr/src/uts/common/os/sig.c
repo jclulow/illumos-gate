@@ -1813,6 +1813,15 @@ sigcld_repost()
 
 	sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 	mutex_enter(&pidlock);
+	if (PROC_IS_BRANDED(pp) && BROP(pp)->b_sigcld_repost != NULL) {
+		/*
+		 * Allow the brand to inject synthetic SIGCLD signals.
+		 */
+		if (BROP(pp)->b_sigcld_repost(pp, sqp) == 0) {
+			mutex_exit(&pidlock);
+			return;
+		}
+	}
 	for (cp = pp->p_child; cp; cp = cp->p_sibling) {
 		if (cp->p_pidflag & CLDPEND) {
 			post_sigcld(cp, sqp);

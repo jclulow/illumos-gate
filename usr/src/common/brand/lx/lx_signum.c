@@ -206,7 +206,7 @@ stol_signo[NSIG] = {
 	-1,			/* 36:  Solaris SIGCANCEL */
 	-1,			/* 37:  Solaris SIGLOST */
 	-1,			/* 38:  Solaris SIGXRES */
-	-1,			/* 39:  Solaris SIGJVM1 */
+	LX_SIGTRAP,		/* 39:  Solaris SIGJVM1; use for fake SIGTRAP */
 	-1,			/* 40:  Solaris SIGJVM2 */
 	-1,			/* 41:  Solaris SIGINFO */
 	LX_SIGRTMIN,		/* 42:  Solaris _SIGRTMIN */

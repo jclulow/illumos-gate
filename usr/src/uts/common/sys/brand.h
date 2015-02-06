@@ -135,6 +135,7 @@ struct brand_ops {
 	void	(*b_stop_notify)(proc_t *, klwp_t *, ushort_t, ushort_t);
 	int	(*b_waitid_helper)(idtype_t, id_t, k_siginfo_t *, int,
 	    boolean_t *, int *);
+	int	(*b_sigcld_repost)(proc_t *, sigqueue_t *);
 };
 
 /*

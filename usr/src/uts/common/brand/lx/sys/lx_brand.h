@@ -310,6 +310,7 @@ typedef enum lx_ptrace_state {
 	LX_PTRACE_INHERIT = 0x08,
 	LX_PTRACE_STOPPED = 0x10,
 	LX_PTRACE_PARENT_WAIT = 0x20,
+	LX_PTRACE_CLDPEND = 0x40,
 } lx_ptrace_state_t;
 
 /*

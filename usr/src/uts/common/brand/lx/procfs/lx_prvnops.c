@@ -149,6 +149,7 @@ static void lxpr_read_stat(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_swaps(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_uptime(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_version(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_kernel_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 
 static void lxpr_read_pid_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_limits(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -485,7 +486,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_pid_status,		/* /proc/<pid>/status	*/
 	lxpr_read_isdir,		/* /proc/<pid>/fd	*/
 	lxpr_read_fd,			/* /proc/<pid>/fd/nn	*/
-	lxpr_read_empty,		/* /proc/cmdline	*/
+	lxpr_read_kernel_cmdline,	/* /proc/cmdline	*/
 	lxpr_read_cpuinfo,		/* /proc/cpuinfo	*/
 	lxpr_read_empty,		/* /proc/devices	*/
 	lxpr_read_empty,		/* /proc/dma		*/
@@ -787,6 +788,26 @@ lxpr_read_invalid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 static void
 lxpr_read_empty(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
+}
+
+int lxpr_which_cmdline = 1;
+
+static void
+lxpr_read_kernel_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	VERIFY(lxpnp->lxpr_type == LXPR_CMDLINE);
+
+	switch (lxpr_which_cmdline) {
+	case 1:
+		lxpr_uiobuf_printf(uiobuf, "--debug\n");
+		break;
+	case 2:
+		lxpr_uiobuf_printf(uiobuf, "--verbose\n");
+		break;
+	case 3:
+		lxpr_uiobuf_printf(uiobuf, "--verbose --debug\n");
+		break;
+	}
 }
 
 /*
