@@ -1007,6 +1007,7 @@ static int
 lx_ptrace_traceme(void)
 {
 	int error;
+	boolean_t did_attach = B_FALSE;
 	/*
 	 * Our (Tracee) LWP:
 	 */
@@ -1068,6 +1069,7 @@ lx_ptrace_traceme(void)
 		 * reference count.
 		 */
 		lwpd->br_ptrace_tracer = accord;
+		did_attach = B_TRUE;
 		error = 0;
 	}
 	mutex_exit(&p->p_lock);
@@ -1108,14 +1110,15 @@ lx_ptrace_traceme(void)
 	 */
 	VERIFY(error != 0);
 	mutex_enter(&p->p_lock);
+	if (did_attach) {
+		/*
+		 * Verify that things were as we left them:
+		 */
+		VERIFY(!list_link_active(&lwpd->br_ptrace_linkage));
+		VERIFY(lwpd->br_ptrace_tracer == accord);
 
-	/*
-	 * Verify that things were as we left them:
-	 */
-	VERIFY(lwpd->br_ptrace_tracer == accord);
-	VERIFY(!list_link_active(&lwpd->br_ptrace_linkage));
-
-	lwpd->br_ptrace_tracer = NULL;
+		lwpd->br_ptrace_tracer = NULL;
+	}
 	mutex_exit(&p->p_lock);
 
 	/*
