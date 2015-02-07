@@ -530,6 +530,16 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		lwpd->br_scms = 1;
 #endif
 
+		if (pd->l_traceflag != NULL && pd->l_ptrace != 0) {
+			/*
+			 * If ptrace(2) is active on this process, it is likely
+			 * that we just finished an emulated execve(2) in a
+			 * traced child.  The usermode traceflag will have been
+			 * clobbered by the exec, so we set it again here:
+			 */
+			(void) suword32((void *)pd->l_traceflag, 1);
+		}
+
 		*rval = 0;
 		return (0);
 	case B_TTYMODES:
