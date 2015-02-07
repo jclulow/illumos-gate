@@ -1192,6 +1192,16 @@ lx_ptrace_stop_for_option(int option, boolean_t child, ulong_t msg)
 		return (ESRCH);
 	}
 
+	if (!child) {
+		/*
+		 * Only the first event posted by a new process is to be held
+		 * until the matching parent event is dispatched, and only if
+		 * it is a "child" event.  This is not a child event, so we
+		 * clear the wait flag.
+		 */
+		lwpd->br_ptrace_flags &= ~LX_PTRACE_PARENT_WAIT;
+	}
+
 	if (!(lwpd->br_ptrace_options & option)) {
 		if (option == LX_PTRACE_O_TRACEEXEC) {
 			/*
