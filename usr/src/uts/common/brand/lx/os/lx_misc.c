@@ -113,6 +113,12 @@ lx_exec()
 		lx_pid_reassign(curthread);
 	}
 
+	/*
+	 * Inform ptrace(2) that are presently processing an execve(2)
+	 * call.
+	 */
+	lx_ptrace_stop_for_option(LX_PTRACE_O_TRACEEXEC, B_FALSE, 0);
+
 	/* clear the fsbase values until the app. can reinitialize them */
 	lwpd->br_lx_fsbase = NULL;
 	lwpd->br_ntv_fsbase = NULL;
