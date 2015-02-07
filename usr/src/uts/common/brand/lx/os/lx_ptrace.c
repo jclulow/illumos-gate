@@ -673,10 +673,10 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
 	klwp_t *lwp = remote->br_lwp;
 
 	/*
-	 * The tracer may choose to supress the delivery of a signal, or select
-	 * an alternative signal for delivery.  If this is an appropriate
-	 * ptrace(2) "signal-stop", br_ptrace_userstop will be used as the new
-	 * signal number.
+	 * The tracer may choose to suppress the delivery of a signal, or
+	 * select an alternative signal for delivery.  If this is an
+	 * appropriate ptrace(2) "signal-stop", br_ptrace_userstop will be used
+	 * as the new signal number.
 	 *
 	 * As with so many other aspects of the Linux ptrace(2) interface, this
 	 * may also fail silently if the state machine is not aligned
@@ -722,7 +722,7 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
  * The caller must not hold p_lock or P_PR_LOCK on any process.
  */
 static int
-lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
+lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
     boolean_t *release_hold)
 {
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
@@ -750,11 +750,16 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
 	remote->br_ptrace_flags = 0;
 	*release_hold = B_TRUE;
 
+	/*
+	 * The tracer may, as described in lx_ptrace_cont(), choose to suppress
+	 * or modify the delivered signal.
+	 */
+	remote->br_ptrace_userstop = signo;
+
 	lx_ptrace_restart_lwp(rlwp);
 
 	return (0);
 }
-
 
 /*
  * This routine implements the PTRACE_ATTACH operation of the Linux ptrace(2)
@@ -1975,7 +1980,8 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	 */
 	switch (ptrace_op) {
 	case LX_PTRACE_DETACH:
-		error = lx_ptrace_detach(accord, remote, &release_hold);
+		error = lx_ptrace_detach(accord, remote, (int)data,
+		    &release_hold);
 		break;
 
 	case LX_PTRACE_CONT:
