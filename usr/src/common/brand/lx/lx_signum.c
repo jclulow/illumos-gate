@@ -109,10 +109,10 @@ ltos_signo[LX_NSIG + 1] = {
 	SIGPIPE,
 	SIGALRM,
 	SIGTERM,
-	SIGEMT,			/* 16:  Linux SIGSTKFLT; use illumos SIGEMT */
+	SIGEMT,			/* 16:  Linux SIGSTKFLT; use Solaris SIGEMT */
 	SIGCHLD,
 	SIGCONT,
-	SIGSTOP,		/* 19:  Linux SIGSTOP */
+	SIGSTOP,
 	SIGTSTP,
 	SIGTTIN,
 	SIGTTOU,

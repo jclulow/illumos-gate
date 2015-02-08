@@ -790,23 +790,29 @@ lxpr_read_empty(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 }
 
-int lxpr_which_cmdline = 1;
-
 static void
 lxpr_read_kernel_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
+	zone_t *z = curzone;
+	boolean_t print_nl = B_TRUE;
+
 	VERIFY(lxpnp->lxpr_type == LXPR_CMDLINE);
 
-	switch (lxpr_which_cmdline) {
-	case 1:
-		lxpr_uiobuf_printf(uiobuf, "--debug\n");
-		break;
-	case 2:
-		lxpr_uiobuf_printf(uiobuf, "--verbose\n");
-		break;
-	case 3:
-		lxpr_uiobuf_printf(uiobuf, "--verbose --debug\n");
-		break;
+	if (z != NULL && z->zone_bootargs != NULL) {
+		char *nl = strchr(z->zone_bootargs, '\n');
+		if (nl[0] == '\n' && nl[1] == '\0') {
+			/*
+			 * Don't print a trailing newline if there is
+			 * one in the string already.
+			 */
+			print_nl = B_FALSE;
+		}
+
+		lxpr_uiobuf_printf(uiobuf, "%s", z->zone_bootargs);
+	}
+
+	if (print_nl) {
+		lxpr_uiobuf_printf(uiobuf, "\n");
 	}
 }
 

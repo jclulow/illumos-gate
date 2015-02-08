@@ -115,34 +115,34 @@ static uint32_t lx_map32limit(proc_t *);
 
 /* lx brand */
 struct brand_ops lx_brops = {
-	lx_init_brand_data,
-	lx_free_brand_data,
-	lx_brandsys,
-	lx_setbrand,
-	lx_getattr,
-	lx_setattr,
-	lx_copy_procdata,
-	lx_proc_exit,
-	lx_exec,
-	lx_setrval,
-	lx_initlwp,
-	lx_forklwp,
-	lx_freelwp,
-	lx_exitlwp,
-	lx_elfexec,
-	NULL,
-	NULL,
-	lx_psig_to_proc,
-	NSIG,
-	lx_exit_with_sig,
-	lx_wait_filter,
-	lx_native_exec,
-	NULL,
-	lx_map32limit,
-	lx_stop_notify,
-	lx_waitid_helper,
-	lx_sigcld_repost,
-	lx_issig_stop,
+	lx_init_brand_data,		/* b_init_brand_data */
+	lx_free_brand_data,		/* b_free_brand_data */
+	lx_brandsys,			/* b_brandsys */
+	lx_setbrand,			/* b_setbrand */
+	lx_getattr,			/* b_getattr */
+	lx_setattr,			/* b_setattr */
+	lx_copy_procdata,		/* b_copy_procdata */
+	lx_proc_exit,			/* b_proc_exit */
+	lx_exec,			/* b_exec */
+	lx_setrval,			/* b_lwp_setrval */
+	lx_initlwp,			/* b_initlwp */
+	lx_forklwp,			/* b_forklwp */
+	lx_freelwp,			/* b_freelwp */
+	lx_exitlwp,			/* b_lwpexit */
+	lx_elfexec,			/* b_elfexec */
+	NULL,				/* b_sigset_native_to_brand */
+	NULL,				/* b_sigset_brand_to_native */
+	lx_psig_to_proc,		/* b_psig_to_proc */
+	NSIG,				/* b_nsig */
+	lx_exit_with_sig,		/* b_exit_with_sig */
+	lx_wait_filter,			/* b_wait_filter */
+	lx_native_exec,			/* b_native_exec */
+	NULL,				/* b_ptrace_exectrap */
+	lx_map32limit,			/* b_map32limit */
+	lx_stop_notify,			/* b_stop_notify */
+	lx_waitid_helper,		/* b_waitid_helper */
+	lx_sigcld_repost,		/* b_sigcld_repost */
+	lx_issig_stop			/* b_issig_stop */
 };
 
 struct brand_mach_ops lx_mops = {
@@ -714,57 +714,17 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		return (lx_sched_affinity(cmd, arg1, arg2, arg3, rval));
 
 	case B_PTRACE_STOP_FOR_OPT:
-		return (lx_ptrace_stop_for_option((int)arg1, (boolean_t)arg2,
-		    (ulong_t)arg3));
+		return (lx_ptrace_stop_for_option((int)arg1, arg2 == 0 ?
+		    B_FALSE : B_TRUE, (ulong_t)arg3));
 
 	case B_PTRACE_CLONE_INHERIT:
 		return (lx_ptrace_set_clone_inherit(arg1 == 0 ? B_FALSE :
 		    B_TRUE));
 
-	case B_PTRACE_STOP_FOR_SIG: {
-		/*
-		 * The B_PTRACE_STOP subcommand brings this LWP to an orderly
-		 * stop in the kernel and notifies the tracer LWP.
-		 *
-		 * arg1: ptr to uint32_t with current signal number
-		 */
-		int ret;
-		boolean_t stopped;
-
-		lwpd = ttolxlwp(curthread);
-
-		if (fuword32((void *)arg1,
-		    (uint32_t *)&lwpd->br_ptrace_userstop) != 0) {
-			return (EFAULT);
-		}
-
-		(void) lx_ptrace_stop(LX_PR_SIGNALLED);
-
-		if (suword32((void *)arg1, lwpd->br_ptrace_userstop) != 0) {
-			ret = EFAULT;
-		}
-		lwpd->br_ptrace_userstop = 0;
-
-		return (0);
-	}
-
 	case B_PTRACE_KERNEL:
-		/*
-		 * arg1: int		ptrace_op
-		 * arg2: pid_t		lx_pid
-		 * arg3: uintptr_t	addr
-		 * arg4: uintptr_t	data
-		 */
 		return (lx_ptrace_kernel((int)arg1, (pid_t)arg2, arg3, arg4));
 
 	case B_HELPER_WAITID: {
-		/*
-		 * arg1: idtype_t	idtype
-		 * arg2: id_t		id
-		 * arg3: siginfo_t	*siginfop
-		 * arg4: int		native_options
-		 * arg5: int		extra_options
-		 */
 		idtype_t idtype = (idtype_t)arg1;
 		id_t id = (id_t)arg2;
 		siginfo_t *infop = (siginfo_t *)arg3;

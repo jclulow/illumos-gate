@@ -114,8 +114,9 @@ lx_exec()
 	}
 
 	/*
-	 * Inform ptrace(2) that are presently processing an execve(2)
-	 * call.
+	 * Inform ptrace(2) that we are processing an execve(2) call so that if
+	 * we are traced we can post either the PTRACE_EVENT_EXEC event or the
+	 * legacy SIGTRAP.
 	 */
 	lx_ptrace_stop_for_option(LX_PTRACE_O_TRACEEXEC, B_FALSE, 0);
 
@@ -243,6 +244,10 @@ lx_freelwp(klwp_t *lwp)
 			    lwptot(lwp)->t_tid);
 		}
 
+		/*
+		 * Ensure that lx_ptrace_exit() has been called to detach
+		 * ptrace(2) tracers and tracees.
+		 */
 		VERIFY(lwpd->br_ptrace_tracer == NULL);
 		VERIFY(lwpd->br_ptrace_accord == NULL);
 
@@ -545,10 +550,7 @@ lx_exit_with_sig(proc_t *cp, sigqueue_t *sqp, void *brand_data)
  *   SIGCHLD         X           -
  *
  * This is an XOR of __WCLONE being set, and SIGCHLD being the signal sent on
- * process exit.  Since (flags & __WCLONE) is not guaranteed to have the
- * least-significant bit set when the flags is enabled, !! is used to place
- * that bit into the least significant bit. Then, the bitwise XOR can be
- * used, because there is no logical XOR in the C language.
+ * process exit.
  *
  * More information on wait in lx brands can be found at
  * usr/src/lib/brand/lx/lx_brand/common/wait.c.
@@ -559,7 +561,6 @@ lx_wait_filter(proc_t *pp, proc_t *cp)
 	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 	int flags = lwpd->br_waitid_flags;
 	boolean_t ret;
-	boolean_t _wclone = !!(flags & LX_WCLONE);
 
 	if (!lwpd->br_waitid_emulate) {
 		return (B_TRUE);
@@ -571,7 +572,7 @@ lx_wait_filter(proc_t *pp, proc_t *cp)
 
 	} else {
 		int exitsig;
-		boolean_t is_clone;
+		boolean_t is_clone, _wclone;
 
 		/*
 		 * Determine the exit signal for this process:
@@ -582,7 +583,14 @@ lx_wait_filter(proc_t *pp, proc_t *cp)
 			exitsig = ptolxproc(cp)->l_signal;
 		}
 
-		is_clone = !!(stol_signo[SIGCHLD] == exitsig);
+		/*
+		 * To enable the bitwise XOR to stand in for the absent C
+		 * logical XOR, we use the logical NOT operator twice to
+		 * ensure the least significant bit is populated with the
+		 * __WCLONE flag status.
+		 */
+		_wclone = !!(flags & LX_WCLONE);
+		is_clone = (stol_signo[SIGCHLD] == exitsig);
 
 		ret = (_wclone ^ is_clone) ? B_TRUE : B_FALSE;
 	}

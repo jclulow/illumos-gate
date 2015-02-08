@@ -80,8 +80,10 @@ extern "C" {
 #define	B_LPID_TO_SPAIR		128
 #define	B_SYSENTRY		129
 #define	B_SYSRETURN		130
+#define	B_PTRACE_KERNEL		131
 #define	B_SET_AFFINITY_MASK	132
 #define	B_GET_AFFINITY_MASK	133
+#define	B_PTRACE_CLONE_INHERIT	134
 #define	B_PTRACE_STOP_FOR_OPT	135
 #define	B_UNSUPPORTED		136
 #define	B_STORE_ARGS		137
@@ -90,9 +92,6 @@ extern "C" {
 #define	B_UNWIND_NTV_SYSC_FLAG	140
 #define	B_EXIT_AS_SIG		141
 #define	B_HELPER_WAITID		142
-#define	B_PTRACE_STOP_FOR_SIG	143
-#define	B_PTRACE_KERNEL		144
-#define	B_PTRACE_CLONE_INHERIT	145
 
 #define	B_IKE_SYSCALL		192
 
@@ -121,8 +120,7 @@ typedef enum lx_ptrace_options {
     LX_PTRACE_O_TRACEVFORK | LX_PTRACE_O_TRACECLONE | 		\
     LX_PTRACE_O_TRACEEXEC | LX_PTRACE_O_TRACEVFORKDONE |	\
     LX_PTRACE_O_TRACEEXIT | LX_PTRACE_O_TRACESECCOMP)
-
-#endif
+#endif /* !_ASM */
 
 /* siginfo si_status for traced events */
 #define	LX_PTRACE_EVENT_FORK		0x100
@@ -296,8 +294,7 @@ typedef struct lx_lwp_data lx_lwp_data_t;
  * Flag values for "lxpa_flags" on a ptrace(2) accord.
  */
 typedef enum lx_accord_flags {
-	LX_ACC_TOMBSTONE = 0x01,
-	LX_ACC_TASKQ_ACTIVE = 0x02,
+	LX_ACC_TOMBSTONE = 0x01
 } lx_accord_flags_t;
 
 /*
@@ -310,7 +307,7 @@ typedef enum lx_ptrace_state {
 	LX_PTRACE_INHERIT = 0x08,
 	LX_PTRACE_STOPPED = 0x10,
 	LX_PTRACE_PARENT_WAIT = 0x20,
-	LX_PTRACE_CLDPEND = 0x40,
+	LX_PTRACE_CLDPEND = 0x40
 } lx_ptrace_state_t;
 
 /*
@@ -333,12 +330,16 @@ typedef struct lx_ptrace_accord {
 	list_t			lxpa_tracees;
 } lx_ptrace_accord_t;
 
+/*
+ * These values are stored in the per-LWP data for a tracee when it is attached
+ * to a tracer.  They record the method that was used to attach.
+ */
 typedef enum lx_ptrace_attach {
 	LX_PTA_NONE = 0,
 	LX_PTA_ATTACH,
 	LX_PTA_TRACEME,
 	LX_PTA_INHERIT_CLONE,
-	LX_PTA_INHERIT_OPTIONS,
+	LX_PTA_INHERIT_OPTIONS
 } lx_ptrace_attach_t;
 
 /*
@@ -389,10 +390,10 @@ struct lx_lwp_data {
 	lx_ptrace_accord_t *br_ptrace_tracer; /* accord tracing this LWP */
 	list_node_t br_ptrace_linkage;	/* linkage for lxpa_tracees list */
 
-	ushort_t br_ptrace_whystop; /* ptrace stop reason, or 0 for no stop */
-	ushort_t br_ptrace_whatstop; /* ptrace stop sub-reason */
+	ushort_t br_ptrace_whystop; 	/* stop reason, 0 for no stop */
+	ushort_t br_ptrace_whatstop;	/* stop sub-reason */
 
-	int32_t br_ptrace_userstop; /* data to/from B_PTRACE_STOP */
+	int32_t br_ptrace_userstop;	/* data to/from B_PTRACE_STOP */
 
 	uint_t	br_ptrace_event;
 	ulong_t	br_ptrace_eventmsg;

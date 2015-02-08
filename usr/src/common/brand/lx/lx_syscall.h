@@ -35,9 +35,6 @@ extern "C" {
 #define	LX_WNOTHREAD	0x20000000 /* Do not wait on siblings' children */
 #define	LX_WALL		0x40000000 /* Wait on all children */
 #define	LX_WCLONE	0x80000000 /* Wait only on clone children */
-typedef struct lx_waitid_args {
-	int waitid_flags;
-} lx_waitid_args_t;
 
 /* For arch_prctl(2) */
 #define	LX_ARCH_SET_GS	0x1001
