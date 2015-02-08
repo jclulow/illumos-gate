@@ -800,7 +800,7 @@ lxpr_read_kernel_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 	if (z != NULL && z->zone_bootargs != NULL) {
 		char *nl = strchr(z->zone_bootargs, '\n');
-		if (nl[0] == '\n' && nl[1] == '\0') {
+		if (nl != NULL && nl[0] == '\n' && nl[1] == '\0') {
 			/*
 			 * Don't print a trailing newline if there is
 			 * one in the string already.
