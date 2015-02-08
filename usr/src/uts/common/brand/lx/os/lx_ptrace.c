@@ -1096,15 +1096,26 @@ void
 lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 {
 	proc_t *srcp = lwptoproc(src->br_lwp);
+	proc_t *dstp = lwptoproc(dst->br_lwp);
 	lx_ptrace_accord_t *accord;
+	boolean_t unlock = B_FALSE;
 
-	VERIFY(MUTEX_HELD(&srcp->p_lock));
+	if (srcp == dstp) {
+		/*
+		 * This is syslwp_create(), so the process p_lock is already
+		 * held.
+		 */
+		VERIFY(MUTEX_HELD(&srcp->p_lock));
+	} else {
+		unlock = B_TRUE;
+		mutex_enter(&srcp->p_lock);
+	}
 
 	if ((accord = src->br_ptrace_tracer) == NULL) {
 		/*
 		 * The source LWP does not have a tracer to inherit.
 		 */
-		return;
+		goto out;
 	}
 
 	/*
@@ -1143,7 +1154,7 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 		/*
 		 * No condition triggered inheritance.
 		 */
-		return;
+		goto out;
 	}
 
 	/*
@@ -1191,6 +1202,11 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	 * now.
 	 */
 	cv_broadcast(&lx_ptrace_busy_cv);
+
+out:
+	if (unlock) {
+		mutex_exit(&srcp->p_lock);
+	}
 }
 
 static int
