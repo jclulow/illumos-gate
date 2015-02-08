@@ -49,23 +49,7 @@
 #include <sys/lx_debug.h>
 #include <sys/lx_thread.h>
 #include <sys/fork.h>
-
-#define	LX_CSIGNAL		0x000000ff
-#define	LX_CLONE_VM		0x00000100
-#define	LX_CLONE_FS		0x00000200
-#define	LX_CLONE_FILES		0x00000400
-#define	LX_CLONE_SIGHAND	0x00000800
-#define	LX_CLONE_PID		0x00001000
-#define	LX_CLONE_PTRACE		0x00002000
-#define	LX_CLONE_VFORK		0x00004000
-#define	LX_CLONE_PARENT		0x00008000
-#define	LX_CLONE_THREAD		0x00010000
-#define	LX_CLONE_SYSVSEM	0x00040000
-#define	LX_CLONE_SETTLS		0x00080000
-#define	LX_CLONE_PARENT_SETTID	0x00100000
-#define	LX_CLONE_CHILD_CLEARTID	0x00200000
-#define	LX_CLONE_DETACH		0x00400000
-#define	LX_CLONE_CHILD_SETTID	0x01000000
+#include <lx_syscall.h>
 
 #define	SHARED_AS	\
 	(LX_CLONE_VM | LX_CLONE_FS | LX_CLONE_FILES | LX_CLONE_SIGHAND	\
@@ -462,11 +446,10 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	ptrace_event = ptrace_clone_event(flags);
 
 	/*
-	 * Inform the kernel whether we wish to inherit a ptrace tracer on
-	 * the next fork/thr_create:
+	 * Inform the in-kernel ptrace(2) subsystem that we are about to
+	 * emulate a fork(2), vfork(2) or clone(2) system call.
 	 */
-	assert(syscall(SYS_brand, B_PTRACE_CLONE_INHERIT,
-	    !!(flags & LX_CLONE_PTRACE)) == 0);
+	lx_ptrace_clone_begin(ptrace_event, !!(flags & LX_CLONE_PTRACE));
 
 	/* See if this is a fork() operation or a thr_create().  */
 	if (IS_FORK(flags) || IS_VFORK(flags)) {
