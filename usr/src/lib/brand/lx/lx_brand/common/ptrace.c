@@ -54,58 +54,14 @@
 #include <lx_syscall.h>
 
 /*
- * Linux ptrace compatibility.
- *
- * The brand support for ptrace(2) is built on top of the Solaris /proc
- * interfaces, mounted at /native/proc in the zone.  This gets quite
- * complicated due to the way ptrace works and the Solaris realization of the
- * Linux threading model.
- *
- * ptrace can only interact with a process if we are tracing it, and it is
- * currently stopped. There are two ways a process can begin tracing another
- * process:
- *
- *   PTRACE_TRACEME
- *
- *   A child process can use PTRACE_TRACEME to indicate that it wants to be
- *   traced by the parent. This sets the ptrace compatibility flag in /proc
- *   which causes ths ptrace consumer to be notified through the wait(2)
- *   system call of events of interest. PTRACE_TRACEME is typically used by
- *   the debugger by forking a process, using PTRACE_TRACEME, and finally
- *   doing an exec of the specified program.
- *
- *
- *   PTRACE_ATTACH
- *
- *   We can attach to a process using PTRACE_ATTACH. This is considerably
- *   more complicated than the previous case. On Linux, the traced process is
- *   effectively reparented to the ptrace consumer so that event notification
- *   can go through the normal wait(2) system call. Solaris has no such
- *   ability to reparent a process (nor should it) so some trickery was
- *   required.
- *
- *   When the ptrace consumer uses PTRACE_ATTACH it forks a monitor child
- *   process. The monitor enables the /proc ptrace flag for itself and uses
- *   the native /proc mechanisms to observe the traced process and wait for
- *   events of interest. When the traced process stops, the monitor process
- *   sends itself a SIGTRAP thus rousting its parent process (the ptrace
- *   consumer) out of wait(2). We then translate the process id and status
- *   code from wait(2) to those of the traced process.
- *
- *   To detach from the process we just have to clean up tracing flags and
- *   clean up the monitor.
- *
- * ptrace can only interact with a process if we have traced it, and it is
- * currently stopped (see is_ptrace_stopped()). For threads, there's no way to
- * distinguish whether ptrace() has been called for all threads or some
- * subset. Since most clients will be tracing all threads, and erroneously
- * allowing ptrace to access a non-traced thread is non-fatal (or at least
- * would be fatal on linux), we ignore this aspect of the problem.
+ * Much of the Linux ptrace(2) emulation is performed in the kernel, and there
+ * is a block comment in "lx_ptrace.c" that describes the facility in some
+ * detail.
  */
 
 /* execve syscall numbers for 64-bit vs. 32-bit */
 #if defined(_LP64)
-#define	LX_SYS_execve	520
+#define	LX_SYS_execve	59
 #else
 #define	LX_SYS_execve	11
 #endif
@@ -226,8 +182,6 @@ static ptrace_state_map_t *ptrace_state_map = NULL;
 static mutex_t ptrace_map_mtx = DEFAULTMUTEX;
 
 extern void *_START_;
-
-extern int lx_traceflag;
 
 static sigset_t blockable_sigs;
 
@@ -933,11 +887,22 @@ is_ptrace_stopped(pid_t lxpid)
 {
 	ulong_t dummy;
 
+	/*
+	 * We attempt a PTRACE_GETEVENTMSG request to determine if the tracee
+	 * is stopped appropriately.  As we are not in the kernel, this is not
+	 * an atomic check; the process is not guaranteed to remain stopped
+	 * once we have dropped the locks protecting that state and left the
+	 * kernel.
+	 */
 	if (lx_ptrace_kernel(LX_PTRACE_GETEVENTMSG, lxpid, NULL,
 	    (uintptr_t)&dummy) == 0) {
 		return (B_TRUE);
 	}
 
+	/*
+	 * This call should only fail with ESRCH, which tells us that the
+	 * a tracee with that pid was not found in the stopped condition.
+	 */
 	assert(errno == ESRCH);
 
 	return (B_FALSE);
@@ -1222,7 +1187,7 @@ lx_ptrace_stop_if_option(int option, boolean_t child, ulong_t msg)
 	 * ptrace(2) events.
 	 */
 	lx_debug("lx_ptrace_stop_if_option(%d, %s, %lu)", option,
-	    child ? "TRUE" : "FALSE", msg);
+	    child ? "TRUE [child]" : "FALSE [parent]", msg);
 	if (syscall(SYS_brand, B_PTRACE_STOP_FOR_OPT, option, child,
 	    msg) != 0) {
 		if (errno != ESRCH) {
@@ -1244,8 +1209,15 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	/*
 	 * Call into the in-kernel ptrace(2) emulation code.
 	 */
+	lx_debug("revectoring to B_PTRACE_KERNEL(%d, %d, %p, %p)", ptrace_op,
+	    lxpid, addr, data);
 	ret = syscall(SYS_brand, B_PTRACE_KERNEL, ptrace_op, lxpid, addr,
 	    data);
+	if (ret == 0) {
+		lx_debug("\t= %d", ret);
+	} else {
+		lx_debug("\t= %d (%s)", ret, strerror(errno));
+	}
 
 	return (ret == 0 ? ret : -errno);
 }
@@ -1253,13 +1225,13 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 long
 lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 {
+	int ptrace_op = (int)p1;
 	pid_t pid, lxpid = (pid_t)p2;
 	lwpid_t lwpid;
-	int ptrace_op = (int)p1;
 	long rval;
 
 	/*
-	 * Some of PTRACE_* requests are emulated entirely in the kernel.
+	 * Some PTRACE_* requests are emulated entirely in the kernel.
 	 */
 	switch (ptrace_op) {
 	/*
@@ -1268,13 +1240,7 @@ lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	 * Both `data' and `addr' are ignored in both cases.
 	 */
 	case LX_PTRACE_TRACEME:
-		if ((rval = lx_ptrace_kernel(ptrace_op, 0, 0, 0)) == 0) {
-			/*
-			 * Enable the trace flag for this process.
-			 */
-			lx_traceflag = 1;
-		}
-		return (rval);
+		return (lx_ptrace_kernel(ptrace_op, 0, 0, 0));
 
 	case LX_PTRACE_ATTACH:
 		return (lx_ptrace_kernel(ptrace_op, lxpid, 0, 0));

@@ -101,12 +101,16 @@
 
 extern long max_pid;
 
+/*
+ * Split the passed waitpid/waitid options into two separate variables:
+ * those for the native illumos waitid(2), and the extra Linux-specific
+ * options we will handle in our brand-specific code.
+ */
 static int
 ltos_options(uintptr_t options, int *native_options, int *extra_options)
 {
 	int newoptions = 0;
 	int rval;
-	lx_waitid_args_t extra;
 
 	if (((options) & ~(LX_WNOHANG | LX_WUNTRACED | LX_WEXITED |
 	    LX_WCONTINUED | LX_WNOWAIT | LX_WNOTHREAD | LX_WALL |
@@ -127,7 +131,9 @@ ltos_options(uintptr_t options, int *native_options, int *extra_options)
 	if (options & LX_WNOWAIT)
 		newoptions |= WNOWAIT;
 
-	/* The trapped option is implicit on Linux */
+	/*
+	 * The trapped option is implicit on Linux.
+	 */
 	newoptions |= WTRAPPED;
 
 	*native_options = newoptions;
@@ -165,9 +171,14 @@ lx_wstat(int code, int status)
 }
 
 static int
-lx_waitid_helper(idtype_t idtype, id_t id, siginfo_t *sip,
-    int native_options, int extra_options)
+lx_waitid_helper(idtype_t idtype, id_t id, siginfo_t *sip, int native_options,
+    int extra_options)
 {
+	/*
+	 * These thread-specific variables allow the signal interposition code
+	 * to communicate restart disposition for any interrupting signals to
+	 * us.
+	 */
 	extern __thread int lx_had_sigchild;
 	extern __thread int lx_do_syscall_restart;
 

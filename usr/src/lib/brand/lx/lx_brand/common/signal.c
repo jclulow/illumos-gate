@@ -345,6 +345,14 @@ static int lx_sigsegv_depth = 0;
 #endif
 
 /*
+ * Setting LX_NO_ABORT_HANDLER in the environment will prevent the emulated
+ * Linux program from modifying the signal handling disposition for SIGSEGV or
+ * SIGABRT.  Useful for debugging programs which fall over themselves to
+ * prevent useful core files being generated.
+ */
+static int lx_no_abort_handler = 0;
+
+/*
  * Cache result of process.max-file-descriptor to avoid calling getrctl()
  * for each lx_ppoll().
  */
@@ -1574,14 +1582,16 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	ucontext_t *ucp = (ucontext_t *)p;
 	uintptr_t gs;
 	size_t stksize;
-	int32_t lx_sig;
+	int lx_sig;
 	extern __thread int lx_do_syscall_restart;
 	extern __thread int lx_had_sigchild;
 
 	switch (sig) {
 	case SIGCLD:
 		/*
-		 * Signal to waitpid() that it should restart on interruption.
+		 * Signal to an interrupted waitpid() that it was interrupted
+		 * by a SIGCLD, and should restart to grab the wait status
+		 * this signal represented.
 		 */
 		lx_had_sigchild = 1;
 		break;
@@ -1602,6 +1612,16 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
 	lx_debug("lxsap @ 0x%p", lxsap);
 
+	/*
+	 * If the delivery of this signal interrupted a system call, we must
+	 * only restart it if sigaction(2) was used to set the SA_RESTART flag
+	 * for this signal.  The lx_emulate() function checks this per-thread
+	 * variable to discover the restart disposition of the most recently
+	 * handled signal.
+	 *
+	 * NOTE: this mechanism may not stand up to close scrutiny in the face
+	 * of nested asynchronous signal delivery.
+	 */
 	lx_do_syscall_restart = !!(lxsap->lxsa_flags & LX_SA_RESTART);
 
 	/*
@@ -1777,11 +1797,16 @@ lx_sigaction_common(int lx_sig, struct lx_sigaction *lxsp,
 			return (-errno);
 
 		if ((sig = ltos_signo[lx_sig]) != -1) {
-			/*
-			 * XXX
-			 */
-			if (sig == SIGSEGV || sig == SIGABRT) {
-				return (0);
+			if (lx_no_abort_handler != 0) {
+				/*
+				 * If LX_NO_ABORT_HANDLER has been set, we will
+				 * not allow the emulated program to do
+				 * anything hamfisted with SIGSEGV or SIGABRT
+				 * signals.
+				 */
+				if (sig == SIGSEGV || sig == SIGABRT) {
+					return (0);
+				}
 			}
 
 			/*
@@ -2111,6 +2136,10 @@ lx_siginit(void)
 	struct sigaction sa;
 	sigset_t new_set, oset;
 	int lx_sig, sig;
+
+	if (getenv("LX_NO_ABORT_HANDLER") != NULL) {
+		lx_no_abort_handler = 1;
+	}
 
 	/*
 	 * Block all signals possible while setting up the signal imposition

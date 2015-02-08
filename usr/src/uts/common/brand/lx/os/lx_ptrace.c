@@ -16,66 +16,175 @@
 /*
  * Emulation of the Linux ptrace(2) interface.
  *
- * XXX This comment is not quite right -- particularly the LOCK ORDERING
- * RULES section.
+ * OVERVIEW
+ *
+ * The Linux process model is somewhat different from the illumos native
+ * model.  One critical difference is that each Linux thread has a unique
+ * identifier in the pid namespace.  The lx brand assigns a pid to each LWP
+ * within the emulated process, giving the pid of the process itself to the
+ * first LWP.
+ *
+ * The Linux ptrace(2) interface allows for any LWP in a branded process to
+ * exert control over any other LWP within the same zone.  Control is exerted
+ * by the use of the ptrace(2) system call itself, which accepts a number of
+ * request codes.  Feedback on traced events is primarily received by the
+ * tracer through SIGCLD and the emulated waitpid(2) and waitid(2) system
+ * calls.  Many of the possible ptrace(2) requests will only succeed if the
+ * target LWP is in a "ptrace-stop" condition.
+ *
+ * HISTORY
+ *
+ * The brand support for ptrace(2) was originally built on top of the rich
+ * support for debugging and tracing provided through the illumos /proc
+ * interfaces, mounted at /native/proc within the zone.  The native legacy
+ * ptrace(3C) functionality was used as a starting point, but was generally
+ * insufficient for complete and precise emulation.  The extant legacy
+ * interface, and indeed our native SIGCLD and waitid(2) facilities, are
+ * focused on _process_ level concerns -- the Linux interface has been
+ * extended to be aware of LWPs as well.
+ *
+ * In order to allow us to focus on providing more complete and accurate
+ * emulation without extensive and undesirable changes to the native
+ * facilities, this second generation ptrace(2) emulation is mostly separate
+ * from any other tracing or debugging framework in the system.
+ *
+ * ATTACHING TRACERS TO TRACEES
+ *
+ * There are several ways that a child LWP may becomed traced by a tracer.
+ * To determine which attach method caused a tracee to become attached, one
+ * may inspect the "br_ptrace_attach" member of the LWP-specific brand data
+ * with the debugger.
+ *
+ * The first attach methods to consider are the attaching ptrace(2) requests:
+ *
+ *   PTRACE_TRACEME
+ *
+ *   If an LWP makes a PTRACE_TRACEME call, it will be attached as a tracee
+ *   to its parent LWP (br_ppid).  Using PTRACE_TRACEME does _not_ cause the
+ *   tracee to be held in a stop condition.  It is common practice for
+ *   consumers to raise(SIGSTOP) immediately afterward.
+ *
+ *   PTRACE_ATTACH
+ *
+ *   An LWP may attempt to trace any other LWP in this, or another, process.
+ *   We currently allow any attach where the process containing the tracer
+ *   LWP has permission to write to /proc for the process containing the
+ *   intended tracer.  This action also sends a SIGSTOP to the newly attached
+ *   tracee.
+ *
+ * The second class of attach methods are the clone(2)/fork(2) inheritance
+ * options that may be set on a tracee with PTRACE_SETOPTIONS:
+ *
+ *   PTRACE_O_TRACEFORK, PTRACE_O_TRACEVFORK and PTRACE_O_TRACECLONE
+ *
+ *   If these options have been set on a tracee, then a fork(2), vfork(2) or
+ *   clone(2) respectively will cause the newly created LWP to be traced by
+ *   the same tracer.  The same set of ptrace(2) options will also be set on
+ *   the new child.
+ *
+ * The third class of attach method is the PTRACE_CLONE flag to clone(2).
+ * This flag induces the same inheritance as PTRACE_O_TRACECLONE, but is
+ * passed by the tracee as an argument to clone(2).
+ *
+ * DETACHING TRACEES
+ *
+ * Tracees can be detached by the tracer with the PTRACE_DETACH request.
+ * This request is only valid when the tracee is in a ptrace(2) stop
+ * condition, and is itself a restarting action.
+ *
+ * If the tracer exits without detaching all of its tracees, then all of the
+ * traceers are automatically detached and restarted.  If a tracee was in
+ * "signal-delivery-stop" at the time the tracer exited, the signal will be
+ * released to the child unless it is a SIGSTOP.  We drop this instance of
+ * SIGSTOP in order to prevent the child from becoming stopped by job
+ * control.
  *
  * ACCORD ALLOCATION AND MANAGEMENT
  *
- * The "lx_ptrace_accord_t" struct tracks the agreement between a tracer LWP
+ * The "lx_ptrace_accord_t" object tracks the agreement between a tracer LWP
  * and zero or more tracee LWPs.  It is explicitly illegal for a tracee to
- * trace its tracer.
+ * trace its tracer, and we block this in PTRACE_ATTACH/PTRACE_TRACEME.
  *
- * An LWP starts out without an accord.  If a child of that LWP calls ptrace(2)
- * with the PTRACE_TRACEME subcommand, or if the LWP itself uses PTRACE_ATTACH,
- * an accord will be allocated and stored on that LWP.  The accord structure is
- * not released from that LWP until it arrives in lx_exitlwp(), as called by
- * lwp_exit().  A new accord will not be allocated, even if one does not exist,
- * once an LWP arrives in lx_exitlwp() and sets "br_ptrace_exiting".  An LWP
- * will have at most one accord structure throughout its entire lifecycle, and
- * once it has one it has one until death.
+ * An LWP starts out without an accord.  If a child of that LWP calls
+ * ptrace(2) with the PTRACE_TRACEME subcommand, or if the LWP itself uses
+ * PTRACE_ATTACH, an accord will be allocated and stored on that LWP.  The
+ * accord structure is not released from that LWP until it arrives in
+ * lx_exitlwp(), as called by lwp_exit().  A new accord will not be
+ * allocated, even if one does not exist, once an LWP arrives in lx_exitlwp()
+ * and sets the LX_PTRACE_EXITING flag.  An LWP will have at most one accord
+ * structure throughout its entire lifecycle, and once it has one it has one
+ * until death.
  *
- * The accord is reference counted (lxpa_refcnt), starting at a count of one at
- * creation to represent the link from the tracer LWP to its accord.  The
+ * The accord is reference counted (lxpa_refcnt), starting at a count of one
+ * at creation to represent the link from the tracer LWP to its accord.  The
  * accord is not freed until the reference count falls to zero.
-
- * A tracer LWP may attach to a presently untraced target LWP at any time using
- * PTRACE_ATTACH.  This action will induce a SIGSTOP.
-
- * SIGNAL MISDIRECTION
  *
-
+ * SIGNALS AND JOB CONTROL
+ *
+ * Various actions, either directly ptrace(2) related or commonly associated
+ * with tracing, cause process- or thread-directed SIGSTOP signals to be sent
+ * to tracees.  These signals, and indeed any signal other than SIGKILL, can
+ * be suppressed by the tracer when using a restarting request (including
+ * PTRACE_DETACH) on a child.  The signal may also be substituted for a
+ * different signal.
+ *
+ * If a SIGSTOP (or other stopping signal) is not suppressed by the tracer,
+ * it will induce the regular illumos native job control stop of the entire
+ * traced process.  This is at least passingly similar to the Linux "group
+ * stop" ptrace(2) condition.
+ *
+ * SYSTEM CALL TRACING
+ *
+ * The ptrace(2) interface enables the tracer to hold the tracee on entry and
+ * exit from system calls.  When a stopped tracee is restarted through the
+ * PTRACE_SYSCALL request, the LX_PTRACE_SYSCALL flag is set until the next
+ * system call boundary.  Whether this is a "syscall-entry-stop" or
+ * "syscall-exit-stop", the tracee is held and the tracer is notified via
+ * SIGCLD/waitpid(2) in the usual way.  The flag LX_PTRACE_SYSCALL flag is
+ * cleared after each stop; for ongoing system call tracing the tracee must
+ * be continuously restarted with PTRACE_SYSCALL.
+ *
+ * EVENT STOPS
+ *
+ * Various events (particularly FORK, VFORK, CLONE, EXEC and EXIT) are
+ * enabled by the tracer through PTRACE_SETOPTIONS.  Once enabled, the tracee
+ * will be stopped at the nominated points of interest and the tracer
+ * notified.  The tracer may request additional information about the event,
+ * such as the pid of new LWPs and processes, via PTRACE_GETEVENTMSG.
+ *
  * LOCK ORDERING RULES
  *
- * 1. It is not safe, in general, to hold p_lock for two
- *    different processes at the same time.  This constraint is the primary
- *    reason for the existence (and complexity) of the accord mechanism.
+ * It is not safe, in general, to hold p_lock for two different processes at
+ * the same time.  This constraint is the primary reason for the existence
+ * (and complexity) of the ptrace(2) accord mechanism.
  *
- * 2. In order to facilitate looking up accords by LWP "pid", p_lock for the
- *    tracer process may be held while taking the tracer accord lock
- *    (lxpa_lock).  This lock is required for reading or manipulating flags
- *    and for placing a hold on the accord structure.  It is NOT legal to
- *    take any p_lock while holding the accord lock.
+ * In order to facilitate looking up accords by the "pid" of a tracer LWP,
+ * p_lock for the tracer process may be held while entering the accord mutex
+ * (lxpa_lock).  This mutex protects the accord flags and reference count.
+ * The reference count is manipulated through lx_ptrace_accord_hold() and
+ * lx_ptrace_accord_rele().
  *
- * 3. 
+ * DO NOT interact with the accord mutex (lxpa_lock) directly.  The
+ * lx_ptrace_accord_enter() and lx_ptrace_accord_exit() functions do various
+ * book-keeping and lock ordering enforcement and MUST be used.
  *
- * 4. It is NOT legal to take a tracee p_lock and then attempt to take the
- *    accord lock (lxpa_lock) of its tracer.  When running as the tracee
- *    LWP, the tracee's hold will prevent the accord from being freed.
+ * It is NOT legal to take ANY p_lock while holding the accord mutex
+ * (lxpa_lock).  If the lxpa_tracees_lock is to be held concurrently with
+ * lxpa_lock, lxpa_lock MUST be taken first and dropped before taking p_lock
+ * of any processes from the tracee list.
  *
- * 5. If you need to hold both the accord lock (lxpa_lock) and sublock
- *    (lxpa_sublock), you MUST take the accord lock first and then
- *    take the sublock.
+ * It is NOT legal to take a tracee p_lock and then attempt to enter the
+ * accord mutex (or tracee list mutex) of its tracer.  When running as the
+ * tracee LWP, the tracee's hold will prevent the accord from being freed.
+ * Use of the LX_PTRACE_STOPPING flag in the LWP-specific brand data prevents
+ * an exiting tracer from altering the tracee until the tracee has come to an
+ * orderly stop, without requiring the tracee to hold its own p_lock the
+ * entire time it is stopping.
  *
- * 6. It is legal to take the accord sublock (lxpa_sublock) of an accord
- *    while holding only the p_lock of an LWP in the tracee list for that
- *    accord. (i.e. without holding the accord lock.)
- *
- * 7. It is NOT legal to take the p_lock of any tracee in the tracee list
- *    while holding the accord sublock (lxpa_sublock).
- *
- * 8. It is not safe, in general, to take "pidlock" while holding p_lock
- *    of any process.  It is similarly illegal to hold any accord locks
- *    (lxpa_lock or lxpa_sublock) while taking "pidlock".
+ * It is not safe, in general, to enter "pidlock" while holding the p_lock of
+ * any process.  It is similarly illegal to hold any accord locks (lxpa_lock
+ * or lxpa_sublock) while attempting to enter "pidlock".  As "pidlock" is a
+ * global mutex, it should be held for the shortest possible time.
  */
 
 #include <sys/types.h>
@@ -91,6 +200,7 @@
 
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_impl.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_pid.h>
 #include <lx_syscall.h>
@@ -100,9 +210,12 @@
 typedef enum lx_ptrace_cont_flags_t {
 	LX_PTC_NONE = 0x00,
 	LX_PTC_SYSCALL = 0x01,
-	LX_PTC_SINGLESTEP = 0x02,
+	LX_PTC_SINGLESTEP = 0x02
 } lx_ptrace_cont_flags_t;
 
+/*
+ * Macros for checking the state of an LWP via "br_ptrace_flags":
+ */
 #define	LX_PTRACE_BUSY		(LX_PTRACE_EXITING | LX_PTRACE_STOPPING)
 
 #define	VISIBLE(a)	(((a)->br_ptrace_flags & LX_PTRACE_EXITING) == 0)
@@ -176,12 +289,12 @@ lx_ptrace_accord_hold(lx_ptrace_accord_t *accord)
 	accord->lxpa_refcnt++;
 }
 
-
 /*
  * Fetch the accord for this LWP.  If one has not yet been created, and the
- * process is not exiting, allocate it now.  Must be called with p_lock and
- * P_PR_LOCK held for the process containing the target LWP.  The accord lock
- * (lxpa_lock) is held on return.
+ * process is not exiting, allocate it now.  Must be called with p_lock held
+ * for the process containing the target LWP.
+ *
+ * If successful, we return holding the accord lock (lxpa_lock).
  */
 static int
 lx_ptrace_accord_get_locked(klwp_t *lwp, lx_ptrace_accord_t **accordp,
@@ -244,7 +357,7 @@ lx_ptrace_accord_get_locked(klwp_t *lwp, lx_ptrace_accord_t **accordp,
 /*
  * Accords belong to the tracer LWP.  Get the accord for this tracer or return
  * an error if it was not possible.  To prevent deadlocks, the caller MUST NOT
- * hold p_lock or P_PR_LOCK on its own or any other process.
+ * hold p_lock on its own or any other process.
  *
  * If successful, we return holding the accord lock (lxpa_lock).
  */
@@ -338,8 +451,8 @@ lx_ptrace_accord_get(lx_ptrace_accord_t **accordp, boolean_t allocate_one)
 
 /*
  * Restart an LWP if it is in "ptrace-stop".  This function may induce sleep,
- * so do NOT hold any mutexes other than p_lock for the process containing
- * the LWP.
+ * so the caller MUST NOT hold any mutexes other than p_lock for the process
+ * containing the LWP.
  */
 static void
 lx_ptrace_restart_lwp(klwp_t *lwp)
@@ -370,6 +483,7 @@ lx_ptrace_restart_lwp(klwp_t *lwp)
 		 */
 		rlwpd->br_ptrace_whystop = 0;
 		rlwpd->br_ptrace_whatstop = 0;
+		rlwpd->br_ptrace_flags &= ~LX_PTRACE_CLDPEND;
 	}
 	thread_unlock(rt);
 }
@@ -378,6 +492,8 @@ static void
 lx_winfo(lx_lwp_data_t *remote, k_siginfo_t *ip, boolean_t waitflag,
     pid_t *event_ppid, pid_t *event_pid)
 {
+	int signo;
+
 	/*
 	 * Populate our k_siginfo_t with data about this "ptrace-stop"
 	 * condition:
@@ -395,13 +511,20 @@ lx_winfo(lx_lwp_data_t *remote, k_siginfo_t *ip, boolean_t waitflag,
 			ip->si_status |= 0x80;
 		}
 		break;
+
 	case LX_PR_SIGNALLED:
-		/*
-		 * XXX bounds check
-		 */
-		ip->si_status = ltos_signo[
-		    (int)remote->br_ptrace_userstop];
+		signo = remote->br_ptrace_userstop;
+		if (signo < 1 || signo >= LX_NSIG) {
+			/*
+			 * If this signal number is not valid, pretend it
+			 * was a SIGTRAP.
+			 */
+			ip->si_status = SIGTRAP;
+		} else {
+			ip->si_status = ltos_signo[signo];
+		}
 		break;
+
 	case LX_PR_EVENT:
 		ip->si_status = SIGTRAP | remote->br_ptrace_event;
 		/*
@@ -415,6 +538,7 @@ lx_winfo(lx_lwp_data_t *remote, k_siginfo_t *ip, boolean_t waitflag,
 		if (event_pid != NULL)
 			*event_pid = (pid_t)remote->br_ptrace_eventmsg;
 		break;
+
 	default:
 		cmn_err(CE_PANIC, "unxpected stop subreason: %d",
 		    remote->br_ptrace_whatstop);
@@ -480,6 +604,10 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 
 	lx_ptrace_accord_enter(accord);
 	cvp = accord->lxpa_cvp;
+	/*
+	 * Get the ptrace(2) "parent" process, to which we may send
+	 * a SIGCLD signal later.
+	 */
 	parent = accord->lxpa_tracer;
 	if (parent != NULL) {
 		plwp = parent->br_lwp;
@@ -494,17 +622,14 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	}
 
 	/*
-	 * We re-take our process lock now.  The lock will then be held until
-	 * the thread is actually marked stopped, so we will not race with
-	 * lx_ptrace_lock_if_stopped() or lx_waitid_helper().
-	 * We also take pidlock, so that we may exclude callers of waitid().
+	 * We take pidlock now, which excludes all callers of waitid().
 	 */
 	mutex_enter(&pidlock);
 	mutex_enter(&p->p_lock);
 
 	/*
 	 * Our tracer should not have been modified in our absence; the
-	 * STOPPING flag prevents it.
+	 * LX_PTRACE_STOPPING flag prevents it.
 	 */
 	VERIFY(lwpd->br_ptrace_tracer == accord);
 
@@ -516,7 +641,8 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	lwpd->br_ptrace_whatstop = what;
 
 	/*
-	 * Populate the siginfo_t for the event pending on this tracee LWP.
+	 * If this event does not depend on an event from the parent LWP,
+	 * populate the siginfo_t for the event pending on this tracee LWP.
 	 */
 	if (!(lwpd->br_ptrace_flags & LX_PTRACE_PARENT_WAIT) && pp != NULL) {
 		cldpost = B_TRUE;
@@ -524,10 +650,13 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	}
 
 	/*
-	 * Post the SIGCLD to the tracer.
+	 * Drop our p_lock so that we may lock the tracer.
 	 */
 	mutex_exit(&p->p_lock);
 	if (cldpost && pp != NULL) {
+		/*
+		 * Post the SIGCLD to the tracer.
+		 */
 		mutex_enter(&pp->p_lock);
 		if (!sigismember(&pp->p_sig, SIGCLD)) {
 			sigaddqa(pp, plwp->lwp_thread, sqp);
@@ -536,28 +665,44 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 		}
 		mutex_exit(&pp->p_lock);
 	}
+
+	/*
+	 * We re-take our process lock now.  The lock will be held until
+	 * the thread is actually marked stopped, so we will not race with
+	 * lx_ptrace_lock_if_stopped() or lx_waitid_helper().
+	 */
 	mutex_enter(&p->p_lock);
 
 	/*
 	 * We clear the STOPPING flag; stop() continues to hold our p_lock
-	 * until our thread stop state is visible.  If lx_ptrace_exit_tracer()
-	 * is waiting for us to be done, we signal it here.
+	 * until our thread stop state is visible.
 	 */
 	lwpd->br_ptrace_flags &= ~LX_PTRACE_STOPPING;
 	lwpd->br_ptrace_flags |= LX_PTRACE_STOPPED;
-	if (cldpend)
+	if (cldpend) {
+		/*
+		 * We sent the SIGCLD for this new wait condition already.
+		 */
 		lwpd->br_ptrace_flags |= LX_PTRACE_CLDPEND;
+	}
+
+	/*
+	 * If lx_ptrace_exit_tracer() is trying to detach our tracer, it will
+	 * be sleeping on this CV until LX_PTRACE_STOPPING is clear.  Wake it
+	 * now.
+	 */
 	cv_broadcast(&lx_ptrace_busy_cv);
 
 	/*
-	 * While holding pidlock, we attempt to wake our tracer from their
-	 * waitid() slumber.
+	 * While still holding pidlock, we attempt to wake our tracer from a
+	 * potential waitid() slumber.
 	 */
-	if (cvp != NULL)
+	if (cvp != NULL) {
 		cv_broadcast(cvp);
+	}
 
 	/*
-	 * We release pidlock, and return as we were called: with our p_lock
+	 * We release pidlock and return as we were called: with our p_lock
 	 * held.
 	 */
 	mutex_exit(&pidlock);
@@ -666,21 +811,31 @@ lx_ptrace_geteventmsg(lx_lwp_data_t *remote, void *umsgp)
 	return (error);
 }
 
+/*
+ * Implements the PTRACE_CONT subcommand of the Linux ptrace(2) interface.
+ */
 static int
 lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
 {
 	int error;
 	klwp_t *lwp = remote->br_lwp;
 
+	if (flags & LX_PTC_SINGLESTEP) {
+		/*
+		 * We do not currently support single-stepping.
+		 */
+		lx_unsupported("PTRACE_SINGLESTEP not currently implemented");
+		return (EINVAL);
+	}
+
 	/*
 	 * The tracer may choose to suppress the delivery of a signal, or
 	 * select an alternative signal for delivery.  If this is an
-	 * appropriate ptrace(2) "signal-stop", br_ptrace_userstop will be used
-	 * as the new signal number.
+	 * appropriate ptrace(2) "signal-delivery-stop", br_ptrace_userstop
+	 * will be used as the new signal number.
 	 *
 	 * As with so many other aspects of the Linux ptrace(2) interface, this
-	 * may also fail silently if the state machine is not aligned
-	 * correctly.
+	 * may fail silently if the state machine is not aligned correctly.
 	 */
 	remote->br_ptrace_userstop = signo;
 
@@ -692,19 +847,6 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
 	} else {
 		remote->br_ptrace_flags &= ~LX_PTRACE_SYSCALL;
 	}
-
-#if 0
-	/*
-	 * Handle the single-step flag if this is a PTRACE_SINGLESTEP.
-	 */
-	mutex_exit(&rproc->p_lock);
-	if (flags & LX_PTC_SINGLESTEP) {
-		prstep(rlwp, 0);
-	} else {
-		prnostep(rlwp, 0);
-	}
-	mutex_enter(&rproc->p_lock);
-#endif
 
 	lx_ptrace_restart_lwp(lwp);
 
@@ -719,7 +861,7 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
  * currently in the "ptrace-stop" state, the routine will return ESRCH as if
  * the LWP did not exist at all.
  *
- * The caller must not hold p_lock or P_PR_LOCK on any process.
+ * The caller must not hold p_lock on any process.
  */
 static int
 lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
@@ -1909,7 +2051,8 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 }
 
 /*
- * Some PTRACE_* requests are handled in-kernel by this function.
+ * Some PTRACE_* requests are handled in-kernel by this function.  It is called
+ * through brandsys() via the B_PTRACE_KERNEL subcommand.
  */
 int
 lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
@@ -1943,8 +2086,8 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	VERIFY(lx_ptrace_accord_get(&accord, B_TRUE) == 0);
 
 	/*
-	 * The accord belongs to this, the tracer, LWP.  We drop the lock so
-	 * that we can take other locks.
+	 * The accord belongs to this (the tracer) LWP, and we have a hold on
+	 * it.  We drop the lock so that we can take other locks.
 	 */
 	lx_ptrace_accord_exit(accord);
 
@@ -2002,11 +2145,9 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 		error = lx_ptrace_cont(remote, LX_PTC_SYSCALL, (int)data);
 		break;
 
-#if 0
 	case LX_PTRACE_SINGLESTEP:
 		error = lx_ptrace_cont(remote, LX_PTC_SINGLESTEP, (int)data);
 		break;
-#endif
 
 	case LX_PTRACE_SETOPTIONS:
 		error = lx_ptrace_setoptions(remote, data);
