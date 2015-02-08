@@ -176,10 +176,10 @@
  * It is NOT legal to take a tracee p_lock and then attempt to enter the
  * accord mutex (or tracee list mutex) of its tracer.  When running as the
  * tracee LWP, the tracee's hold will prevent the accord from being freed.
- * Use of the LX_PTRACE_STOPPING flag in the LWP-specific brand data prevents
- * an exiting tracer from altering the tracee until the tracee has come to an
- * orderly stop, without requiring the tracee to hold its own p_lock the
- * entire time it is stopping.
+ * Use of the LX_PTRACE_STOPPING or LX_PTRACE_CLONING flag in the
+ * LWP-specific brand data prevents an exiting tracer from altering the
+ * tracee until the tracee has come to an orderly stop, without requiring the
+ * tracee to hold its own p_lock the entire time it is stopping.
  *
  * It is not safe, in general, to enter "pidlock" while holding the p_lock of
  * any process.  It is similarly illegal to hold any accord locks (lxpa_lock
@@ -216,7 +216,8 @@ typedef enum lx_ptrace_cont_flags_t {
 /*
  * Macros for checking the state of an LWP via "br_ptrace_flags":
  */
-#define	LX_PTRACE_BUSY		(LX_PTRACE_EXITING | LX_PTRACE_STOPPING)
+#define	LX_PTRACE_BUSY \
+    (LX_PTRACE_EXITING | LX_PTRACE_STOPPING | LX_PTRACE_CLONING)
 
 #define	VISIBLE(a)	(((a)->br_ptrace_flags & LX_PTRACE_EXITING) == 0)
 #define	TRACEE_BUSY(a)	(((a)->br_ptrace_flags & LX_PTRACE_BUSY) != 0)
@@ -1058,7 +1059,7 @@ lx_ptrace_attach(pid_t lx_pid)
 }
 
 int
-lx_ptrace_set_clone_inherit(boolean_t inherit)
+lx_ptrace_set_clone_inherit(int option, boolean_t inherit_flag)
 {
 	klwp_t *lwp = ttolwp(curthread);
 	proc_t *p = lwptoproc(lwp);
@@ -1066,7 +1067,18 @@ lx_ptrace_set_clone_inherit(boolean_t inherit)
 
 	mutex_enter(&p->p_lock);
 
-	if (inherit) {
+	switch (option) {
+	case LX_PTRACE_O_TRACEFORK:
+	case LX_PTRACE_O_TRACEVFORK:
+	case LX_PTRACE_O_TRACECLONE:
+		lwpd->br_ptrace_clone_option = option;
+		break;
+
+	default:
+		return (EINVAL);
+	}
+
+	if (inherit_flag) {
 		lwpd->br_ptrace_flags |= LX_PTRACE_INHERIT;
 	} else {
 		lwpd->br_ptrace_flags &= ~LX_PTRACE_INHERIT;
@@ -1083,37 +1095,63 @@ lx_ptrace_set_clone_inherit(boolean_t inherit)
 void
 lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 {
+	proc_t *srcp = lwptoproc(src->br_lwp);
 	lx_ptrace_accord_t *accord;
 
-	/*
-	 * XXX probably need to _lock_ the traced process until we can get a
-	 * hold on the accord.
-	 */
-#if 0
-	if ((accord = src->br_ptrace_tracer) == NULL ||
-	    !(src->br_ptrace_flags & LX_PTRACE_INHERIT)) {
-	}
-#endif
+	VERIFY(MUTEX_HELD(&srcp->p_lock));
+
 	if ((accord = src->br_ptrace_tracer) == NULL) {
 		/*
-		 * Either the source LWP does not have a tracer to inherit,
-		 * or PTRACE_CLONE was not used in the current clone()
-		 * operation.
+		 * The source LWP does not have a tracer to inherit.
 		 */
 		return;
 	}
 
 	/*
-	 * XXX should handle this properly.
+	 * There are two conditions to check when determining if the new
+	 * child should inherit the same tracer (and tracing options) as its
+	 * parent.  Either condition is sufficient to trigger inheritance.
 	 */
-	if (!src->br_ptrace_options) {
+	dst->br_ptrace_attach = LX_PTA_NONE;
+	if ((src->br_ptrace_options & src->br_ptrace_clone_option) != 0) {
+		/*
+		 * The clone(2), fork(2) and vfork(2) emulated system calls
+		 * populate "br_ptrace_clone_option" with the specific
+		 * ptrace(2) SETOPTIONS option that applies to this
+		 * operation.  If the relevant option has been enabled by the
+		 * tracer then we inherit.
+		 */
+		dst->br_ptrace_attach |= LX_PTA_INHERIT_OPTIONS;
+
+	} else if ((src->br_ptrace_flags & LX_PTRACE_INHERIT) != 0) {
+		/*
+		 * If the caller opted in to inheritance with the
+		 * PTRACE_CLONE flag to clone(2), the LX_PTRACE_INHERIT flag
+		 * will be set and we inherit.
+		 */
+		dst->br_ptrace_attach |= LX_PTA_INHERIT_CLONE;
+	}
+
+	/*
+	 * These values only apply for the duration of a single clone(2), et
+	 * al, system call.
+	 */
+	src->br_ptrace_flags &= ~LX_PTRACE_INHERIT;
+	src->br_ptrace_clone_option = 0;
+
+	if (dst->br_ptrace_attach == LX_PTA_NONE) {
+		/*
+		 * No condition triggered inheritance.
+		 */
 		return;
 	}
 
 	/*
-	 * We can be somewhat lax with locking, here.  The destination LWP is
-	 * not yet running, and we _are_ the source LWP.
+	 * Set the LX_PTRACE_CLONING flag to prevent us from being detached
+	 * while our p_lock is dropped.
 	 */
+	src->br_ptrace_flags |= LX_PTRACE_CLONING;
+	mutex_exit(&srcp->p_lock);
 
 	/*
 	 * Hold the accord for the new LWP.
@@ -1122,17 +1160,16 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	lx_ptrace_accord_hold(accord);
 	lx_ptrace_accord_exit(accord);
 
-	dst->br_ptrace_attach = LX_PTA_INHERIT_OPTIONS;
+	/*
+	 * Install the tracer and copy the current PTRACE_SETOPTIONS options.
+	 */
 	dst->br_ptrace_tracer = accord;
+	dst->br_ptrace_options = src->br_ptrace_options;
 
 	/*
 	 * This flag prevents waitid() from seeing events for the new child
 	 * until the parent is able to post the relevant ptrace event to
 	 * the tracer.
-	 *
-	 * XXX this should presumably only happen as part of, e.g.
-	 * PTRACE_O_TRACECLONE.  Perhaps not as part of the CLONE_PTRACE
-	 * flag to clone(2)?
 	 */
 	dst->br_ptrace_flags |= LX_PTRACE_PARENT_WAIT;
 
@@ -1143,14 +1180,17 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	mutex_exit(&accord->lxpa_tracees_lock);
 
 	/*
-	 * This flag only lasts for the duration of a single clone.
+	 * Relock our process and clear our busy flag.
 	 */
-	src->br_ptrace_flags &= ~LX_PTRACE_INHERIT;
+	mutex_enter(&srcp->p_lock);
+	src->br_ptrace_flags &= ~LX_PTRACE_CLONING;
 
 	/*
-	 * XXX Just copy trace options for now...
+	 * If lx_ptrace_exit_tracer() is trying to detach our tracer, it will
+	 * be sleeping on this CV until LX_PTRACE_CLONING is clear.  Wake it
+	 * now.
 	 */
-	dst->br_ptrace_options = src->br_ptrace_options;
+	cv_broadcast(&lx_ptrace_busy_cv);
 }
 
 static int

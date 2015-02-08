@@ -83,7 +83,7 @@ extern "C" {
 #define	B_PTRACE_KERNEL		131
 #define	B_SET_AFFINITY_MASK	132
 #define	B_GET_AFFINITY_MASK	133
-#define	B_PTRACE_CLONE_INHERIT	134
+#define	B_PTRACE_CLONE_BEGIN	134
 #define	B_PTRACE_STOP_FOR_OPT	135
 #define	B_UNSUPPORTED		136
 #define	B_STORE_ARGS		137
@@ -307,7 +307,8 @@ typedef enum lx_ptrace_state {
 	LX_PTRACE_INHERIT = 0x08,
 	LX_PTRACE_STOPPED = 0x10,
 	LX_PTRACE_PARENT_WAIT = 0x20,
-	LX_PTRACE_CLDPEND = 0x40
+	LX_PTRACE_CLDPEND = 0x40,
+	LX_PTRACE_CLONING = 0x80
 } lx_ptrace_state_t;
 
 /*
@@ -335,11 +336,11 @@ typedef struct lx_ptrace_accord {
  * to a tracer.  They record the method that was used to attach.
  */
 typedef enum lx_ptrace_attach {
-	LX_PTA_NONE = 0,
-	LX_PTA_ATTACH,
-	LX_PTA_TRACEME,
-	LX_PTA_INHERIT_CLONE,
-	LX_PTA_INHERIT_OPTIONS
+	LX_PTA_NONE = 0x00,		/* not attached */
+	LX_PTA_ATTACH = 0x01,		/* due to tracer using PTRACE_ATTACH */
+	LX_PTA_TRACEME = 0x02,		/* due to child using PTRACE_TRACEME */
+	LX_PTA_INHERIT_CLONE = 0x04,	/* due to PTRACE_CLONE clone(2) flag */
+	LX_PTA_INHERIT_OPTIONS = 0x08,	/* due to PTRACE_SETOPTIONS options */
 } lx_ptrace_attach_t;
 
 /*
@@ -384,6 +385,7 @@ struct lx_lwp_data {
 
 	lx_ptrace_state_t br_ptrace_flags; /* ptrace state for this LWP */
 	lx_ptrace_options_t br_ptrace_options; /* PTRACE_SETOPTIONS options */
+	lx_ptrace_options_t br_ptrace_clone_option; /* current clone(2) type */
 
 	lx_ptrace_attach_t br_ptrace_attach; /* how did we get attached */
 	lx_ptrace_accord_t *br_ptrace_accord; /* accord for this tracer LWP */

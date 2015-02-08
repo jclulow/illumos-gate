@@ -260,7 +260,7 @@ int
 lx_initlwp(klwp_t *lwp)
 {
 	lx_lwp_data_t *lwpd;
-	lx_lwp_data_t *plwpd;
+	lx_lwp_data_t *plwpd = ttolxlwp(curthread);
 	kthread_t *tp = lwptot(lwp);
 
 	lwpd = kmem_zalloc(sizeof (struct lx_lwp_data), KM_SLEEP);
@@ -286,19 +286,13 @@ lx_initlwp(klwp_t *lwp)
 	if (tp->t_next == tp) {
 		lwpd->br_ppid = tp->t_procp->p_ppid;
 		lwpd->br_ptid = -1;
-	} else if ((plwpd = ttolxlwp(curthread)) != NULL) {
+	} else if (plwpd != NULL) {
 		bcopy(plwpd->br_tls, lwpd->br_tls, sizeof (lwpd->br_tls));
 		lwpd->br_ppid = plwpd->br_pid;
 		lwpd->br_ptid = curthread->t_tid;
 		/* The child inherits the 2 fsbase values from the parent */
 		lwpd->br_lx_fsbase = plwpd->br_lx_fsbase;
 		lwpd->br_ntv_fsbase = plwpd->br_ntv_fsbase;
-
-		/*
-		 * If the parent LWP had a ptrace(2) tracer, the new LWP may
-		 * need to inherit that same tracer.
-		 */
-		lx_ptrace_inherit_tracer(plwpd, lwpd);
 	} else {
 		/*
 		 * Oddball case: the parent thread isn't a Linux process.
@@ -317,6 +311,14 @@ lx_initlwp(klwp_t *lwp)
 
 	installctx(lwptot(lwp), lwp, lx_save, lx_restore, NULL, NULL,
 	    lx_save, NULL);
+
+	/*
+	 * If the parent LWP has a ptrace(2) tracer, the new LWP may
+	 * need to inherit that same tracer.
+	 */
+	if (plwpd != NULL) {
+		lx_ptrace_inherit_tracer(plwpd, lwpd);
+	}
 
 	return (0);
 }

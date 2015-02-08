@@ -1201,6 +1201,23 @@ lx_ptrace_stop_if_option(int option, boolean_t child, ulong_t msg)
 	}
 }
 
+/*
+ * Signal to the in-kernel ptrace(2) subsystem that the next native fork() or
+ * thr_create() is part of an emulated fork(2) or clone(2).  If PTRACE_CLONE
+ * was passed to clone(2), inherit_flag should be B_TRUE.
+ */
+void
+lx_ptrace_clone_begin(int option, boolean_t inherit_flag)
+{
+	lx_debug("lx_ptrace_clone_begin(%d, %sPTRACE_CLONE)", option,
+	    inherit_flag ? "" : "!");
+	if (syscall(SYS_brand, B_PTRACE_CLONE_BEGIN, option,
+	    inherit_flag) != 0) {
+		lx_err_fatal("B_PTRACE_CLONE_BEGIN failed: %s",
+		    strerror(errno));
+	}
+}
+
 static long
 lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 {
