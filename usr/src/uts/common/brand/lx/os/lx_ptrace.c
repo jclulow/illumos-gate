@@ -937,7 +937,6 @@ lx_ptrace_attach(pid_t lx_pid)
 	kthread_t *rthr;
 	klwp_t *rlwp;
 	lx_lwp_data_t *rlwpd;
-	lx_proc_data_t *rprocd;
 
 	if (lwpd->br_pid == lx_pid) {
 		/*
@@ -1003,12 +1002,16 @@ lx_ptrace_attach(pid_t lx_pid)
 		 * This LWP is already being traced.
 		 */
 		VERIFY(list_link_active(&rlwpd->br_ptrace_linkage));
+		VERIFY(rlwpd->br_ptrace_attach != LX_PTA_NONE);
 		error = EPERM;
 	} else {
+		lx_proc_data_t *rprocd;
+
 		/*
 		 * Bond the tracee to the accord.
 		 */
 		VERIFY0(rlwpd->br_ptrace_flags & LX_PTRACE_EXITING);
+		VERIFY(rlwpd->br_ptrace_attach == LX_PTA_NONE);
 		rlwpd->br_ptrace_attach = LX_PTA_ATTACH;
 		rlwpd->br_ptrace_tracer = accord;
 
@@ -1026,19 +1029,21 @@ lx_ptrace_attach(pid_t lx_pid)
 		 * Send a thread-directed SIGSTOP.
 		 */
 		sigtoproc(rproc, rthr, SIGSTOP);
+
+		/*
+		 * Set the in-kernel process-wide ptrace(2) enable flag.
+		 * Attempt also to write the usermode trace flag so that the
+		 * process knows to enter the kernel for potential ptrace(2)
+		 * syscall-stops.
+		 */
+		rprocd = ttolxproc(rthr);
+		rprocd->l_ptrace = 1;
+		mutex_exit(&rproc->p_lock);
+		(void) uwrite(rproc, &one, sizeof (one), rprocd->l_traceflag);
+		mutex_enter(&rproc->p_lock);
+
 		error = 0;
 	}
-
-	/*
-	 * Set the in-kernel process-wide ptrace(2) enable flag.  Attempt also
-	 * to write the usermode trace flag so that the process knows to enter
-	 * the kernel for potential ptrace(2) syscall-stops.
-	 */
-	rprocd = ttolxproc(rthr);
-	rprocd->l_ptrace = 1;
-	mutex_exit(&rproc->p_lock);
-	(void) uwrite(rproc, &one, sizeof (one), rprocd->l_traceflag);
-	mutex_enter(&rproc->p_lock);
 
 	/*
 	 * Unlock the process containing the tracee LWP and the accord.
@@ -1268,12 +1273,14 @@ lx_ptrace_traceme(void)
 		/*
 		 * This LWP is already being traced.
 		 */
+		VERIFY(lwpd->br_ptrace_attach != LX_PTA_NONE);
 		error = EPERM;
 	} else {
 		/*
 		 * Bond ourselves to the accord.  We already bumped the accord
 		 * reference count.
 		 */
+		VERIFY(lwpd->br_ptrace_attach == LX_PTA_NONE);
 		lwpd->br_ptrace_attach = LX_PTA_TRACEME;
 		lwpd->br_ptrace_tracer = accord;
 		did_attach = B_TRUE;
@@ -1992,21 +1999,29 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 		rproc = lwptoproc(rlwp);
 
 		/*
-		 * Check to see if this LWP matches an id we are waiting for.
+		 * If the __WALL option was passed, we unconditionally consider
+		 * every possible child.
 		 */
-		switch (idtype) {
-		case P_ALL:
-			break;
-		case P_PID:
-			if (remote->br_pid != id)
-				continue;
-			break;
-		case P_PGID:
-			if (rproc->p_pgrp != id)
-				continue;
-			break;
-		default:
-			cmn_err(CE_PANIC, "unexpected idtype: %d", idtype);
+		if (!(local->br_waitid_flags & LX_WALL)) {
+			/*
+			 * Otherwise, we check to see if this LWP matches an
+			 * id we are waiting for.
+			 */
+			switch (idtype) {
+			case P_ALL:
+				break;
+			case P_PID:
+				if (remote->br_pid != id)
+					continue;
+				break;
+			case P_PGID:
+				if (rproc->p_pgrp != id)
+					continue;
+				break;
+			default:
+				cmn_err(CE_PANIC, "unexpected idtype: %d",
+				    idtype);
+			}
 		}
 
 		/*
