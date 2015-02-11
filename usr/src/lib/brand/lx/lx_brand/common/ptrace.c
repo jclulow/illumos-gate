@@ -1273,8 +1273,8 @@ lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	case LX_PTRACE_CONT:
 	case LX_PTRACE_SINGLESTEP:
 	/*
-	 * The rest of these actions also require the LWP to be traced and
-	 * stopped, but do not restart the target LWP.
+	 * These actions also require the LWP to be traced and stopped, but do
+	 * not restart the target LWP.
 	 */
 	case LX_PTRACE_SETOPTIONS:
 	case LX_PTRACE_GETEVENTMSG:
