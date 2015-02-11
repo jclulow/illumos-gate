@@ -95,11 +95,6 @@ extern "C" {
 
 #define	B_IKE_SYSCALL		192
 
-/* B_PTRACE_EXT_OPTS subcommands */
-#define	 B_PTRACE_EXT_OPTS_SET	1
-#define	 B_PTRACE_EXT_OPTS_GET	2
-#define	 B_PTRACE_EXT_OPTS_EVT	3
-
 #ifndef _ASM
 /*
  * Support for Linux PTRACE_SETOPTIONS handling.
