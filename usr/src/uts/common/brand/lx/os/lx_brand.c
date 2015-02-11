@@ -63,6 +63,7 @@
 #include <sys/x86_archext.h>
 #include <sys/controlregs.h>
 #include <sys/core.h>
+#include <sys/sysmacros.h>
 #include <lx_signum.h>
 
 int	lx_debug = 0;
@@ -208,14 +209,20 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 void
 lx_setbrand(proc_t *p)
 {
+	lx_proc_data_t *pd;
 	kthread_t *t = p->p_tlist;
 	int err;
 
 	ASSERT(p->p_brand_data == NULL);
 	ASSERT(ttolxlwp(curthread) == NULL);
 
-	p->p_brand_data = kmem_zalloc(sizeof (struct lx_proc_data), KM_SLEEP);
-	ptolxproc(p)->l_signal = stol_signo[SIGCHLD];
+	pd = kmem_zalloc(sizeof (*pd), KM_SLEEP);
+	pd->l_signal = stol_signo[SIGCHLD];
+
+	list_create(&pd->l_ptrace_newstate, sizeof (lx_ptrace_newstate_t),
+	    offsetof(lx_ptrace_newstate_t, lxns_linkage));
+
+	p->p_brand_data = pd;
 
 	/*
 	 * This routine can only be called for single-threaded processes.
@@ -923,6 +930,42 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 #endif
 		return (0);
 
+	case B_EXIT: {
+		boolean_t exit_group = (arg1 == 0) ? B_FALSE : B_TRUE;
+		int exit_value = (int)(0xff & arg2);
+
+		lwpd = ttolxlwp(curthread);
+		pd = p->p_brand_data;
+
+		mutex_enter(&p->p_lock);
+		/*
+		 * Record the exit status for this LWP:
+		 */
+		lwpd->br_exitwhy = CLD_EXITED;
+		lwpd->br_exitwhat = exit_value;
+
+		if (!pd->l_exit_group) {
+			if (exit_group) {
+				/*
+				 * This is the first group exit, so use this
+				 * exit value.
+				 */
+				pd->l_exit_value = exit_value;
+				pd->l_exit_group = B_TRUE;
+			} else if (lwpd->br_ptid == -1) {
+				/*
+				 * This is the first LWP -- the thread group
+				 * leader.  If no thread calls for a group
+				 * exit prior to process termination, we will
+				 * use this exit value.
+				 */
+				pd->l_exit_value = exit_value;
+			}
+		}
+		mutex_exit(&p->p_lock);
+		break;
+	}
+
 	case B_EXIT_AS_SIG:
 		code = CLD_KILLED;
 		sig = (int)arg1;
@@ -1008,6 +1051,14 @@ lx_copy_procdata(proc_t *child, proc_t *parent)
 
 	cpd = kmem_alloc(sizeof (lx_proc_data_t), KM_SLEEP);
 	*cpd = *ppd;
+
+	/*
+	 * We do not copy the exit or ptrace(2) data.
+	 */
+	cpd->l_exit_value = 0;
+	cpd->l_exit_group = B_FALSE;
+	list_create(&cpd->l_ptrace_newstate, sizeof (lx_ptrace_newstate_t),
+	    offsetof(lx_ptrace_newstate_t, lxns_linkage));
 
 	child->p_brand_data = cpd;
 }

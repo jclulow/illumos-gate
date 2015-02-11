@@ -197,6 +197,7 @@
 #include <sys/sunddi.h>
 #include <sys/wait.h>
 #include <sys/prsystm.h>
+#include <sys/sdt.h>
 
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
@@ -230,7 +231,7 @@ static kmem_cache_t *lx_ptrace_accord_cache;
 /*
  * Enter the accord mutex.
  */
-static void
+void
 lx_ptrace_accord_enter(lx_ptrace_accord_t *accord)
 {
 	VERIFY(MUTEX_NOT_HELD(&accord->lxpa_tracees_lock));
@@ -242,7 +243,7 @@ lx_ptrace_accord_enter(lx_ptrace_accord_t *accord)
  * Exit the accord mutex.  If the reference count has dropped to zero,
  * free the accord.
  */
-static void
+void
 lx_ptrace_accord_exit(lx_ptrace_accord_t *accord)
 {
 	VERIFY(ACCORD_HELD(accord));
@@ -260,6 +261,20 @@ lx_ptrace_accord_exit(lx_ptrace_accord_t *accord)
 	VERIFY(list_is_empty(&accord->lxpa_tracees));
 	VERIFY(accord->lxpa_flags & LX_ACC_TOMBSTONE);
 
+	/*
+	 * Discard any unposted newstate notifications.
+	 */
+	while (!list_is_empty(&accord->lxpa_newstate)) {
+		lx_ptrace_newstate_t *lxns = list_remove_head(
+		    &accord->lxpa_newstate);
+
+		VERIFY(lxns->lxns_tracer == NULL);
+		if (lxns->lxns_sqp != NULL) {
+			kmem_free(lxns->lxns_sqp, sizeof (*lxns->lxns_sqp));
+		}
+		kmem_free(lxns, sizeof (*lxns));
+	}
+
 	mutex_destroy(&accord->lxpa_lock);
 	mutex_destroy(&accord->lxpa_tracees_lock);
 
@@ -270,7 +285,7 @@ lx_ptrace_accord_exit(lx_ptrace_accord_t *accord)
  * Drop our reference to this accord.  If this drops the reference count
  * to zero, the next lx_ptrace_accord_exit() will free the accord.
  */
-static void
+void
 lx_ptrace_accord_rele(lx_ptrace_accord_t *accord)
 {
 	VERIFY(ACCORD_HELD(accord));
@@ -282,7 +297,7 @@ lx_ptrace_accord_rele(lx_ptrace_accord_t *accord)
 /*
  * Place an additional hold on an accord.
  */
-static void
+void
 lx_ptrace_accord_hold(lx_ptrace_accord_t *accord)
 {
 	VERIFY(ACCORD_HELD(accord));
@@ -334,6 +349,9 @@ lx_ptrace_accord_get_locked(klwp_t *lwp, lx_ptrace_accord_t **accordp,
 		mutex_init(&lxpa->lxpa_tracees_lock, NULL, MUTEX_DEFAULT, NULL);
 		list_create(&lxpa->lxpa_tracees, sizeof (lx_lwp_data_t),
 		    offsetof(lx_lwp_data_t, br_ptrace_linkage));
+		list_create(&lxpa->lxpa_newstate,
+		    sizeof (lx_ptrace_newstate_t),
+		    offsetof(lx_ptrace_newstate_t, lxns_linkage));
 		lxpa->lxpa_cvp = &p->p_cv;
 
 		lxpa->lxpa_tracer = lwpd;
@@ -564,7 +582,6 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 {
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
-	kcondvar_t *cvp;
 	klwp_t *plwp = NULL;
 	proc_t *pp = NULL;
 	lx_lwp_data_t *parent;
@@ -599,34 +616,29 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	VERIFY((accord = lwpd->br_ptrace_tracer) != NULL);
 
 	/*
-	 * We must drop our process lock to fetch the CV from the accord.
+	 * We must drop our process lock to fetch the process from the accord.
 	 */
 	mutex_exit(&p->p_lock);
 
-	lx_ptrace_accord_enter(accord);
-	cvp = accord->lxpa_cvp;
 	/*
-	 * Get the ptrace(2) "parent" process, to which we may send
-	 * a SIGCLD signal later.
+	 * Allocate before we enter any mutexes.
 	 */
-	parent = accord->lxpa_tracer;
-	if (parent != NULL) {
-		plwp = parent->br_lwp;
-	}
-	if (plwp != NULL) {
-		pp = lwptoproc(plwp);
-	}
-	lx_ptrace_accord_exit(accord);
-
-	if (pp != NULL) {
-		sqp = kmem_zalloc(sizeof (*sqp), KM_SLEEP);
-	}
+	sqp = kmem_zalloc(sizeof (*sqp), KM_SLEEP);
 
 	/*
 	 * We take pidlock now, which excludes all callers of waitid().
 	 */
 	mutex_enter(&pidlock);
 	mutex_enter(&p->p_lock);
+
+	/*
+	 * Get the ptrace(2) "parent" process, to which we may send a SIGCLD
+	 * signal later.
+	 */
+	if ((parent = accord->lxpa_tracer) != NULL &&
+	    (plwp = parent->br_lwp) != NULL) {
+		pp = lwptoproc(plwp);
+	}
 
 	/*
 	 * Our tracer should not have been modified in our absence; the
@@ -698,8 +710,8 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	 * While still holding pidlock, we attempt to wake our tracer from a
 	 * potential waitid() slumber.
 	 */
-	if (cvp != NULL) {
-		cv_broadcast(cvp);
+	if (accord->lxpa_cvp != NULL) {
+		cv_broadcast(accord->lxpa_cvp);
 	}
 
 	/*
@@ -1487,8 +1499,7 @@ lx_ptrace_stop(ushort_t what)
 	lx_ptrace_accord_t *accord;
 	boolean_t trace = B_TRUE;
 
-	VERIFY(what == LX_PR_SYSENTRY || what == LX_PR_SYSEXIT ||
-	    what == LX_PR_SIGNALLED);
+	VERIFY(what == LX_PR_SYSENTRY || what == LX_PR_SYSEXIT);
 
 	/*
 	 * If we do not have an accord, bail out early.
@@ -1722,38 +1733,167 @@ again:
 	 * Clean up and release our hold on the accord If we completely
 	 * detached all tracee LWPs, this will free the accord.  Otherwise, it
 	 * will be freed when they complete their cleanup.
+	 *
+	 * We hold "pidlock" while clearing "lxpa_tracer" and "lxpa_cvp".  This
+	 * allows us to conveniently exclude waitid(), sigcld_repost() and
+	 * lx_stop_notify().
 	 */
+	mutex_enter(&pidlock);
 	lx_ptrace_accord_enter(accord);
 	accord->lxpa_cvp = NULL;
 	accord->lxpa_tracer = NULL;
+	mutex_exit(&pidlock);
 	lx_ptrace_accord_rele(accord);
 	lx_ptrace_accord_exit(accord);
 }
 
 static void
 lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
-    lx_ptrace_accord_t *accord)
+    lx_ptrace_accord_t *accord, proc_t *realparent)
 {
+	lx_ptrace_newstate_t *lxns;
+	lx_proc_data_t *pd = ptolxproc(p);
+	sigqueue_t *sqp;
+	k_siginfo_t *si, *nssi;
+	boolean_t release = B_TRUE;
+	boolean_t leader, exiting;
+
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
 
 	/*
-	 * We are the tracee LWP.  Lock the accord tracee list and then our
-	 * containing process.
+	 * Allocate now, before entering any mutexes.
 	 */
-	mutex_enter(&accord->lxpa_tracees_lock);
+	lxns = kmem_zalloc(sizeof (*lxns), KM_SLEEP);
+	sqp = kmem_zalloc(sizeof (*sqp), KM_SLEEP);
+	si = &sqp->sq_info;
+	nssi = &lxns->lxns_info;
+
 	mutex_enter(&p->p_lock);
 
 	/*
-	 * Remove our reference to the accord.  We will release our hold
-	 * later.
+	 * Populate the siginfo data we will use to post SIGCLD to the tracer,
+	 * and to add to the newstate queue for the tracer.
+	 */
+	nssi->si_signo = si->si_signo = SIGCLD;
+	nssi->si_pid = si->si_pid = lwpd->br_pid;
+	if (pd->l_exit_group) {
+		/*
+		 * exit_group(2) has been called; use the thread group exit
+		 * value.
+		 */
+		nssi->si_code = si->si_code = CLD_EXITED;
+		nssi->si_status = si->si_status = pd->l_exit_value;
+	} else {
+		nssi->si_code = si->si_code = lwpd->br_exitwhy;
+		nssi->si_status = si->si_status = lwpd->br_exitwhat;
+	}
+
+	/*
+	 * Remove our reference to the accord.  Our hold on the accord may
+	 * be transferred to our newstate object if it is pushed onto the
+	 * queue for handling at process exit.
 	 */
 	VERIFY(lwpd->br_ptrace_tracer == accord);
 	lwpd->br_ptrace_attach = LX_PTA_NONE;
 	lwpd->br_ptrace_tracer = NULL;
 
 	/*
-	 * Remove this LWP from the accord tracee list:
+	 * Check if the tracer is the real parent process.  If it is,
+	 * lx_exitlwp() has already posted SIGCLD.
 	 */
+
+	lx_ptrace_accord_enter(accord);
+	if ((ptparent = accord->lxpa_tracer) != NULL &&
+	    (ptlwp = ptparent->br_lwp) != NULL &&
+	    (ptp = lwptoproc(ptlwp)) != NULL &&
+	    realparent == ptp) {
+		lx_ptrace_accord_exit(accord);
+		release = B_TRUE;
+		goto nosigcld;
+	}
+	lx_ptrace_accord_exit(accord);
+
+	leader = !!(lwpd->br_ptid == -1);
+	exiting = !!(p->p_flag & SEXITING);
+
+	if (leader || exiting) {
+		/*
+		 * Exit status for the thread group leader, or for other LWPs
+		 * exiting as part of a thread group exit, is determined in
+		 * lx_exit_with_sig().  We enqueue these newstate objects
+		 * on the process for handling after we have all the facts.
+		 */
+		if (leader) {
+			lxns->lxns_flags |= LX_PTRACE_NS_GROUPLEADER;
+		}
+		if (exiting) {
+			lxns->lxns_flags |= LX_PTRACE_NS_NEEDINFO;
+		}
+
+		/*
+		 * Our hold on the accord is transferred to our queued
+		 * newstate object.
+		 */
+		lxns->lxns_tracer = accord;
+		release = B_FALSE;
+
+		lxns->lxns_sqp = sqp;
+		sqp = NULL;
+
+		if (leader) {
+			/*
+			 * Exit status for the thread group (i.e. process)
+			 * is posted to the tracer only after all other LWPs
+			 * in the process have posted their status.  Put it
+			 * on the back of the queue.
+			 */
+			list_insert_tail(&pd->l_ptrace_newstate, lxns);
+		} else {
+			list_insert_head(&pd->l_ptrace_newstate, lxns);
+		}
+		lxns = NULL;
+	}
+	mutex_exit(&p->p_lock);
+
+	if (lxns != NULL) {
+		/*
+		 * Post this newstate event directly to the tracer.
+		 */
+		lx_lwp_data_t *ptparent;
+		klwp_t *ptlwp;
+		proc_t *ptp;
+
+		mutex_enter(&pidlock);
+		/*
+		 * Push our newstate onto the tracer queue.
+		 */
+		list_insert_tail(&accord->lxpa_newstate, lxns);
+		release = B_TRUE;
+
+		/*
+		 * Attempt to send SIGCLD to the tracer.
+		 */
+		if ((ptparent = accord->lxpa_tracer) != NULL &&
+		    (ptlwp = ptparent->br_lwp) != NULL &&
+		    (ptp = lwptoproc(ptlwp)) != NULL) {
+			mutex_enter(&ptp->p_lock);
+			if (!sigismember(&ptp->p_sig, SIGCLD)) {
+				sigaddqa(ptp, ptlwp->lwp_thread, sqp);
+				sqp = NULL;
+			} else {
+				lxns->lxns_flags |= LX_PTRACE_NS_CLDPEND;
+			}
+			mutex_exit(&ptp->p_lock);
+		}
+		mutex_exit(&pidlock);
+	}
+
+nosigcld:
+	/*
+	 * Remove this LWP from the accord tracee list.
+	 */
+	mutex_enter(&accord->lxpa_tracees_lock);
+	mutex_enter(&p->p_lock);
 	VERIFY(list_link_active(&lwpd->br_ptrace_linkage));
 	list_remove(&accord->lxpa_tracees, lwpd);
 
@@ -1764,12 +1904,28 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
 	mutex_exit(&p->p_lock);
 	mutex_exit(&accord->lxpa_tracees_lock);
 
+	mutex_enter(&pidlock);
+	if (accord->lxpa_cvp != NULL) {
+		/*
+		 * While holding "pidlock", wake the tracer if it is blocked in
+		 * waitid().
+		 */
+		cv_broadcast(accord->lxpa_cvp);
+	}
+	mutex_exit(&pidlock);
+
+	if (release) {
+		lx_ptrace_accord_enter(accord);
+		lx_ptrace_accord_rele(accord);
+		lx_ptrace_accord_exit(accord);
+	}
+
 	/*
-	 * Release our hold on the accord.
+	 * Free any leftover resources.
 	 */
-	lx_ptrace_accord_enter(accord);
-	lx_ptrace_accord_rele(accord);
-	lx_ptrace_accord_exit(accord);
+	if (sqp != NULL) {
+		kmem_free(sqp, sizeof (*sqp));
+	}
 }
 
 /*
@@ -1778,7 +1934,7 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
  * routine will also detach any LWPs being traced by this LWP.
  */
 void
-lx_ptrace_exit(proc_t *p, klwp_t *lwp)
+lx_ptrace_exit(proc_t *p, klwp_t *lwp, proc_t *realparent)
 {
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
@@ -1798,7 +1954,7 @@ lx_ptrace_exit(proc_t *p, klwp_t *lwp)
 		 * We are traced by another LWP and must detach ourselves.
 		 */
 		mutex_exit(&p->p_lock);
-		lx_ptrace_exit_tracee(p, lwpd, accord);
+		lx_ptrace_exit_tracee(p, lwpd, accord, realparent);
 		mutex_enter(&p->p_lock);
 	}
 
@@ -1823,10 +1979,11 @@ lx_sigcld_repost(proc_t *pp, sigqueue_t *sqp)
 	klwp_t *lwp = ttolwp(curthread);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
-	lx_lwp_data_t *remote;
+	lx_lwp_data_t *remote = NULL;
 	klwp_t *rlwp;
-	proc_t *rproc;
-	boolean_t found = B_FALSE;
+	proc_t *rproc = NULL;
+	boolean_t found = B_FALSE, found_newstate = B_FALSE;
+	lx_ptrace_newstate_t *lxns;
 
 	VERIFY(MUTEX_HELD(&pidlock));
 	VERIFY(MUTEX_NOT_HELD(&pp->p_lock));
@@ -1844,6 +2001,31 @@ lx_sigcld_repost(proc_t *pp, sigqueue_t *sqp)
 	mutex_exit(&pp->p_lock);
 
 	mutex_enter(&accord->lxpa_tracees_lock);
+	/*
+	 * Check the newstate queue first.
+	 */
+	for (lxns = list_head(&accord->lxpa_newstate); lxns != NULL;
+	    lxns = list_next(&accord->lxpa_newstate, lxns)) {
+		if (!(lxns->lxns_flags & LX_PTRACE_NS_CLDPEND)) {
+			/*
+			 * No SIGCLD required for this newstate.
+			 */
+			continue;
+		}
+
+		/*
+		 * We can post this newstate to the tracer.
+		 */
+		bcopy(&lxns->lxns_info, &sqp->sq_info, sizeof (k_siginfo_t));
+		lxns->lxns_flags &= ~LX_PTRACE_NS_CLDPEND;
+		found_newstate = B_TRUE;
+		mutex_exit(&accord->lxpa_tracees_lock);
+		goto post_sigcld;
+	}
+
+	/*
+	 * Look for interesting events from tracers.
+	 */
 	for (remote = list_head(&accord->lxpa_tracees); remote != NULL;
 	    remote = list_next(&accord->lxpa_tracees, remote)) {
 		rlwp = remote->br_lwp;
@@ -1903,13 +2085,18 @@ lx_sigcld_repost(proc_t *pp, sigqueue_t *sqp)
 	remote->br_ptrace_flags &= ~LX_PTRACE_CLDPEND;
 	mutex_exit(&rproc->p_lock);
 
+post_sigcld:
 	mutex_enter(&pp->p_lock);
 	if (sigismember(&pp->p_sig, SIGCLD)) {
 		mutex_exit(&pp->p_lock);
 
-		mutex_enter(&rproc->p_lock);
-		remote->br_ptrace_flags |= LX_PTRACE_CLDPEND;
-		mutex_exit(&rproc->p_lock);
+		if (found_newstate) {
+			lxns->lxns_flags |= LX_PTRACE_NS_CLDPEND;
+		} else {
+			mutex_enter(&rproc->p_lock);
+			remote->br_ptrace_flags |= LX_PTRACE_CLDPEND;
+			mutex_exit(&rproc->p_lock);
+		}
 
 		return (-1);
 	}
@@ -1929,6 +2116,7 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
     boolean_t *brand_wants_wait, int *rval)
 {
 	lx_ptrace_accord_t *accord;
+	lx_ptrace_newstate_t *lxns;
 	klwp_t *lwp = ttolwp(curthread);
 	proc_t *p = lwptoproc(lwp);
 	lx_lwp_data_t *local = lwptolxlwp(lwp);
@@ -1980,13 +2168,47 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 	lx_ptrace_accord_exit(accord);
 
 	mutex_enter(&accord->lxpa_tracees_lock);
-	if (list_is_empty(&accord->lxpa_tracees)) {
+	if (list_is_empty(&accord->lxpa_tracees) &&
+	    list_is_empty(&accord->lxpa_newstate)) {
 		/*
 		 * Though it has an accord, there are currently no tracees in
 		 * the list for this LWP.
 		 */
 		mutex_exit(&accord->lxpa_tracees_lock);
 		return (-1);
+	}
+
+	/*
+	 * Report on the first newstate object in the list.
+	 */
+	if ((lxns = list_head(&accord->lxpa_newstate)) != NULL) {
+		/*
+		 * Copy out the siginfo for this newstate.
+		 */
+		*ip = lxns->lxns_info;
+
+		DTRACE_PROBE2(lx__waitid__newstate, lx_ptrace_newstate_t *,
+		    lxns, boolean_t, waitflag);
+
+		if (waitflag) {
+			/*
+			 * Not called with WNOWAIT, so remove the newstate
+			 * from the queue.
+			 */
+			list_remove(&accord->lxpa_newstate, lxns);
+		}
+
+		mutex_exit(&accord->lxpa_tracees_lock);
+
+		if (waitflag) {
+			mutex_exit(&pidlock);
+			VERIFY(lxns->lxns_sqp == NULL);
+			VERIFY(lxns->lxns_tracer == NULL);
+			kmem_free(lxns, sizeof (*lxns));
+			mutex_enter(&pidlock);
+		}
+
+		goto success;
 	}
 
 	/*
@@ -2106,6 +2328,7 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 		mutex_exit(&accord->lxpa_tracees_lock);
 	}
 
+success:
 	/*
 	 * If we are consuming this wait state, we remove the SIGCLD from
 	 * the queue and post another.

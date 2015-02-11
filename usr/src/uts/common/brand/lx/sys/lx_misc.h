@@ -46,6 +46,10 @@ extern boolean_t lx_wait_filter(proc_t *, proc_t *);
 
 extern void lx_ifname_convert(char *, int);
 
+extern void lx_ptrace_accord_enter(lx_ptrace_accord_t *);
+extern void lx_ptrace_accord_hold(lx_ptrace_accord_t *);
+extern void lx_ptrace_accord_rele(lx_ptrace_accord_t *);
+extern void lx_ptrace_accord_exit(lx_ptrace_accord_t *);
 extern boolean_t lx_ptrace_stop(ushort_t);
 extern void lx_stop_notify(proc_t *, klwp_t *, ushort_t, ushort_t);
 extern void lx_ptrace_init(void);

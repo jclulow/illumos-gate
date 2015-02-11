@@ -145,6 +145,7 @@ lx_exitlwp(klwp_t *lwp)
 {
 	struct lx_lwp_data *lwpd = lwptolxlwp(lwp);
 	proc_t *p = lwptoproc(lwp);
+	proc_t *pp = NULL;
 	kthread_t *t;
 	sigqueue_t *sqp = NULL;
 	pid_t ppid;
@@ -154,10 +155,6 @@ lx_exitlwp(klwp_t *lwp)
 
 	if (lwpd == NULL)
 		return;		/* second time thru' */
-
-	mutex_enter(&p->p_lock);
-	lx_ptrace_exit(p, lwp);
-	mutex_exit(&p->p_lock);
 
 	if (lwpd->br_clear_ctidp != NULL) {
 		(void) suword32(lwpd->br_clear_ctidp, 0);
@@ -173,7 +170,7 @@ lx_exitlwp(klwp_t *lwp)
 		 * process exits.
 		 */
 		if (lwpd->br_ptid == -1)
-			goto free;
+			goto ptrace;
 
 		sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 		/*
@@ -181,10 +178,10 @@ lx_exitlwp(klwp_t *lwp)
 		 * so the signal goes to the parent process - not to a
 		 * specific thread in this process.
 		 */
-		p = lwptoproc(lwp);
+		pp = lwptoproc(lwp);
 		if (lwpd->br_ppid == 0) {
-			mutex_enter(&p->p_lock);
-			ppid = p->p_ppid;
+			mutex_enter(&pp->p_lock);
+			ppid = pp->p_ppid;
 			t = NULL;
 		} else {
 			/*
@@ -194,19 +191,20 @@ lx_exitlwp(klwp_t *lwp)
 			 */
 			if ((lx_lwp_ppid(lwp, &ppid, &ptid) == 1) ||
 			    (ptid == -1))
-				goto free;
+				goto ptrace;
 
 			mutex_enter(&pidlock);
-			if ((p = prfind(ppid)) == NULL || p->p_stat == SIDL) {
+			if ((pp = prfind(ppid)) == NULL || pp->p_stat == SIDL) {
+				pp = NULL;
 				mutex_exit(&pidlock);
-				goto free;
+				goto ptrace;
 			}
-			mutex_enter(&p->p_lock);
+			mutex_enter(&pp->p_lock);
 			mutex_exit(&pidlock);
 
-			if ((t = idtot(p, ptid)) == NULL) {
-				mutex_exit(&p->p_lock);
-				goto free;
+			if ((t = idtot(pp, ptid)) == NULL) {
+				mutex_exit(&pp->p_lock);
+				goto ptrace;
 			}
 		}
 
@@ -215,12 +213,16 @@ lx_exitlwp(klwp_t *lwp)
 		sqp->sq_info.si_status = lwpd->br_exitwhat;
 		sqp->sq_info.si_pid = lwpd->br_pid;
 		sqp->sq_info.si_uid = crgetruid(CRED());
-		sigaddqa(p, t, sqp);
-		mutex_exit(&p->p_lock);
+		sigaddqa(pp, t, sqp);
+		mutex_exit(&pp->p_lock);
 		sqp = NULL;
 	}
 
-free:
+ptrace:
+	mutex_enter(&p->p_lock);
+	lx_ptrace_exit(p, lwp, pp);
+	mutex_exit(&p->p_lock);
+
 	if (lwpd->br_scall_args != NULL) {
 		ASSERT(lwpd->br_args_size > 0);
 		kmem_free(lwpd->br_scall_args, lwpd->br_args_size);
@@ -496,41 +498,181 @@ void
 lx_exit_with_sig(proc_t *cp, sigqueue_t *sqp, void *brand_data)
 {
 	proc_t *pp = cp->p_parent;
-	struct lx_proc_data *lx_brand_data = brand_data;
-	ASSERT(MUTEX_HELD(&pidlock));
+	lx_proc_data_t *pd = brand_data;
+	lx_ptrace_accord_t *accord;
+
+	VERIFY(MUTEX_HELD(&pidlock));
+	VERIFY(MUTEX_NOT_HELD(&cp->p_lock));
+	VERIFY(MUTEX_NOT_HELD(&pp->p_lock));
 
 	switch (cp->p_wcode) {
 	case CLD_EXITED:
-	case CLD_DUMPED:
-	case CLD_KILLED:
-			ASSERT(cp->p_stat == SZOMB);
-			/*
-			 * The broadcast on p_srwchan_cv is a kludge to
-			 * wakeup a possible thread in uadmin(A_SHUTDOWN).
-			 */
-			cv_broadcast(&cp->p_srwchan_cv);
-
-			/*
-			 * Add to newstate list of the parent
-			 */
-			add_ns(pp, cp);
-
-			cv_broadcast(&pp->p_cv);
-			if ((pp->p_flag & SNOWAIT) ||
-			    PTOU(pp)->u_signal[SIGCLD - 1] == SIG_IGN) {
-				if (!(cp->p_pidflag & CLDWAITPID))
-					freeproc(cp);
-			} else if (!(cp->p_pidflag & CLDNOSIGCHLD) &&
-			    lx_brand_data->l_signal != 0) {
-				lx_post_exit_sig(cp, sqp, lx_brand_data);
-				sqp = NULL;
-			}
-			break;
+		/*
+		 * The exit value of the process depends on the ordering
+		 * of emulated exit(2) and exit_group(2) system calls, and
+		 * has been stashed in the per-process brand data.
+		 */
+		cp->p_wdata = pd->l_exit_value;
+		break;
 
 	case CLD_STOPPED:
 	case CLD_CONTINUED:
 	case CLD_TRAPPED:
-			panic("Should not be called in this case");
+		panic("Should not be called in this case");
+	}
+
+	VERIFY(cp->p_stat == SZOMB);
+
+	/*
+	 * If this process exited while traced, we have a series of newstate
+	 * objects that represent exit notifications for the tracer.  We empty
+	 * out the queue, attaching each object to its tracer and posting
+	 * SIGCLD.
+	 */
+	mutex_enter(&cp->p_lock);
+	while (!list_is_empty(&pd->l_ptrace_newstate)) {
+		lx_ptrace_accord_t *accord;
+		lx_ptrace_newstate_t *lxns = list_head(&pd->l_ptrace_newstate);
+		sigqueue_t *tsqp = NULL;
+		lx_lwp_data_t *ptparent;
+		klwp_t *ptlwp = NULL;
+		proc_t *ptp = NULL;
+
+		switch (cp->p_wcode) {
+		case CLD_DUMPED:
+		case CLD_KILLED:
+			/*
+			 * If the process was killed, the group leader status
+			 * must reflect this.
+			 */
+			if (lxns->lxns_flags & LX_PTRACE_NS_GROUPLEADER) {
+				lxns->lxns_flags |= LX_PTRACE_NS_NEEDINFO;
+			}
+			break;
+		}
+
+		if (lxns->lxns_flags & LX_PTRACE_NS_NEEDINFO) {
+			/*
+			 * This newstate was not complete at the time it was
+			 * enqueued.
+			 */
+			lxns->lxns_info.si_code = cp->p_wcode;
+			lxns->lxns_info.si_status = cp->p_wdata;
+			lxns->lxns_flags &= ~LX_PTRACE_NS_NEEDINFO;
+
+		} else if (pd->l_exit_group && (lxns->lxns_flags &
+		    LX_PTRACE_NS_GROUPLEADER)) {
+			/*
+			 * If exit_group(2) was called, the group leader always
+			 * reports the group exit value.
+			 */
+			lxns->lxns_info.si_code = cp->p_wcode;
+			lxns->lxns_info.si_status = cp->p_wdata;
+		}
+
+		/*
+		 * Remove the newstate object from the process queue so that we
+		 * may push it onto the tracer queue.
+		 */
+		list_remove(&pd->l_ptrace_newstate, lxns);
+		mutex_exit(&cp->p_lock);
+
+		accord = lxns->lxns_tracer;
+		tsqp = lxns->lxns_sqp;
+		lxns->lxns_tracer = NULL;
+		lxns->lxns_sqp = NULL;
+
+		/*
+		 * Locate the ptrace(2) "parent" process:
+		 */
+		if ((ptparent = accord->lxpa_tracer) != NULL &&
+		    (ptlwp = ptparent->br_lwp) != NULL) {
+			ptp = lwptoproc(ptlwp);
+		}
+
+		if ((lxns->lxns_flags & LX_PTRACE_NS_GROUPLEADER) &&
+		    ptp == pp) {
+			/*
+			 * The ptrace(2) parent is the _real_ parent of this
+			 * process.  We will post only the regular SIGCLD
+			 * the parent would otherwise receive.
+			 */
+			ptp = NULL;
+		}
+
+		if (ptp != NULL) {
+			list_insert_tail(&accord->lxpa_newstate, lxns);
+
+			mutex_enter(&ptp->p_lock);
+			if (!sigismember(&ptp->p_sig, SIGCLD)) {
+				/*
+				 * Send SIGCLD to the tracer.
+				 */
+				sigaddqa(ptp, ptlwp->lwp_thread, tsqp);
+				tsqp = NULL;
+			} else {
+				/*
+				 * Save this one for later.
+				 */
+				lxns->lxns_flags |= LX_PTRACE_NS_CLDPEND;
+			}
+			mutex_exit(&ptp->p_lock);
+
+			/*
+			 * Wake the tracer if blocked in waitid().
+			 */
+			if (accord->lxpa_cvp != NULL) {
+				cv_broadcast(accord->lxpa_cvp);
+			}
+		} else {
+			kmem_free(lxns, sizeof (*lxns));
+		}
+
+		/*
+		 * Release the hold on the accord previously
+		 * owned by the process-queued newstate object.
+		 */
+		lx_ptrace_accord_enter(accord);
+		lx_ptrace_accord_rele(accord);
+		lx_ptrace_accord_exit(accord);
+
+		if (tsqp != NULL) {
+			kmem_free(tsqp, sizeof (*tsqp));
+		}
+
+		mutex_enter(&cp->p_lock);
+	}
+	mutex_exit(&cp->p_lock);
+
+	/*
+	 * Notify the natural parent of the process.
+	 */
+	switch (cp->p_wcode) {
+	case CLD_EXITED:
+	case CLD_DUMPED:
+	case CLD_KILLED:
+		/*
+		 * The broadcast on p_srwchan_cv is a kludge to
+		 * wakeup a possible thread in uadmin(A_SHUTDOWN).
+		 */
+		cv_broadcast(&cp->p_srwchan_cv);
+
+		/*
+		 * Add to newstate list of the parent
+		 */
+		add_ns(pp, cp);
+
+		cv_broadcast(&pp->p_cv);
+		if ((pp->p_flag & SNOWAIT) ||
+		    PTOU(pp)->u_signal[SIGCLD - 1] == SIG_IGN) {
+			if (!(cp->p_pidflag & CLDWAITPID))
+				freeproc(cp);
+		} else if (!(cp->p_pidflag & CLDNOSIGCHLD) &&
+		    pd->l_signal != 0) {
+			lx_post_exit_sig(cp, sqp, pd);
+			sqp = NULL;
+		}
+		break;
 	}
 
 	if (sqp)

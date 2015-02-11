@@ -92,6 +92,7 @@ extern "C" {
 #define	B_UNWIND_NTV_SYSC_FLAG	140
 #define	B_EXIT_AS_SIG		141
 #define	B_HELPER_WAITID		142
+#define	B_EXIT			143
 
 #define	B_IKE_SYSCALL		192
 
@@ -270,6 +271,24 @@ typedef struct lx_proc_data {
 	lx_elf_data_t l_elf_data; /* ELF data for linux executable */
 	int l_signal;		/* signal to deliver to parent when this */
 				/* thread group dies */
+
+	/*
+	 * If the thread group (process) leader calls lx_exit(), the
+	 * exit value it passes is stored here.  If all of the other threads
+	 * in the group (LWPs in the process) also call lx_exit(), this is
+	 * the exit value for the thread group.  If any thread calls
+	 * lx_exit_group(), _that_ value takes precedence and all threads
+	 * exit.
+	 */
+	int l_exit_value;
+	boolean_t l_exit_group;	/* SYS_exit_group called already? */
+
+	/*
+	 * A queue of lx_ptrace_newstate_t objects that were caught up in the
+	 * exit of the process.  These are updated and posted in order to their
+	 * respective tracers from lx_exit_with_sig().
+	 */
+	list_t l_ptrace_newstate;
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */
@@ -320,8 +339,12 @@ typedef enum lx_ptrace_state {
 typedef struct lx_ptrace_accord {
 	kmutex_t		lxpa_lock;
 	uint_t			lxpa_refcnt;
-	lx_lwp_data_t		*lxpa_tracer;
 	lx_accord_flags_t	lxpa_flags;
+
+	/*
+	 * The tracer will hold "pidlock" while clearing these fields.
+	 */
+	lx_lwp_data_t		*lxpa_tracer;
 	kcondvar_t		*lxpa_cvp;
 
 	/*
@@ -329,7 +352,31 @@ typedef struct lx_ptrace_accord {
 	 */
 	kmutex_t		lxpa_tracees_lock;
 	list_t			lxpa_tracees;
+
+	/*
+	 * The "lxpa_newstate" list is protected by "pidlock", in addition
+	 * to having an active hold on the accord.
+	 */
+	list_t			lxpa_newstate;
 } lx_ptrace_accord_t;
+
+typedef enum lx_ptrace_ns_flags {
+	LX_PTRACE_NS_CLDPEND = 0x01,
+	LX_PTRACE_NS_NEEDINFO = 0x02,
+	LX_PTRACE_NS_GROUPLEADER = 0x04
+} lx_ptrace_ns_flags_t;
+
+/*
+ * A ptrace(2) newstate object contains wait information for tracers that needs
+ * to be posted, rather than read from stopped LWPs.
+ */
+typedef struct lx_ptrace_newstate {
+	lx_ptrace_accord_t	*lxns_tracer;
+	lx_ptrace_ns_flags_t	lxns_flags;
+	k_siginfo_t		lxns_info;
+	list_node_t		lxns_linkage;
+	sigqueue_t		*lxns_sqp;
+} lx_ptrace_newstate_t;
 
 /*
  * These values are stored in the per-LWP data for a tracee when it is attached

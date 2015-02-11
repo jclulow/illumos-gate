@@ -971,7 +971,7 @@ lx_init(int argc, char *argv[], char *envp[])
 		lx_err_fatal("Unable to initialize thread-specific exit "
 		    "context: %s", strerror(errno));
 
-	if (lx_tsd.lxtsd_exit == 0) {
+	if (lx_tsd.lxtsd_exit == LX_ET_NONE) {
 #if defined(_LP64)
 		/* Switch to Linux syscall mode */
 		(void) syscall(SYS_brand, B_CLR_NTV_SYSC_FLAG);
@@ -987,15 +987,36 @@ lx_init(int argc, char *argv[], char *envp[])
 	 * exit_group() system call.  In turn the brand library did a
 	 * setcontext() to jump to the thread context state we saved above.
 	 */
-	if (lx_tsd.lxtsd_exit == 1)
-		thr_exit((void *)(long)lx_tsd.lxtsd_exit_status);
-	else
-		exit(lx_tsd.lxtsd_exit_status);
-
-	assert(0);
-
+	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
 	/*NOTREACHED*/
 	return (0);
+}
+
+void
+lx_exit_common(lx_exit_type_t exit_type, uintptr_t exit_value)
+{
+	int ev = 0xff & exit_value;
+
+	switch (exit_type) {
+	case LX_ET_EXIT:
+		(void) syscall(SYS_brand, B_EXIT, B_FALSE, ev);
+		/*
+		 * The native thread return value is never seen so we pass
+		 * NULL.
+		 */
+		thr_exit(NULL);
+		break;
+
+	case LX_ET_EXIT_GROUP:
+		(void) syscall(SYS_brand, B_EXIT, B_TRUE, ev);
+		exit(ev);
+		break;
+
+	default:
+		abort();
+	}
+
+	abort();
 }
 
 /*
