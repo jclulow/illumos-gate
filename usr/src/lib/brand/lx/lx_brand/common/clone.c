@@ -132,7 +132,7 @@ lx_exit(uintptr_t p1)
 
 	assert(lx_tsd != 0);
 
-	lx_tsd->lxtsd_exit = LX_EXIT;
+	lx_tsd->lxtsd_exit = LX_ET_EXIT;
 	lx_tsd->lxtsd_exit_status = status;
 
 	lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEEXIT, B_FALSE,
@@ -185,7 +185,7 @@ lx_group_exit(uintptr_t p1)
 
 	assert(lx_tsd != 0);
 
-	lx_tsd->lxtsd_exit = LX_EXIT_GROUP;
+	lx_tsd->lxtsd_exit = LX_ET_EXIT_GROUP;
 	lx_tsd->lxtsd_exit_status = status;
 
 	/*
@@ -300,7 +300,7 @@ clone_start(void *arg)
 	 * Do the final stack twiddling, reset %gs, and return to the
 	 * clone(2) path.
 	 */
-	if (lx_tsd.lxtsd_exit == 0) {
+	if (lx_tsd.lxtsd_exit == LX_ET_NONE) {
 		if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
 			*(cs->c_clone_res) = -errno;
 
@@ -337,12 +337,7 @@ clone_start(void *arg)
 	 * setcontext() to jump to the thread context state saved in
 	 * getcontext(), above.
 	 */
-	if (lx_tsd.lxtsd_exit == LX_EXIT)
-		thr_exit((void *)(long)lx_tsd.lxtsd_exit_status);
-	else
-		exit(lx_tsd.lxtsd_exit_status);
-
-	assert(0);
+	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
 	/*NOTREACHED*/
 }
 
