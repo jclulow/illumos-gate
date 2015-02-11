@@ -149,7 +149,6 @@ static void lxpr_read_stat(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_swaps(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_uptime(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_version(lxpr_node_t *, lxpr_uiobuf_t *);
-static void lxpr_read_kernel_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 
 static void lxpr_read_pid_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_limits(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -486,7 +485,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_pid_status,		/* /proc/<pid>/status	*/
 	lxpr_read_isdir,		/* /proc/<pid>/fd	*/
 	lxpr_read_fd,			/* /proc/<pid>/fd/nn	*/
-	lxpr_read_kernel_cmdline,	/* /proc/cmdline	*/
+	lxpr_read_empty,		/* /proc/cmdline	*/
 	lxpr_read_cpuinfo,		/* /proc/cpuinfo	*/
 	lxpr_read_empty,		/* /proc/devices	*/
 	lxpr_read_empty,		/* /proc/dma		*/
@@ -788,32 +787,6 @@ lxpr_read_invalid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 static void
 lxpr_read_empty(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
-}
-
-static void
-lxpr_read_kernel_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
-{
-	zone_t *z = curzone;
-	boolean_t print_nl = B_TRUE;
-
-	VERIFY(lxpnp->lxpr_type == LXPR_CMDLINE);
-
-	if (z != NULL && z->zone_bootargs != NULL) {
-		char *nl = strchr(z->zone_bootargs, '\n');
-		if (nl != NULL && nl[0] == '\n' && nl[1] == '\0') {
-			/*
-			 * Don't print a trailing newline if there is
-			 * one in the string already.
-			 */
-			print_nl = B_FALSE;
-		}
-
-		lxpr_uiobuf_printf(uiobuf, "%s", z->zone_bootargs);
-	}
-
-	if (print_nl) {
-		lxpr_uiobuf_printf(uiobuf, "\n");
-	}
 }
 
 /*
