@@ -518,7 +518,7 @@ lx_winfo(lx_lwp_data_t *remote, k_siginfo_t *ip, boolean_t waitflag,
 		break;
 
 	case LX_PR_SIGNALLED:
-		signo = remote->br_ptrace_userstop;
+		signo = remote->br_ptrace_stopsig;
 		if (signo < 1 || signo >= LX_NSIG) {
 			/*
 			 * If this signal number is not valid, pretend it
@@ -831,13 +831,13 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
 	/*
 	 * The tracer may choose to suppress the delivery of a signal, or
 	 * select an alternative signal for delivery.  If this is an
-	 * appropriate ptrace(2) "signal-delivery-stop", br_ptrace_userstop
+	 * appropriate ptrace(2) "signal-delivery-stop", br_ptrace_stopsig
 	 * will be used as the new signal number.
 	 *
 	 * As with so many other aspects of the Linux ptrace(2) interface, this
 	 * may fail silently if the state machine is not aligned correctly.
 	 */
-	remote->br_ptrace_userstop = signo;
+	remote->br_ptrace_stopsig = signo;
 
 	/*
 	 * Handle the syscall-stop flag if this is a PTRACE_SYSCALL restart:
@@ -896,7 +896,7 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
 	 * The tracer may, as described in lx_ptrace_cont(), choose to suppress
 	 * or modify the delivered signal.
 	 */
-	remote->br_ptrace_userstop = signo;
+	remote->br_ptrace_stopsig = signo;
 
 	lx_ptrace_restart_lwp(rlwp);
 
@@ -1551,16 +1551,16 @@ lx_issig_stop(proc_t *p, klwp_t *lwp)
 	 * We stash the signal on the LWP where our waitid_helper will find it
 	 * and enter the ptrace "signal-delivery-stop" condition.
 	 */
-	lwpd->br_ptrace_userstop = lx_sig;
+	lwpd->br_ptrace_stopsig = lx_sig;
 	(void) lx_ptrace_stop_common(lwp, p, lwpd, LX_PR_SIGNALLED);
 	mutex_enter(&p->p_lock);
 
 	/*
 	 * When we return, the signal may have been altered or suppressed.
 	 */
-	if (lwpd->br_ptrace_userstop != lx_sig) {
+	if (lwpd->br_ptrace_stopsig != lx_sig) {
 		int native_sig;
-		lx_sig = lwpd->br_ptrace_userstop;
+		lx_sig = lwpd->br_ptrace_stopsig;
 
 		if (lx_sig >= LX_NSIG) {
 			lx_sig = 0;
@@ -1602,7 +1602,7 @@ lx_issig_stop(proc_t *p, klwp_t *lwp)
 		}
 	}
 
-	lwpd->br_ptrace_userstop = 0;
+	lwpd->br_ptrace_stopsig = 0;
 	return (0);
 }
 

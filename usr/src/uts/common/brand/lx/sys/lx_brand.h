@@ -400,7 +400,7 @@ struct lx_lwp_data {
 	ushort_t br_ptrace_whystop; 	/* stop reason, 0 for no stop */
 	ushort_t br_ptrace_whatstop;	/* stop sub-reason */
 
-	int32_t br_ptrace_userstop;	/* data to/from B_PTRACE_STOP */
+	int32_t br_ptrace_stopsig;	/* stop signal, 0 for no signal */
 
 	uint_t	br_ptrace_event;
 	ulong_t	br_ptrace_eventmsg;
