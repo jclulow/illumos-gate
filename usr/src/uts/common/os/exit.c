@@ -398,14 +398,26 @@ proc_exit(int why, int what)
 		if (z->zone_boot_err == 0 &&
 		    zone_status_get(z) < ZONE_IS_SHUTTING_DOWN &&
 		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN) {
-			if (z->zone_restart_init == B_TRUE) {
-				if (restart_init(what, why) == 0)
-					return (0);
-			}
 
-			z->zone_init_status = wstat(why, what);
-			(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL,
-			    zone_kcred());
+			if (z->zone_reboot_on_init_exit == B_TRUE) {
+				/*
+				 * Trigger a zone reboot and continue
+				 * with exit processing.
+				 */
+				z->zone_init_status = wstat(why, what);
+				(void) zone_kadmin(A_REBOOT, 0, NULL,
+				    zone_kcred());
+
+			} else {
+				if (z->zone_restart_init == B_TRUE) {
+					if (restart_init(what, why) == 0)
+						return (0);
+				}
+
+				z->zone_init_status = wstat(why, what);
+				(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL,
+				    zone_kcred());
+			}
 		}
 
 		/*

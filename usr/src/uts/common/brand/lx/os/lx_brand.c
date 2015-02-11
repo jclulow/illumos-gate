@@ -182,11 +182,6 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 	VERIFY(p->p_brand_data != NULL);
 
 	/*
-	 * XXX
-	 */
-	z->zone_restart_init = B_FALSE;
-
-	/*
 	 * We might get here if fork failed (e.g. ENOMEM) so we don't always
 	 * have an lwp (see brand_clearbrand).
 	 */
@@ -414,6 +409,12 @@ lx_init_brand_data(zone_t *zone)
 	(void) strlcpy(data->lxzd_kernel_version, "2.4.21", LX_VERS_MAX);
 	data->lxzd_max_syscall = LX_NSYSCALLS;
 	zone->zone_brand_data = data;
+
+	/*
+	 * In Linux, if the init(1) process terminates the system panics.
+	 * The zone must reboot to simulate this behaviour.
+	 */
+	zone->zone_reboot_on_init_exit = B_TRUE;
 }
 
 void
