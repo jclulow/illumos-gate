@@ -320,8 +320,13 @@ typedef enum lx_ptrace_state {
 typedef struct lx_ptrace_accord {
 	kmutex_t		lxpa_lock;
 	uint_t			lxpa_refcnt;
-	lx_lwp_data_t		*lxpa_tracer;
 	lx_accord_flags_t	lxpa_flags;
+
+	/*
+	 * The tracer must hold "pidlock" while clearing these fields for
+	 * exclusion of waitid(), etc.
+	 */
+	lx_lwp_data_t		*lxpa_tracer;
 	kcondvar_t		*lxpa_cvp;
 
 	/*

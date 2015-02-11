@@ -119,6 +119,10 @@
  * at creation to represent the link from the tracer LWP to its accord.  The
  * accord is not freed until the reference count falls to zero.
  *
+ * To make mutual exclusion between a detaching tracer and various notifying
+ * tracees simpler, the tracer will hold "pidlock" while it clears the
+ * accord members that point back to the tracer LWP and CV.
+ *
  * SIGNALS AND JOB CONTROL
  *
  * Various actions, either directly ptrace(2) related or commonly associated
@@ -564,7 +568,6 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 {
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	lx_ptrace_accord_t *accord;
-	kcondvar_t *cvp;
 	klwp_t *plwp = NULL;
 	proc_t *pp = NULL;
 	lx_lwp_data_t *parent;
@@ -599,34 +602,30 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	VERIFY((accord = lwpd->br_ptrace_tracer) != NULL);
 
 	/*
-	 * We must drop our process lock to fetch the CV from the accord.
+	 * We must drop our process lock to fetch the process from the accord.
 	 */
 	mutex_exit(&p->p_lock);
 
-	lx_ptrace_accord_enter(accord);
-	cvp = accord->lxpa_cvp;
+	/*
+	 * Allocate before we enter any mutexes.
+	 */
+	sqp = kmem_zalloc(sizeof (*sqp), KM_SLEEP);
+
+	/*
+	 * We take pidlock now, which excludes all callers of waitid() and
+	 * prevents a detaching tracer from clearing critical accord members.
+	 */
+	mutex_enter(&pidlock);
+	mutex_enter(&p->p_lock);
+
 	/*
 	 * Get the ptrace(2) "parent" process, to which we may send
 	 * a SIGCLD signal later.
 	 */
-	parent = accord->lxpa_tracer;
-	if (parent != NULL) {
-		plwp = parent->br_lwp;
-	}
-	if (plwp != NULL) {
+	if ((parent = accord->lxpa_tracer) != NULL &&
+	    (plwp = parent->br_lwp) != NULL) {
 		pp = lwptoproc(plwp);
 	}
-	lx_ptrace_accord_exit(accord);
-
-	if (pp != NULL) {
-		sqp = kmem_zalloc(sizeof (*sqp), KM_SLEEP);
-	}
-
-	/*
-	 * We take pidlock now, which excludes all callers of waitid().
-	 */
-	mutex_enter(&pidlock);
-	mutex_enter(&p->p_lock);
 
 	/*
 	 * Our tracer should not have been modified in our absence; the
@@ -698,8 +697,8 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
 	 * While still holding pidlock, we attempt to wake our tracer from a
 	 * potential waitid() slumber.
 	 */
-	if (cvp != NULL) {
-		cv_broadcast(cvp);
+	if (accord->lxpa_cvp != NULL) {
+		cv_broadcast(accord->lxpa_cvp);
 	}
 
 	/*
@@ -1722,10 +1721,15 @@ again:
 	 * Clean up and release our hold on the accord If we completely
 	 * detached all tracee LWPs, this will free the accord.  Otherwise, it
 	 * will be freed when they complete their cleanup.
+	 *
+	 * We hold "pidlock" while clearing these members for easy exclusion of
+	 * waitid(), etc.
 	 */
+	mutex_enter(&pidlock);
 	lx_ptrace_accord_enter(accord);
 	accord->lxpa_cvp = NULL;
 	accord->lxpa_tracer = NULL;
+	mutex_exit(&pidlock);
 	lx_ptrace_accord_rele(accord);
 	lx_ptrace_accord_exit(accord);
 }
@@ -1763,6 +1767,15 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
 	cv_broadcast(&lx_ptrace_busy_cv);
 	mutex_exit(&p->p_lock);
 	mutex_exit(&accord->lxpa_tracees_lock);
+
+	/*
+	 * Grab "pidlock" and wake the tracer if it is blocked in waitid().
+	 */
+	mutex_enter(&pidlock);
+	if (accord->lxpa_cvp != NULL) {
+		cv_broadcast(accord->lxpa_cvp);
+	}
+	mutex_exit(&pidlock);
 
 	/*
 	 * Release our hold on the accord.
