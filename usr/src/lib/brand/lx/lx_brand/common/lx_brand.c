@@ -548,7 +548,7 @@ lx_init(int argc, char *argv[], char *envp[])
 	int		err;
 	lx_elf_data_t	edp;
 	lx_brand_registration_t reg;
-	static lx_tsd_t lx_tsd;
+	lx_tsd_t	*lxtsd;
 #if defined(_LP64)
 	void		*vdso_hdr;
 #endif
@@ -723,7 +723,11 @@ lx_init(int argc, char *argv[], char *envp[])
 	/*
 	 * Initialize the thread specific data for this thread.
 	 */
-	lx_init_tsd(&lx_tsd);
+	if ((lxtsd = malloc(sizeof (*lxtsd))) == NULL) {
+		lx_err_fatal("failed to allocate tsd for main thread: %s",
+		    strerror(errno));
+	}
+	lx_init_tsd(lxtsd);
 
 	/*
 	 * Allocate the brand emulation stack for the main process thread.
@@ -734,12 +738,12 @@ lx_init(int argc, char *argv[], char *envp[])
 	 * Save the current context of this thread.
 	 * We'll restore this context when this thread attempts to exit.
 	 */
-	if (getcontext(&lx_tsd.lxtsd_exit_context) != 0) {
+	if (getcontext(&lxtsd->lxtsd_exit_context) != 0) {
 		lx_err_fatal("Unable to initialize thread-specific exit "
 		    "context: %s", strerror(errno));
 	}
 
-	if (lx_tsd.lxtsd_exit == LX_ET_NONE) {
+	if (lxtsd->lxtsd_exit == LX_ET_NONE) {
 		/*
 		 * The brand linker expects the stack pointer to point to
 		 * "argc", which is just before &argv[0].
@@ -781,15 +785,19 @@ lx_init(int argc, char *argv[], char *envp[])
 	 * exit_group() system call.  In turn the brand library did a
 	 * setcontext() to jump to the thread context state we saved above.
 	 */
-	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
+	lx_exit_common(lxtsd);
 	/*NOTREACHED*/
 	return (0);
 }
 
 void
-lx_exit_common(lx_exit_type_t exit_type, uintptr_t exit_value)
+lx_exit_common(lx_tsd_t *lxtsd)
 {
-	int ev = 0xff & exit_value;
+	lx_exit_type_t exit_type = lxtsd->lxtsd_exit;
+	int ev = (0xff & lxtsd->lxtsd_exit_status);
+
+	free(lxtsd->lxtsd_clone_state);
+	free(lxtsd);
 
 	switch (exit_type) {
 	case LX_ET_EXIT:

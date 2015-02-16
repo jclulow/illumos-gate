@@ -65,7 +65,7 @@ extern thread_key_t	lx_tsd_key;
 
 extern void		lx_swap_gs(long, long *);
 
-extern void		lx_exit_common(lx_exit_type_t, uintptr_t) __NORETURN;
+extern void		lx_exit_common(lx_tsd_t *) __NORETURN;
 
 extern lx_tsd_t		*lx_get_tsd(void);
 

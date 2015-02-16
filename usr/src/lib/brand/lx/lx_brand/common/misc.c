@@ -693,29 +693,6 @@ lx_prctl(int option, uintptr_t arg2, uintptr_t arg3,
 	return (0);
 }
 
-#if defined(_LP64)
-long
-lx_arch_prctl(int code, uintptr_t addr)
-{
-	long rv;
-	int ret;
-	lx_tsd_t	*lx_tsd;
-
-	rv = syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_arch_prctl, code, addr);
-
-	if (code == LX_ARCH_SET_FS && rv == 0) {
-		/* Track lx fsbase for debugging purposes */
-		if ((ret = thr_getspecific(lx_tsd_key,
-		    (void **)&lx_tsd)) != 0) {
-			lx_err_fatal("arch_prctl: unable to read TSD: %s",
-			    strerror(ret));
-		}
-		lx_tsd->lxtsd_fsbase = addr;
-	}
-	return ((rv == 0) ? 0 : -errno);
-}
-#endif
-
 /*
  * For syslog(), as there is no kernel and nothing to log, we simply emulate a
  * kernel cyclic buffer (LOG_BUF_LEN) of 0 bytes, only handling errors for bad

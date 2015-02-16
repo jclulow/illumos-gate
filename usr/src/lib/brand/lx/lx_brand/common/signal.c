@@ -1510,10 +1510,10 @@ lx_vsyscall_return(long ret, ucontext_t *ucp)
 	 * Simulate a 'ret' by grabbing the return address off the caller's
 	 * stack and incrementing rsp manually before sigreturning back.
 	 */
-	(void) uucopy((void*)ucp->uc_mcontext.gregs[REG_RSP],
-	    &ucp->uc_mcontext.gregs[REG_RIP], sizeof (void*));
-	lx_debug("\tvsyscall return to %p", ucp->uc_mcontext.gregs[REG_RIP]);
-	ucp->uc_mcontext.gregs[REG_RSP] += sizeof (void*);
+	(void) uucopy((void*)ucp->uc_mcontext.gregs[REG_SP],
+	    &ucp->uc_mcontext.gregs[REG_PC], sizeof (void*));
+	lx_debug("\tvsyscall return to %p", ucp->uc_mcontext.gregs[REG_PC]);
+	ucp->uc_mcontext.gregs[REG_SP] += sizeof (void*);
 
 	/*
 	 * Make sure that libc's ul_sigmask reflects what the sigmask is about
@@ -1521,7 +1521,11 @@ lx_vsyscall_return(long ret, ucontext_t *ucp)
 	 */
 	thr_sigsetmask(SIG_SETMASK, &ucp->uc_sigmask, NULL);
 
-	(void) syscall(SYS_brand, B_SIGNAL_RETURN, ucp);
+	/*
+	 * XXX We should reconcile this with B_JUMP_TO_LINUX or a regular
+	 * return from the signal handler, or whatever.
+	 */
+	abort();
 }
 #endif
 
@@ -1606,25 +1610,24 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	if (sig == SIGSEGV) {
 		int i;
 		for (i = 0; lx_vsyscalls[i].lv_addr != NULL; i++) {
-			if (lx_vsyscalls[i].lv_addr != (uintptr_t)sip->si_addr)
+			uintptr_t addr = (uintptr_t)sip->si_addr;
+
+			if (lx_vsyscalls[i].lv_addr != addr)
 				continue;
+
 			/*
 			 * Users of vsyscall must commit fully by using
 			 * jmp/call access the vsyscall.  Cowardly reading data
 			 * from the page beforehand isn't allowed or possible.
 			 */
-			if (sip->si_addr !=
-			    (void*)ucp->uc_mcontext.gregs[REG_RIP])
+			if (addr != LX_REG(ucp, REG_PC))
 				continue;
 
-			lx_debug(lx_vsyscalls[i].lv_msg,
-			    ucp->uc_mcontext.gregs[REG_RDI],
-			    ucp->uc_mcontext.gregs[REG_RSI],
-			    ucp->uc_mcontext.gregs[REG_RDX]);
+			lx_debug(lx_vsyscalls[i].lv_msg, LX_REG(ucp, REG_RDI),
+			    LX_REG(ucp, REG_RSI), LX_REG(ucp, REG_RDX));
 			long ret = lx_vsyscalls[i].lv_func(
-			    ucp->uc_mcontext.gregs[REG_RDI],
-			    ucp->uc_mcontext.gregs[REG_RSI],
-			    ucp->uc_mcontext.gregs[REG_RDX]);
+			    LX_REG(ucp, REG_RDI), LX_REG(ucp, REG_RSI),
+			    LX_REG(ucp, REG_RDX));
 			lx_vsyscall_return(ret, ucp);
 			assert(0);
 		}

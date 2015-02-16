@@ -266,7 +266,6 @@ clone_start(void *arg)
 	 * the second time.
 	 */
 	lxtsd = lx_get_tsd();
-	cs = lxtsd->lxtsd_clone_state;
 	if (lxtsd->lxtsd_exit != LX_ET_NONE) {
 		goto after_exit;
 	}
@@ -328,9 +327,7 @@ after_exit:
 	 * setcontext() to jump to the thread context state saved in
 	 * getcontext(), above.
 	 */
-	free(lxtsd);
-	free(cs);
-	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
+	lx_exit_common(lxtsd);
 	/*NOTREACHED*/
 	return (NULL);
 }

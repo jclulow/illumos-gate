@@ -472,7 +472,7 @@ lx_fixsegreg(greg_t sr, model_t datamodel)
 }
 
 /*
- * Brand-specific function to convert the fsbase as pulled from the regsiter
+ * Brand-specific function to convert the fsbase as pulled from the register
  * into a native fsbase suitable for locating the ulwp_t from the kernel.
  */
 uintptr_t
@@ -480,8 +480,10 @@ lx_fsbase(klwp_t *lwp, uintptr_t fsbase)
 {
 	lx_lwp_data_t *lwpd = lwp->lwp_brand;
 
-	if (lwpd->br_ntv_syscall || lwpd->br_ntv_fsbase == NULL)
+	if (lwpd->br_stack_mode != LX_STACK_MODE_BRAND ||
+	    lwpd->br_ntv_fsbase == NULL) {
 		return (fsbase);
+	}
 
 	return (lwpd->br_ntv_fsbase);
 }
