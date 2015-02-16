@@ -327,7 +327,7 @@ after_exit:
 	 * setcontext() to jump to the thread context state saved in
 	 * getcontext(), above.
 	 */
-	lx_exit_common(lxtsd);
+	lx_exit_common();
 	/*NOTREACHED*/
 	return (NULL);
 }

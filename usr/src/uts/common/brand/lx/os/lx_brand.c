@@ -474,8 +474,8 @@ lx_savecontext(ucontext_t *ucp)
 	uintptr_t flags = 0;
 
 	/*
-	 * The ucontext_t affords us two private pointer-sized members in
-	 * "uc_brand_data[2]".  We pack a variety of flags into the first
+	 * The ucontext_t affords us three private pointer-sized members in
+	 * "uc_brand_data".  We pack a variety of flags into the first
 	 * element, and an optional stack pointer in the second element.  The
 	 * flags determine which stack pointer (native or brand), if any, is
 	 * stored in the second element.

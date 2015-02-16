@@ -785,14 +785,15 @@ lx_init(int argc, char *argv[], char *envp[])
 	 * exit_group() system call.  In turn the brand library did a
 	 * setcontext() to jump to the thread context state we saved above.
 	 */
-	lx_exit_common(lxtsd);
+	lx_exit_common();
 	/*NOTREACHED*/
 	return (0);
 }
 
 void
-lx_exit_common(lx_tsd_t *lxtsd)
+lx_exit_common(void)
 {
+	lx_tsd_t *lxtsd = lx_get_tsd();
 	lx_exit_type_t exit_type = lxtsd->lxtsd_exit;
 	int ev = (0xff & lxtsd->lxtsd_exit_status);
 
