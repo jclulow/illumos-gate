@@ -22,7 +22,7 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #ifndef _SYS_LINUX_SYSCALLS_H

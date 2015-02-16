@@ -154,7 +154,7 @@ extern __thread int lx_do_syscall_restart;
 /*
  * Macros to access register state within a ucontext_t:
  */
-#define	LX_REG(ucp, r)	(ucp->uc_mcontext.gregs[(r)])
+#define	LX_REG(ucp, r)	((ucp)->uc_mcontext.gregs[(r)])
 
 /*
  * normally we never want to write to stderr or stdout because it's unsafe

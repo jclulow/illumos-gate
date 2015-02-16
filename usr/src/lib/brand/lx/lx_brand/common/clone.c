@@ -328,19 +328,8 @@ after_exit:
 	 * setcontext() to jump to the thread context state saved in
 	 * getcontext(), above.
 	 */
-	if (lx_tsd.lxtsd_exit == LX_ET_EXIT) {
-		/*
-		 * If the thread is exiting, but not the entire process, we
-		 * must free the stack we allocated for usermode emulation.
-		 * This is safe to do here because the setcontext() put us back
-		 * on the BRAND stack for this process.
-		 */
-		lx_free_stack();
-
-		free(lxtsd);
-		free(cs);
-	}
-
+	free(lxtsd);
+	free(cs);
 	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
 	/*NOTREACHED*/
 	return (NULL);
@@ -612,7 +601,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	cs->c_clone_res = &clone_res;
 	cs->c_ptrace_event = ptrace_event;
 	/*
-	 * We want the new thread to return directly to the return site for
+	 * We want the new thread to return directly to the call site for
 	 * the system call.
 	 */
 	cs->c_retaddr = (void *)LX_REG(ucp, REG_PC);

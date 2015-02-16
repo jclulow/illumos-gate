@@ -11,7 +11,7 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/asm_linkage.h>
@@ -28,7 +28,6 @@
 #include "assym.h"
 
 /* 64-bit signal syscall numbers */
-#define	LX_SYS_sigreturn	513
 #define	LX_SYS_rt_sigreturn	15
 
 #if defined(lint)

@@ -21,7 +21,7 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/asm_linkage.h>

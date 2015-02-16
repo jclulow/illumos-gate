@@ -613,7 +613,7 @@ lx_trace_sysenter(int syscall_num, uintptr_t *args)
 		    args[2], args[3], args[4], args[5]);
 	}
 
-	lx_ptrace_fire();
+	lx_ptrace_stop(LX_PR_SYSENTRY);
 }
 
 void
@@ -625,7 +625,7 @@ lx_trace_sysreturn(int syscall_num, long ret)
 		(*lx_systrace_return_ptr)(syscall_num, ret, ret, 0, 0, 0, 0);
 	}
 
-	lx_ptrace_fire();
+	lx_ptrace_stop(LX_PR_SYSEXIT);
 }
 
 /*
@@ -717,16 +717,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		    (void *)&lx_brand, (void *)reg.lxbr_handler, (void *)p);
 		pd = p->p_brand_data;
 		pd->l_handler = (uintptr_t)reg.lxbr_handler;
-
-		if (pd->l_traceflag != NULL && pd->l_ptrace != 0) {
-			/*
-			 * If ptrace(2) is active on this process, it is likely
-			 * that we just finished an emulated execve(2) in a
-			 * traced child.  The usermode traceflag will have been
-			 * clobbered by the exec, so we set it again here:
-			 */
-			(void) suword32((void *)pd->l_traceflag, 1);
-		}
 
 		return (0);
 
@@ -962,7 +952,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 * arg1 = the base of the stack to use for emulation
 		 */
 		if (lwpd->br_stack_mode != LX_STACK_MODE_PREINIT) {
-			lx_print("B_SET_BRAND_STACK when stack was already "
+			lx_print("B_SET_NATIVE_STACK when stack was already "
 			    "set to %p\n", (void *)arg1);
 			return (EEXIST);
 		}

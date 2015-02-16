@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2015 Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -781,15 +781,6 @@ lx_init(int argc, char *argv[], char *envp[])
 	 * exit_group() system call.  In turn the brand library did a
 	 * setcontext() to jump to the thread context state we saved above.
 	 */
-	if (lx_tsd.lxtsd_exit == LX_ET_EXIT) {
-		/*
-		 * If the thread is exiting, but not the entire process, we
-		 * must free the stack we allocated for usermode emulation.
-		 * This is safe to do here because the setcontext() put us back
-		 * on the BRAND stack for this process.
-		 */
-		lx_free_stack();
-	}
 	lx_exit_common(lx_tsd.lxtsd_exit, lx_tsd.lxtsd_exit_status);
 	/*NOTREACHED*/
 	return (0);
@@ -802,6 +793,14 @@ lx_exit_common(lx_exit_type_t exit_type, uintptr_t exit_value)
 
 	switch (exit_type) {
 	case LX_ET_EXIT:
+		/*
+		 * If the thread is exiting, but not the entire process, we
+		 * must free the stack we allocated for usermode emulation.
+		 * This is safe to do here because the setcontext() put us
+		 * back on the BRAND stack for this process.
+		 */
+		lx_free_stack();
+
 		/*
 		 * The native thread return value is never seen so we pass
 		 * NULL.

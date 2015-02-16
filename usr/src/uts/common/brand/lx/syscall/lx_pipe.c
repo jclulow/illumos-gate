@@ -24,7 +24,7 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2013 OmniTI Computer Consulting, Inc. All rights reserved.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/zone.h>

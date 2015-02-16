@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/asm_linkage.h>
@@ -206,7 +206,6 @@
 	movl	$from, %edi;			\
 	movl	$to, %esi;			\
 	call	syscall_mstate
-
 
 /*
  * Check to see if a simple (direct) return is possible i.e.

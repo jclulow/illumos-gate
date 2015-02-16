@@ -1016,15 +1016,9 @@ lx_ptrace_attach(pid_t lx_pid)
 
 		/*
 		 * Set the in-kernel process-wide ptrace(2) enable flag.
-		 * Attempt also to write the usermode trace flag so that the
-		 * process knows to enter the kernel for potential ptrace(2)
-		 * syscall-stops.
 		 */
 		rprocd = ttolxproc(rthr);
 		rprocd->l_ptrace = 1;
-		mutex_exit(&rproc->p_lock);
-		(void) uwrite(rproc, &one, sizeof (one), rprocd->l_traceflag);
-		mutex_enter(&rproc->p_lock);
 
 		error = 0;
 	}
@@ -1294,12 +1288,9 @@ lx_ptrace_traceme(void)
 
 			/*
 			 * Set the in-kernel process-wide ptrace(2) enable
-			 * flag.  Attempt also to write the usermode trace flag
-			 * so that the process knows to enter the kernel for
-			 * potential ptrace(2) syscall-stops.
+			 * flag.
 			 */
 			procd->l_ptrace = 1;
-			(void) suword32((void *)procd->l_traceflag, 1);
 
 			return (0);
 		}

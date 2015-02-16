@@ -84,17 +84,16 @@ extern "C" {
 #define	B_PTRACE_STOP_FOR_OPT	135
 #define	B_UNSUPPORTED		136
 #define	B_STORE_ARGS		137
-#define	B_SET_BRAND_STACK	138
+#define	B_GETPID		138
 #define	B_JUMP_TO_LINUX		139
 #define	B_SET_THUNK_PID		140
 #define	B_EXIT_AS_SIG		141
 #define	B_HELPER_WAITID		142
 #define	B_HELPER_CLONE		143
-#define	B_GETPID		144
-#define	B_HELPER_SETGROUPS	145
-#define	B_HELPER_SIGQUEUE	146
-#define	B_HELPER_TGSIGQUEUE	147
-#define	B_SET_NATIVE_STACK	148
+#define	B_HELPER_SETGROUPS	144
+#define	B_HELPER_SIGQUEUE	145
+#define	B_HELPER_TGSIGQUEUE	146
+#define	B_SET_NATIVE_STACK	147
 
 #ifndef _ASM
 /*
@@ -455,7 +454,6 @@ struct lx_lwp_data {
 
 	uint_t	br_ptrace_event;
 	ulong_t	br_ptrace_eventmsg;
-
 
 	int	br_syscall_num;		/* current system call number */
 	boolean_t br_syscall_restart;	/* should restart on EINTR */

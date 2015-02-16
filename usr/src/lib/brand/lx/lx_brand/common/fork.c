@@ -70,9 +70,8 @@ lx_fork_common(boolean_t is_vfork)
 
 	case 0:
 		/*
-		 * Returning in the new child.
-		 * In the child, we must free the stacks for the threads we
-		 * did not duplicate; i.e. every other thread.
+		 * Returning in the new child.  We must free the stacks for the
+		 * threads we did not duplicate; i.e. every other thread.
 		 */
 		lx_free_other_stacks();
 
@@ -83,20 +82,21 @@ lx_fork_common(boolean_t is_vfork)
 		lx_ptrace_stop_if_option(ptopt, B_TRUE, 0);
 
 		/*
-		 * Re-enable signal delivery in the child, and return to the
+		 * Re-enable signal delivery in the child and return to the
 		 * new process.
 		 */
 		_sigon();
 		return (0);
 
 	default:
-		/*
-		 * Returning in the new parent.
-		 */
 		lx_ptrace_stop_if_option(ptopt, B_FALSE, (ulong_t)ret);
+
+		/*
+		 * Re-enable signal delivery in the parent and return from
+		 * the emulated system call.
+		 */
 		_sigon();
 		return (ret);
-
 	}
 }
 

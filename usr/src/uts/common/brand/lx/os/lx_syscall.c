@@ -22,7 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/kmem.h>
@@ -231,8 +231,6 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 
 	/*
 	 * Fire ptrace and DTrace probes:
-	 * XXX is it correct to do this for interrupted system calls that
-	 * we are restarting?
 	 */
 	lx_trace_sysreturn(syscall_num, ret);
 

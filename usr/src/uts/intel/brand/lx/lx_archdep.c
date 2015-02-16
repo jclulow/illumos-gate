@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 /*
@@ -165,7 +165,7 @@ lx_switch_to_native(klwp_t *lwp)
  * old sp: --------------------------------------------------------------
  *  |      - ucontext_t              (register state for emulation)
  *  |      - uintptr_t[6]            (system call arguments array)
- *  |      --------------------------------------------------------------
+ *  V      --------------------------------------------------------------
  * new sp: - bogus return address
  *
  * Arguments are passed in registers, per the AMD64 ABI: %rdi, %rsi and %rdx.

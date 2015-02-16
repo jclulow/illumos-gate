@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #ifndef	_SYS_KLWP_H

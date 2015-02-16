@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  */
 
 #include <assert.h>
