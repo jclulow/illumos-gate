@@ -432,6 +432,13 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	LX_EMULATE_ENTER(ucp, syscall_num, args);
 
 	/*
+	 * The kernel should have saved us a context that will not restore the
+	 * previous signal mask.  Some emulated system calls alter the signal
+	 * mask; restoring it after the emulation would cancel that out.
+	 */
+	assert(!(ucp->uc_flags & UC_SIGMASK));
+
+	/*
 	 * The kernel ensures that the syscall_num is sane; Use it as is.
 	 */
 	assert(syscall_num >= 0);
@@ -456,10 +463,8 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	}
 
 	/*
-	 * Return to the context we were passed:
-	 * XXX fuck the signal mask...
+	 * Return to the context we were passed
 	 */
-	ucp->uc_flags &= ~UC_SIGMASK;
 	LX_EMULATE_RETURN(ucp, syscall_num, emu_ret, emu_errno);
 	(void) syscall(SYS_brand, B_EMULATION_DONE, ucp, syscall_num, emu_ret,
 	    emu_errno);

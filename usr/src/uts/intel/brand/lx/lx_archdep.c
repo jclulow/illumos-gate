@@ -252,9 +252,12 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 		ucontext_t uc;
 
 		/*
-		 * XXX is this the correct signal mask to use?
+		 * We do not want to save the signal mask for an emulation
+		 * context.  Some emulated system calls alter the signal mask;
+		 * restoring it when the emulation is complete would clobber
+		 * those intentional side effects.
 		 */
-		savecontext(&uc, &curthread->t_hold);
+		savecontext(&uc, NULL);
 
 		/*
 		 * Mark this as a system call emulation context:
@@ -416,9 +419,12 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 		ucontext32_t uc;
 
 		/*
-		 * XXX is this the correct signal mask to use?
+		 * We do not want to save the signal mask for an emulation
+		 * context.  Some emulated system calls alter the signal mask;
+		 * restoring it when the emulation is complete would clobber
+		 * those intentional side effects.
 		 */
-		savecontext32(&uc, &curthread->t_hold);
+		savecontext32(&uc, NULL);
 		/*
 		 * Mark this as a system call emulation context:
 		 */

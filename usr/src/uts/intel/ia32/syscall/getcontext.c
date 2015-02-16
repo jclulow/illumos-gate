@@ -129,7 +129,15 @@ savecontext(ucontext_t *ucp, const k_sigset_t *mask)
 	else
 		ucp->uc_flags &= ~UC_FPU;
 
-	sigktou(mask, &ucp->uc_sigmask);
+	if (mask != NULL) {
+		/*
+		 * Save signal mask.
+		 */
+		sigktou(mask, &ucp->uc_sigmask);
+	} else {
+		ucp->uc_flags &= ~UC_SIGMASK;
+		bzero(&ucp->uc_sigmask, sizeof (ucp->uc_sigmask));
+	}
 
 	if (PROC_IS_BRANDED(p) && BROP(p)->b_savecontext != NULL) {
 		/*
@@ -345,7 +353,15 @@ savecontext32(ucontext32_t *ucp, const k_sigset_t *mask)
 	else
 		ucp->uc_flags &= ~UC_FPU;
 
-	sigktou(mask, &ucp->uc_sigmask);
+	if (mask != NULL) {
+		/*
+		 * Save signal mask.
+		 */
+		sigktou(mask, &ucp->uc_sigmask);
+	} else {
+		ucp->uc_flags &= ~UC_SIGMASK;
+		bzero(&ucp->uc_sigmask, sizeof (ucp->uc_sigmask));
+	}
 
 	if (PROC_IS_BRANDED(p) && BROP(p)->b_savecontext32 != NULL) {
 		/*
