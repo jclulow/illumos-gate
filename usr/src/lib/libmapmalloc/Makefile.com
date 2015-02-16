@@ -18,20 +18,24 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2015 Joyent, Inc.
 #
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# ident	"%Z%%M%	%I%	%E% SMI"
 #
 
 LIBRARY=	libmapmalloc.a
 VERS=		.1
 
-OBJECTS=  \
+C_OBJECTS = \
 	calloc.o \
 	textmem.o \
 	valloc.o
+
+ASM_OBJECTS = \
+	asm_subr.o
+
+OBJECTS = $(C_OBJECTS) $(ASM_OBJECTS)
 
 # include library definitions
 include ../../Makefile.lib
@@ -43,12 +47,16 @@ LIBS =		$(DYNLIB) $(LINTLIB)
 LINTSRC=	$(LINTLIB:%.ln=%)
 
 CFLAGS +=	$(CCVERBOSE)
-CPPFLAGS +=	-I../../common/inc -D_REENTRANT
+CPPFLAGS +=	-I../common -I../../common/inc -D_REENTRANT
 DYNFLAGS +=	$(ZINTERPOSE)
 LDLIBS +=	-lc
+ASFLAGS +=	-P -D_ASM
 
 $(LINTLIB) lint :=	LINTFLAGS += -erroff=E_BAD_PTR_CAST_ALIGN
 $(LINTLIB) lint :=	LINTFLAGS64 += -erroff=E_BAD_PTR_CAST_ALIGN
+
+$(LINTLIB) lint :=	SRCS = $(C_OBJECTS:%.o=../common/%.c) \
+			$(ASM_OBJECTS:%.o=$(ISASRCDIR)/%.s)
 
 .KEEP_STATE:
 
@@ -59,6 +67,10 @@ include ../../Makefile.targ
 
 pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
+pics/%.o: $(ISASRCDIR)/%.s
+	$(COMPILE.s) -o $@ $<
 	$(POST_PROCESS_O)
 
 # install rule for lint library target
