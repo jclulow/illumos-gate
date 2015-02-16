@@ -78,11 +78,11 @@ int	lx_brandsys(int, int64_t *, uintptr_t, uintptr_t, uintptr_t,
 void	lx_set_kern_version(zone_t *, char *);
 void	lx_copy_procdata(proc_t *, proc_t *);
 
-extern int waitsys(idtype_t, id_t, siginfo_t *, int);
 extern int getsetcontext(int, void *);
+extern int waitsys(idtype_t, id_t, siginfo_t *, int);
 #if defined(_SYSCALL32_IMPL)
-extern int waitsys32(idtype_t, id_t, siginfo_t *, int);
 extern int getsetcontext32(int, void *);
+extern int waitsys32(idtype_t, id_t, siginfo_t *, int);
 #endif
 
 extern void lx_proc_exit(proc_t *, klwp_t *);
@@ -1563,17 +1563,19 @@ lx_syscall_init(void)
 	int i;
 
 	/*
-	 * Count up the 32-bit Linux system calls.
+	 * Count up the 32-bit Linux system calls.  Note that lx_sysent32
+	 * has (LX_NSYSCALLS + 1) entries.
 	 */
-	for (i = 0; i < LX_NSYSCALLS && lx_sysent32[i].sy_name != NULL; i++)
+	for (i = 0; i <= LX_NSYSCALLS && lx_sysent32[i].sy_name != NULL; i++)
 		continue;
 	lx_nsysent32 = i;
 
 #if defined(_LP64)
 	/*
-	 * Count up the 32-bit Linux system calls.
+	 * Count up the 32-bit Linux system calls.  Note that lx_sysent64
+	 * has (LX_NSYSCALLS + 1) entries.
 	 */
-	for (i = 0; i < LX_NSYSCALLS && lx_sysent64[i].sy_name != NULL; i++)
+	for (i = 0; i <= LX_NSYSCALLS && lx_sysent64[i].sy_name != NULL; i++)
 		continue;
 	lx_nsysent64 = i;
 #endif

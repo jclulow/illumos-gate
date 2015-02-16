@@ -56,13 +56,6 @@ extern int lx_rpm_delay;
 extern boolean_t lx_is_rpm;
 
 /*
- * These thread-specific variables allow the signal interposition code
- * to communicate restart disposition for any interrupting signals.
- */
-extern __thread int lx_had_sigchild;
-extern __thread int lx_do_syscall_restart;
-
-/*
  * Values Linux expects for init
  */
 #define	LX_INIT_PGID	0

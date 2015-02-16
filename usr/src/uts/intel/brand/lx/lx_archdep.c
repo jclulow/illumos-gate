@@ -146,7 +146,7 @@ lx_switch_to_native(klwp_t *lwp)
 	}
 
 	default:
-		VERIFY(0);
+		cmn_err(CE_PANIC, "unknown data model: %d", datamodel);
 	}
 #elif defined(__i386)
 	struct regs *rp = lwptoregs(lwp);

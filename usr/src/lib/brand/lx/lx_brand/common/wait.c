@@ -176,21 +176,8 @@ lx_waitid_helper(idtype_t idtype, id_t id, siginfo_t *sip, int native_options,
 	/*
 	 * Call into our in-kernel waitid() wrapper:
 	 */
-restart:
-	lx_had_sigchild = 0;
 	if (syscall(SYS_brand, B_HELPER_WAITID, idtype, id, sip,
 	    native_options, extra_options) != 0) {
-		if (errno == EINTR && (lx_had_sigchild ||
-		    lx_do_syscall_restart)) {
-			/*
-			 * If we handled a SIGCLD while blocked in waitid(),
-			 * or the SA_RESTART flag was set, we should wait
-			 * again.
-			 */
-			lx_debug("lx_waitid_helper() restarting due to"
-			    " interrupted system call");
-			goto restart;
-		}
 		return (-1);
 	}
 

@@ -43,7 +43,7 @@ lx_arch_prctl(int code, ulong_t addr)
 {
 #if defined(__amd64)
 	klwp_t *lwp = ttolwp(curthread);
-	struct lx_lwp_data *llwp = lwptolxlwp(lwp);
+	lx_lwp_data_t *llwp = lwptolxlwp(lwp);
 	pcb_t *pcb = &lwp->lwp_pcb;
 
 	/* We currently only support [g|s]et_fs */

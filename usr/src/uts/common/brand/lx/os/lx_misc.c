@@ -362,6 +362,7 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 		 * The parent LWP has an alternate stack installed.
 		 * The child LWP should have the same stack base and extent.
 		 */
+		dst->br_stack_mode = src->br_stack_mode;
 		dst->br_ntv_stack = src->br_ntv_stack;
 		dst->br_ntv_stack_current = src->br_ntv_stack_current;
 		break;

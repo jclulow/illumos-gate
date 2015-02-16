@@ -157,9 +157,6 @@ struct lx_locale_ending {
 	int		se_size;	/* solaris ending string length */
 };
 
-__thread int lx_do_syscall_restart;
-__thread int lx_had_sigchild;
-
 #define	l2s_locale(lname, sname) \
 	{(lname), (sname), sizeof ((lname)) - 1, sizeof ((sname)) - 1}
 
@@ -532,10 +529,56 @@ lx_init_tsd(lx_tsd_t *lxtsd)
 	 */
 	lxtsd->lxtsd_sigaltstack.ss_flags = LX_SS_DISABLE;
 
+	/*
+	 * Create a per-thread exit context from the current register and
+	 * native/brand stack state.  Replace the saved program counter value
+	 * with the address of lx_exit_common(); we wish to revector there when
+	 * the thread or process is exiting.
+	 */
+	if (getcontext(&lxtsd->lxtsd_exit_context) != 0) {
+		lx_err_fatal("Unable to initialize thread-specific exit "
+		    "context: %s", strerror(errno));
+	}
+	LX_REG(&lxtsd->lxtsd_exit_context, REG_PC) = (uintptr_t)lx_exit_common;
+	LX_REG(&lxtsd->lxtsd_exit_context, REG_FP) = 0;
+
 	if ((err = thr_setspecific(lx_tsd_key, lxtsd)) != 0) {
 		lx_err_fatal("Unable to initialize thread-specific data: %s",
 		    strerror(err));
 	}
+}
+
+static void
+lx_start(uintptr_t sp, uintptr_t entry)
+{
+	ucontext_t jump_uc;
+
+	if (getcontext(&jump_uc) != 0) {
+		lx_err_fatal("Unable to getcontext for program start: %s",
+		    strerror(errno));
+	}
+
+	/*
+	 * We want to load the general registers from this
+	 * context, and switch to the BRAND stack.
+	 */
+	jump_uc.uc_flags = UC_CPU;
+	jump_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
+
+	LX_REG(&jump_uc, REG_FP) = NULL;
+	LX_REG(&jump_uc, REG_SP) = sp;
+	LX_REG(&jump_uc, REG_PC) = entry;
+
+	lx_debug("starting Linux program sp %p ldentry %p", sp, entry);
+
+	/*
+	 * This system call should not return.
+	 */
+	if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
+		lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
+		    strerror(errno));
+	}
+	abort();
 }
 
 /*ARGSUSED*/
@@ -727,6 +770,7 @@ lx_init(int argc, char *argv[], char *envp[])
 		lx_err_fatal("failed to allocate tsd for main thread: %s",
 		    strerror(errno));
 	}
+	lx_debug("lx tsd allocated @ %p", lxtsd);
 	lx_init_tsd(lxtsd);
 
 	/*
@@ -735,58 +779,13 @@ lx_init(int argc, char *argv[], char *envp[])
 	lx_install_stack(NULL, 0);
 
 	/*
-	 * Save the current context of this thread.
-	 * We'll restore this context when this thread attempts to exit.
+	 * The brand linker expects the stack pointer to point to
+	 * "argc", which is just before &argv[0].
 	 */
-	if (getcontext(&lxtsd->lxtsd_exit_context) != 0) {
-		lx_err_fatal("Unable to initialize thread-specific exit "
-		    "context: %s", strerror(errno));
-	}
+	lx_start((uintptr_t)argv - sizeof (void *), edp.ed_ldentry);
 
-	if (lxtsd->lxtsd_exit == LX_ET_NONE) {
-		/*
-		 * The brand linker expects the stack pointer to point to
-		 * "argc", which is just before &argv[0].
-		 */
-		void *sp = ((void *)argv) - sizeof (void *);
-		void *entry = (void *)edp.ed_ldentry;
-		ucontext_t jump_uc;
-
-		if (getcontext(&jump_uc) != 0) {
-			lx_err_fatal("Unable to grab context for jump: %s",
-			    strerror(errno));
-		}
-
-		/*
-		 * We want to load the general registers from this
-		 * context, and switch to the BRAND stack.
-		 */
-		jump_uc.uc_flags = UC_CPU;
-		jump_uc.uc_brand_data[0] = (void *)LX_UC_STACK_BRAND;
-
-		jump_uc.uc_mcontext.gregs[REG_FP] = (uintptr_t)NULL;
-		jump_uc.uc_mcontext.gregs[REG_SP] = (uintptr_t)sp;
-		jump_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)entry;
-
-		lx_debug("starting Linux program sp %p ldentry %p", sp, entry);
-
-		/*
-		 * This system call should not return.
-		 */
-		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
-			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
-			    strerror(errno));
-		}
-		assert(0);
-	}
-
-	/*
-	 * We are here because the Linux application called the exit() or
-	 * exit_group() system call.  In turn the brand library did a
-	 * setcontext() to jump to the thread context state we saved above.
-	 */
-	lx_exit_common();
 	/*NOTREACHED*/
+	abort();
 	return (0);
 }
 

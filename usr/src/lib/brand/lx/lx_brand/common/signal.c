@@ -1542,17 +1542,6 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	size_t stksize;
 	int lx_sig;
 
-	switch (sig) {
-	case SIGCLD:
-		/*
-		 * Signal to an interrupted waitpid() that it was interrupted
-		 * by a SIGCLD, and should restart to grab the wait status
-		 * this signal represented.
-		 */
-		lx_had_sigchild = 1;
-		break;
-	}
-
 	/*
 	 * If Illumos signal has no Linux equivalent, effectively ignore it.
 	 */
@@ -1567,18 +1556,6 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 	lxsap = &lx_sighandlers.lx_sa[lx_sig];
 	lx_debug("lxsap @ 0x%p", lxsap);
-
-	/*
-	 * If the delivery of this signal interrupted a system call, we must
-	 * only restart it if sigaction(2) was used to set the SA_RESTART flag
-	 * for this signal.  The lx_emulate() function checks this per-thread
-	 * variable to discover the restart disposition of the most recently
-	 * handled signal.
-	 *
-	 * NOTE: this mechanism may not stand up to close scrutiny in the face
-	 * of nested asynchronous signal delivery.
-	 */
-	lx_do_syscall_restart = !!(lxsap->lxsa_flags & LX_SA_RESTART);
 
 	/*
 	 * Emulate vsyscall support.

@@ -249,27 +249,6 @@ clone_start(void *arg)
 	 */
 	lx_install_stack(cs->c_ntv_stk, cs->c_ntv_stk_sz);
 
-	/*
-	 * Save the current context of this thread.
-	 *
-	 * We'll restore this context when this thread attempts to exit.
-	 */
-	if (getcontext(&lxtsd->lxtsd_exit_context) != 0) {
-		*(cs->c_clone_res) = -errno;
-
-		lx_err_fatal("Unable to initialize thread-specific exit "
-		    "context: %s", strerror(errno));
-	}
-
-	/*
-	 * Ensure variables are correct when we return from getcontext() for
-	 * the second time.
-	 */
-	lxtsd = lx_get_tsd();
-	if (lxtsd->lxtsd_exit != LX_ET_NONE) {
-		goto after_exit;
-	}
-
 	if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
 		*(cs->c_clone_res) = -errno;
 
@@ -318,16 +297,8 @@ clone_start(void *arg)
 		lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
 		    strerror(errno));
 	}
-	assert(0);
+	abort();
 
-after_exit:
-	/*
-	 * We are here because the Linux application called the exit() or
-	 * exit_group() system call.  In turn the brand library did a
-	 * setcontext() to jump to the thread context state saved in
-	 * getcontext(), above.
-	 */
-	lx_exit_common();
 	/*NOTREACHED*/
 	return (NULL);
 }
