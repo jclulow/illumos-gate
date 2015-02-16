@@ -21,9 +21,10 @@
 #
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Joyent, Inc.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+
+ISASRCDIR = .
 
 include ../Makefile.com
 
