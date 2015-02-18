@@ -192,7 +192,6 @@ int lx_verbose = 0;		/* verbose mode enabled if non-zero */
 int lx_debug_enabled = 0;	/* debugging output enabled if non-zero */
 
 pid_t zoneinit_pid;		/* zone init PID */
-long max_pid;			/* native maximum PID */
 
 thread_key_t lx_tsd_key;
 
@@ -651,9 +650,6 @@ lx_init(int argc, char *argv[], char *envp[])
 		lx_debug("VERBOSE mode enabled.\n");
 	}
 
-	/* needed in wait4(), get it once since it never changes */
-	max_pid = sysconf(_SC_MAXPID);
-
 	(void) strlcpy(lx_cmd_name, basename(argv[0]), sizeof (lx_cmd_name));
 	lx_debug("executing linux process: %s", argv[0]);
 	lx_debug("branding myself and setting handler to 0x%p",
@@ -1032,7 +1028,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_vfork,
 	lx_execve,
 	lx_exit,
-	lx_wait4,
+	NULL,		/* 61: wait4 */
 	NULL,		/* 62: kill */
 	lx_uname,
 	lx_semget,
@@ -1218,7 +1214,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,		/* 244: mq_notify */
 	NULL,		/* 245: mq_getsetattr */
 	NULL,		/* 246: kexec_load */
-	lx_waitid,
+	NULL	,	/* 247: waitid */
 	NULL,		/* 248: add_key */
 	NULL,		/* 249: request_key */
 	NULL,		/* 250: keyctl */
@@ -1309,7 +1305,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,		/*   4: write */
 	lx_open,
 	lx_close,
-	lx_waitpid,
+	NULL,		/*   7: waitpid */
 	lx_creat,
 	lx_link,
 	lx_unlink,
@@ -1416,7 +1412,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_vhangup,
 	NULL,		/* 112: idle */
 	NULL,		/* 113: vm86old */
-	lx_wait4,
+	NULL,		/* 114: wait4 */
 	NULL,		/* 115: swapoff */
 	NULL,		/* 116: sysinfo */
 	lx_ipc,
@@ -1586,7 +1582,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,		/* 281: mq_notify */
 	NULL,		/* 282: mq_getsetattr */
 	NULL,		/* 283: kexec_load */
-	lx_waitid,
+	NULL,		/* 284: waitid */
 	NULL,		/* 285: sys_setaltroot */
 	NULL,		/* 286: add_key */
 	NULL,		/* 287: request_key */

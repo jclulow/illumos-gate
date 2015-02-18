@@ -534,6 +534,8 @@ extern void lx_emulate_user32(klwp_t *, int, uintptr_t *);
 extern int lx_debug;
 #define	lx_print	if (lx_debug) printf
 
+extern int lx_stol_errno[];
+
 /*
  * In-Kernel Linux System Call Description.
  */

@@ -61,8 +61,7 @@ COBJS	=	aio.o			\
 		sysctl.o		\
 		sysv_ipc.o		\
 		time.o			\
-		truncate.o		\
-		wait.o
+		truncate.o
 
 CMNOBJS =	lx_signum.o
 ASOBJS	=	lx_handler.o lx_crt.o

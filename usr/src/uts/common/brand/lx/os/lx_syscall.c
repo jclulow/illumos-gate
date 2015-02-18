@@ -98,7 +98,7 @@ int lx_nsysent32;
 /*
  * Map Illumos errno to the Linux equivalent.
  */
-static int stol_errno[] = LX_STOL_ERRNO_INIT;
+int lx_stol_errno[] = LX_STOL_ERRNO_INIT;
 
 #if defined(__amd64)
 static int
@@ -220,7 +220,7 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 		 * XXX bounds check on stol_errno
 		 * Convert from illumos to Linux errno:
 		 */
-		ret = -stol_errno[error];
+		ret = -lx_stol_errno[error];
 	}
 
 	/*
@@ -382,7 +382,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"write",	lx_write,		0,		3}, /*  4 */
 	{"open",	NULL,			0,		3}, /*  5 */
 	{"close",	NULL,			0,		1}, /*  6 */
-	{"waitpid",	NULL,			0,		3}, /*  7 */
+	{"waitpid",	lx_waitpid,		0,		3}, /*  7 */
 	{"creat",	NULL,			0,		2}, /*  8 */
 	{"link",	NULL,			0,		2}, /*  9 */
 	{"unlink",	NULL,			0,		1}, /* 10 */
@@ -489,7 +489,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"vhangup",	NULL,			0,		0}, /* 111 */
 	{"idle",	NULL,			NOSYS_NO_EQUIV,	0}, /* 112 */
 	{"vm86old",	NULL,			NOSYS_OBSOLETE,	0}, /* 113 */
-	{"wait4",	NULL,			0,		4}, /* 114 */
+	{"wait4",	lx_wait4,		0,		4}, /* 114 */
 	{"swapoff",	NULL,			NOSYS_KERNEL,	0}, /* 115 */
 	{"sysinfo",	lx_sysinfo32,		0,		1}, /* 116 */
 	{"ipc",		NULL,			0,		5}, /* 117 */
@@ -663,7 +663,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"mq_notify",	NULL,			NOSYS_NULL,	0}, /* 281 */
 	{"mq_getsetattr", NULL,			NOSYS_NULL,	0}, /* 282 */
 	{"kexec_load",	NULL,			NOSYS_NULL,	0}, /* 283 */
-	{"waitid",	NULL,			0,		4}, /* 284 */
+	{"waitid",	lx_waitid,		0,		4}, /* 284 */
 	{"sys_setaltroot", NULL,		NOSYS_NULL,	0}, /* 285 */
 	{"add_key",	NULL,			NOSYS_NULL,	0}, /* 286 */
 	{"request_key",	NULL,			NOSYS_NULL,	0}, /* 287 */
@@ -807,7 +807,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"vfork",	NULL,			0,		0}, /* 58 */
 	{"execve",	NULL,			0,		3}, /* 59 */
 	{"exit",	NULL,			0,		1}, /* 60 */
-	{"wait4",	NULL,			0,		4}, /* 61 */
+	{"wait4",	lx_wait4,		0,		4}, /* 61 */
 	{"kill",	lx_kill,		0,		2}, /* 62 */
 	{"uname",	NULL,			0,		1}, /* 63 */
 	{"semget",	NULL,			0,		3}, /* 64 */
@@ -993,7 +993,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"mq_notify",	NULL,			NOSYS_NULL,	0}, /* 244 */
 	{"mq_getsetattr", NULL,			NOSYS_NULL,	0}, /* 245 */
 	{"kexec_load",	NULL,			NOSYS_NULL,	0}, /* 246 */
-	{"waitid",	NULL,			0,		4}, /* 247 */
+	{"waitid",	lx_waitid,		0,		4}, /* 247 */
 	{"add_key",	NULL,			NOSYS_NULL,	0}, /* 248 */
 	{"request_key",	NULL,			NOSYS_NULL,	0}, /* 249 */
 	{"keyctl",	NULL,			NOSYS_NULL,	0}, /* 250 */

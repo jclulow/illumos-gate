@@ -132,11 +132,6 @@ extern long lx_setpgid(uintptr_t, uintptr_t);
 extern long lx_getsid(uintptr_t);
 extern long lx_setsid(void);
 
-
-extern long lx_waitpid(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_waitid(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_wait4(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-
 extern long lx_getuid16(void);
 extern long lx_getgid16(void);
 extern long lx_geteuid16(void);

@@ -468,27 +468,6 @@ stol_osigset(sigset_t *s_sigsetp, lx_osigset_t *lx_osigsetp)
 #endif
 
 static int
-stol_sigcode(int si_code)
-{
-	switch (si_code) {
-		case SI_USER:
-			return (LX_SI_USER);
-		case SI_LWP:
-			return (LX_SI_TKILL);
-		case SI_QUEUE:
-			return (LX_SI_QUEUE);
-		case SI_TIMER:
-			return (LX_SI_TIMER);
-		case SI_ASYNCIO:
-			return (LX_SI_ASYNCIO);
-		case SI_MESGQ:
-			return (LX_SI_MESGQ);
-		default:
-			return (si_code);
-	}
-}
-
-static int
 ltos_sigcode(int si_code)
 {
 	switch (si_code) {
@@ -509,29 +488,6 @@ ltos_sigcode(int si_code)
 	}
 }
 
-/*
- * Convert the "status" field of a SIGCLD siginfo_t.  We need to extract the
- * illumos signal number and convert it to a Linux signal number while leaving
- * the ptrace(2) event bits intact.
- */
-int
-stol_status(int s)
-{
-	/*
-	 * We mask out the top bit here in case PTRACE_O_TRACESYSGOOD
-	 * is in use and 0x80 has been ORed with the signal number.
-	 */
-	int stat = stol_signo[s & 0x7f];
-	assert(stat != -1);
-
-	/*
-	 * We must mix in the ptrace(2) event which may be stored in
-	 * the second byte of the status code.  We also re-include the
-	 * PTRACE_O_TRACESYSGOOD bit.
-	 */
-	return ((s & 0xff80) | stat);
-}
-
 int
 stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 {
@@ -550,7 +506,7 @@ stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 		ret = -1;
 	}
 
-	lx_siginfo.lsi_code = stol_sigcode(siginfop->si_code);
+	lx_siginfo.lsi_code = lx_stol_sigcode(siginfop->si_code);
 	lx_siginfo.lsi_errno = siginfop->si_errno;
 
 	switch (lx_siginfo.lsi_signo) {
@@ -568,8 +524,8 @@ stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 			if (siginfop->si_code == CLD_EXITED) {
 				lx_siginfo.lsi_status = siginfop->si_status;
 			} else {
-				lx_siginfo.lsi_status = stol_status(
-				    siginfop->si_status);
+				lx_siginfo.lsi_status = lx_stol_status(
+				    siginfop->si_status, -1);
 			}
 			lx_siginfo.lsi_utime = siginfop->si_utime;
 			lx_siginfo.lsi_stime = siginfop->si_stime;
@@ -1029,7 +985,7 @@ lx_sigreturn(void)
 	 *	  need it to be (either due to trampoline or the copying of
 	 *	  sp = uesp, not clear which).
 	 */
-	sp = (uintptr_t)LX_REG(ucp, REG_SP) - 8;
+	sp = LX_REG(ucp, REG_SP) - 8;
 
 	/*
 	 * At this point, the stack pointer should point to the struct

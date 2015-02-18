@@ -63,6 +63,9 @@ extern long lx_setresuid();
 extern long lx_setresuid16();
 extern long lx_sysinfo32();
 extern long lx_sysinfo64();
+extern long lx_wait4();
+extern long lx_waitid();
+extern long lx_waitpid();
 extern long lx_write();
 extern long lx_xattr();
 
