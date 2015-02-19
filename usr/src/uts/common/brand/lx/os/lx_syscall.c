@@ -230,12 +230,21 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	rp->r_r0 = ret;
 
 	/*
-	 * Fire ptrace and DTrace probes:
+	 * Hold for the ptrace(2) "syscall-exit-stop" condition if required by
+	 * PTRACE_SYSCALL.  Note that the register state may be modified by
+	 * tracer.
+	 */
+	lx_ptrace_stop(LX_PR_SYSEXIT);
+
+	/*
+	 * Fire the DTrace "lx-syscall:::return" probe:
 	 */
 	lx_trace_sysreturn(syscall_num, ret);
 
 	/*
-	 * Clear errno and reset restart flag for next time:
+	 * Clear errno for next time.  We do not clear "br_syscall_restart" or
+	 * "br_syscall_num" as they are potentially used by "lx_savecontext()"
+	 * in the signal delivery path.
 	 */
 	lwp->lwp_errno = 0;
 
@@ -281,10 +290,28 @@ lx_syscall_hook(void)
 	}
 
 	/*
-	 * Determine system call number and check that it is within the bounds
-	 * we expect.
+	 * Clear the restartable system call flag.  This flag will be set
+	 * on in the system call handler if the call is a candidate for
+	 * a restart.  It will be saved by lx_setcontext() in the event
+	 * that we take a signal, and used in the signal handling path
+	 * to restart the system call iff SA_RESTART was set for this
+	 * signal.  Save the system call number so that we can store it
+	 * in the saved context if required.
 	 */
-	syscall_num = (int)rp->r_r0;
+	lwpd->br_syscall_restart = B_FALSE;
+	lwpd->br_syscall_num = (int)rp->r_r0;
+
+	/*
+	 * Hold for the ptrace(2) "syscall-entry-stop" condition if traced by
+	 * PTRACE_SYSCALL.  The system call number and arguments may be
+	 * modified by the tracer.
+	 */
+	lx_ptrace_stop(LX_PR_SYSENTRY);
+
+	/*
+	 * Check that the system call number is within the bounds we expect.
+	 */
+	syscall_num = lwpd->br_syscall_num;
 	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
 		set_errno(ENOTSUP);
 		lx_syscall_return(lwp, syscall_num, -1);
@@ -301,20 +328,8 @@ lx_syscall_hook(void)
 	}
 
 	/*
-	 * Clear the restartable system call flag.  This flag will be set
-	 * on in the system call handler if the call is a candidate for
-	 * a restart.  It will be saved by lx_setcontext() in the event
-	 * that we take a signal, and used in the signal handling path
-	 * to restart the system call iff SA_RESTART was set for this
-	 * signal.  Save the system call number so that we can store it
-	 * in the saved context if required.
-	 */
-	lwpd->br_syscall_num = syscall_num;
-	lwpd->br_syscall_restart = B_FALSE;
-
-	/*
-	 * Process the arguments for this system call, and fire ptrace
-	 * and DTrace probes:
+	 * Process the arguments for this system call and fire the DTrace
+	 * "lx-syscall:::entry" probe:
 	 */
 	error = lx_emulate_args(lwp, s, args);
 	lx_trace_sysenter(syscall_num, args);

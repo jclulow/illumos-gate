@@ -117,7 +117,7 @@ lx_exec()
 	 * we are traced we can post either the PTRACE_EVENT_EXEC event or the
 	 * legacy SIGTRAP.
 	 */
-	(void) lx_ptrace_stop_for_option(LX_PTRACE_O_TRACEEXEC, B_FALSE, 0);
+	(void) lx_ptrace_stop_for_option(LX_PTRACE_O_TRACEEXEC, B_FALSE, 0, 0);
 
 	/* clear the fsbase values until the app. can reinitialize them */
 	lwpd->br_lx_fsbase = NULL;

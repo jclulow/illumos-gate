@@ -612,8 +612,6 @@ lx_trace_sysenter(int syscall_num, uintptr_t *args)
 		(*lx_systrace_entry_ptr)(syscall_num, args[0], args[1],
 		    args[2], args[3], args[4], args[5]);
 	}
-
-	lx_ptrace_stop(LX_PR_SYSENTRY);
 }
 
 void
@@ -624,8 +622,6 @@ lx_trace_sysreturn(int syscall_num, long ret)
 
 		(*lx_systrace_return_ptr)(syscall_num, ret, ret, 0, 0, 0, 0);
 	}
-
-	lx_ptrace_stop(LX_PR_SYSEXIT);
 }
 
 /*
@@ -818,7 +814,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 
 	case B_PTRACE_STOP_FOR_OPT:
 		return (lx_ptrace_stop_for_option((int)arg1, arg2 == 0 ?
-		    B_FALSE : B_TRUE, (ulong_t)arg3));
+		    B_FALSE : B_TRUE, (ulong_t)arg3, arg4));
 
 	case B_PTRACE_CLONE_BEGIN:
 		return (lx_ptrace_set_clone_inherit((int)arg1, arg2 == 0 ?

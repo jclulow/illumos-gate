@@ -99,61 +99,6 @@ typedef struct lx_user_fpxregs {
 	long lxux_padding[56];
 } lx_user_fpxregs_t;
 
-/*
- * This corresponds to the user_regs_struct Linux structure.
- */
-#if defined(_LP64)
-typedef struct lx_user_regs {
-	long lxur_r15;
-	long lxur_r14;
-	long lxur_r13;
-	long lxur_r12;
-	long lxur_rbp;
-	long lxur_rbx;
-	long lxur_r11;
-	long lxur_r10;
-	long lxur_r9;
-	long lxur_r8;
-	long lxur_rax;
-	long lxur_rcx;
-	long lxur_rdx;
-	long lxur_rsi;
-	long lxur_rdi;
-	long lxur_orig_rax;
-	long lxur_rip;
-	long lxur_xcs;
-	long lxur_rflags;
-	long lxur_rsp;
-	long lxur_xss;
-	long lxur_xfs_base;
-	long lxur_xgs_base;
-	long lxur_xds;
-	long lxur_xes;
-	long lxur_xfs;
-	long lxur_xgs;
-} lx_user_regs_t;
-#else
-typedef struct lx_user_regs {
-	long lxur_ebx;
-	long lxur_ecx;
-	long lxur_edx;
-	long lxur_esi;
-	long lxur_edi;
-	long lxur_ebp;
-	long lxur_eax;
-	long lxur_xds;
-	long lxur_xes;
-	long lxur_xfs;
-	long lxur_xgs;
-	long lxur_orig_eax;
-	long lxur_eip;
-	long lxur_xcs;
-	long lxur_eflags;
-	long lxur_esp;
-	long lxur_xss;
-} lx_user_regs_t;
-#endif
-
 typedef struct lx_user {
 	lx_user_regs_t lxu_regs;
 	int lxu_fpvalid;
@@ -1076,32 +1021,6 @@ ptrace_kill(pid_t pid)
 }
 
 static int
-ptrace_getregs(pid_t pid, lwpid_t lwpid, uintptr_t addr)
-{
-	lx_user_regs_t regs;
-	int ret;
-
-	if ((ret = getregs(pid, lwpid, &regs)) != 0)
-		return (ret);
-
-	if (uucopy(&regs, (void *)addr, sizeof (regs)) != 0)
-		return (-errno);
-
-	return (0);
-}
-
-static int
-ptrace_setregs(pid_t pid, lwpid_t lwpid, uintptr_t addr)
-{
-	lx_user_regs_t regs;
-
-	if (uucopy((void *)addr, &regs, sizeof (regs)) != 0)
-		return (-errno);
-
-	return (setregs(pid, lwpid, &regs));
-}
-
-static int
 ptrace_getfpregs(pid_t pid, lwpid_t lwpid, uintptr_t addr)
 {
 	lx_user_fpregs_t regs;
@@ -1154,16 +1073,21 @@ ptrace_setfpxregs(pid_t pid, lwpid_t lwpid, uintptr_t addr)
 }
 
 void
-lx_ptrace_stop_if_option(int option, boolean_t child, ulong_t msg)
+lx_ptrace_stop_if_option(int option, boolean_t child, ulong_t msg,
+    ucontext_t *ucp)
 {
 	/*
 	 * We call into the kernel to see if we need to stop for specific
 	 * ptrace(2) events.
 	 */
-	lx_debug("lx_ptrace_stop_if_option(%d, %s, %lu)", option,
-	    child ? "TRUE [child]" : "FALSE [parent]", msg);
-	if (syscall(SYS_brand, B_PTRACE_STOP_FOR_OPT, option, child,
-	    msg) != 0) {
+	lx_debug("lx_ptrace_stop_if_option(%d, %s, %lu, %p)", option,
+	    child ? "TRUE [child]" : "FALSE [parent]", msg, ucp);
+	if (ucp == NULL) {
+		ucp = (ucontext_t *)lx_find_brand_uc();
+		lx_debug("\tucp = %p", ucp);
+	}
+	if (syscall(SYS_brand, B_PTRACE_STOP_FOR_OPT, option, child, msg,
+	    ucp) != 0) {
 		if (errno != ESRCH) {
 			/*
 			 * This should _only_ fail if we are not traced, or do
@@ -1251,6 +1175,8 @@ lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 	 */
 	case LX_PTRACE_SETOPTIONS:
 	case LX_PTRACE_GETEVENTMSG:
+	case LX_PTRACE_GETREGS:
+	case LX_PTRACE_SETREGS:
 		return (lx_ptrace_kernel(ptrace_op, lxpid, p3, p4));
 	}
 
@@ -1281,12 +1207,6 @@ lx_ptrace(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 
 	case LX_PTRACE_KILL:
 		return (ptrace_kill(pid));
-
-	case LX_PTRACE_GETREGS:
-		return (ptrace_getregs(pid, lwpid, p4));
-
-	case LX_PTRACE_SETREGS:
-		return (ptrace_setregs(pid, lwpid, p4));
 
 	case LX_PTRACE_GETFPREGS:
 		return (ptrace_getfpregs(pid, lwpid, p4));

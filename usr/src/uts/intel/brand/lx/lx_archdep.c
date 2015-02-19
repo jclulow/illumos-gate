@@ -27,11 +27,633 @@
 #include <sys/archsystm.h>
 #include <sys/stack.h>
 #include <sys/sdt.h>
+#include <sys/sysmacros.h>
+
+#define	LX_REG(ucp, r)	((ucp)->uc_mcontext.gregs[(r)])
 
 extern int getsetcontext(int, void *);
 #if defined(_SYSCALL32_IMPL)
 extern int getsetcontext32(int, void *);
 #endif
+
+static int
+lx_rw_uc(proc_t *p, void *ucp, void *kucp, size_t ucsz, boolean_t writing)
+{
+	int error = 0;
+	size_t rem = ucsz;
+	off_t pos = 0;
+
+	VERIFY(MUTEX_HELD(&p->p_lock));
+
+	/*
+	 * Grab P_PR_LOCK so that we can drop p_lock while doing I/O.
+	 */
+	sprlock_proc(p);
+
+	/*
+	 * Drop p_lock while we do I/O to avoid deadlock with the clock thread.
+	 */
+	mutex_exit(&p->p_lock);
+	while (rem != 0) {
+		uintptr_t addr = (uintptr_t)ucp + pos;
+		size_t len = MIN(rem, PAGESIZE - (addr & PAGEOFFSET));
+
+		if (writing) {
+			error = uwrite(p, kucp + pos, len, addr);
+		} else {
+			error = uread(p, kucp + pos, len, addr);
+		}
+
+		if (error != 0) {
+			break;
+		}
+
+		rem -= len;
+		pos += len;
+	}
+	mutex_enter(&p->p_lock);
+
+	sprunlock(p);
+	mutex_enter(&p->p_lock);
+
+	return (error);
+}
+
+/*
+ * Read a ucontext_t from the target process, which may or may not be
+ * the current process.
+ */
+static int
+lx_read_uc(proc_t *p, void *ucp, void *kucp, size_t ucsz)
+{
+	return (lx_rw_uc(p, ucp, kucp, ucsz, B_FALSE));
+}
+
+/*
+ * Write a ucontext_t to the target process, which may or may not be
+ * the current process.
+ */
+static int
+lx_write_uc(proc_t *p, void *ucp, void *kucp, size_t ucsz)
+{
+	return (lx_rw_uc(p, ucp, kucp, ucsz, B_TRUE));
+}
+
+/*
+ * Load register state from a usermode "lx_user_regs_t" in the tracer
+ * and store it in the tracee ucontext_t.
+ */
+int
+lx_userregs_to_uc(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
+{
+	klwp_t *lwp = lwpd->br_lwp;
+	proc_t *p = lwptoproc(lwp);
+
+#if defined(__amd64)
+	switch (get_udatamodel()) {
+	case DATAMODEL_LP64: {
+		lx_user_regs_t lxur;
+
+		if (copyin(uregsp, &lxur, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		switch (lwp_getdatamodel(lwp)) {
+		case DATAMODEL_LP64: {
+			ucontext_t uc;
+
+			if (lx_read_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+				return (EIO);
+			}
+
+			/*
+			 * Note: we currently ignore "lxur_orig_rax" here, as
+			 * this path should not be used for system call stops.
+			 */
+			LX_REG(&uc, REG_R15) = lxur.lxur_r15;
+			LX_REG(&uc, REG_R14) = lxur.lxur_r14;
+			LX_REG(&uc, REG_R13) = lxur.lxur_r13;
+			LX_REG(&uc, REG_R12) = lxur.lxur_r12;
+			LX_REG(&uc, REG_RBP) = lxur.lxur_rbp;
+			LX_REG(&uc, REG_RBX) = lxur.lxur_rbx;
+			LX_REG(&uc, REG_R11) = lxur.lxur_r11;
+			LX_REG(&uc, REG_R10) = lxur.lxur_r10;
+			LX_REG(&uc, REG_R9) = lxur.lxur_r9;
+			LX_REG(&uc, REG_R8) = lxur.lxur_r8;
+			LX_REG(&uc, REG_RAX) = lxur.lxur_rax;
+			LX_REG(&uc, REG_RCX) = lxur.lxur_rcx;
+			LX_REG(&uc, REG_RDX) = lxur.lxur_rdx;
+			LX_REG(&uc, REG_RSI) = lxur.lxur_rsi;
+			LX_REG(&uc, REG_RDI) = lxur.lxur_rdi;
+			LX_REG(&uc, REG_RIP) = lxur.lxur_rip;
+			LX_REG(&uc, REG_CS) = lxur.lxur_xcs;
+			LX_REG(&uc, REG_RFL) = lxur.lxur_rflags;
+			LX_REG(&uc, REG_RSP) = lxur.lxur_rsp;
+			LX_REG(&uc, REG_SS) = lxur.lxur_xss;
+			LX_REG(&uc, REG_FSBASE) = lxur.lxur_xfs_base;
+			LX_REG(&uc, REG_GSBASE) = lxur.lxur_xgs_base;
+
+			LX_REG(&uc, REG_DS) = lxur.lxur_xds;
+			LX_REG(&uc, REG_ES) = lxur.lxur_xes;
+			LX_REG(&uc, REG_FS) = lxur.lxur_xfs;
+			LX_REG(&uc, REG_GS) = lxur.lxur_xgs;
+
+			if (lx_write_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+				return (EIO);
+			}
+
+			return (0);
+		}
+
+		case DATAMODEL_ILP32: {
+			ucontext32_t uc;
+
+			if (lx_read_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+				return (EIO);
+			}
+
+			/*
+			 * Note: we currently ignore "lxur_orig_eax" here, as
+			 * this path should not be used for system call stops.
+			 */
+			LX_REG(&uc, EBP) = (int32_t)lxur.lxur_rbp;
+			LX_REG(&uc, EBX) = (int32_t)lxur.lxur_rbx;
+			LX_REG(&uc, EAX) = (int32_t)lxur.lxur_rax;
+			LX_REG(&uc, ECX) = (int32_t)lxur.lxur_rcx;
+			LX_REG(&uc, EDX) = (int32_t)lxur.lxur_rdx;
+			LX_REG(&uc, ESI) = (int32_t)lxur.lxur_rsi;
+			LX_REG(&uc, EDI) = (int32_t)lxur.lxur_rdi;
+			LX_REG(&uc, EIP) = (int32_t)lxur.lxur_rip;
+			LX_REG(&uc, CS) = (int32_t)lxur.lxur_xcs;
+			LX_REG(&uc, EFL) = (int32_t)lxur.lxur_rflags;
+			LX_REG(&uc, UESP) = (int32_t)lxur.lxur_rsp;
+			LX_REG(&uc, SS) = (int32_t)lxur.lxur_xss;
+
+			LX_REG(&uc, DS) = (int32_t)lxur.lxur_xds;
+			LX_REG(&uc, ES) = (int32_t)lxur.lxur_xes;
+			LX_REG(&uc, FS) = (int32_t)lxur.lxur_xfs;
+			LX_REG(&uc, GS) = (int32_t)lxur.lxur_xgs;
+
+			if (lx_write_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+				return (EIO);
+			}
+
+			return (0);
+		}
+
+		default:
+			return (EIO);
+		}
+
+		return (EIO);
+	}
+
+	case DATAMODEL_ILP32: {
+		lx_user_regs32_t lxur;
+		ucontext32_t uc;
+
+		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
+			/*
+			 * XXX The target is not a 32-bit LWP.  We refuse to
+			 * present truncated 64-bit registers to a 32-bit
+			 * tracer.
+			 */
+			return (EIO);
+		}
+
+		if (copyin(uregsp, &lxur, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		if (lx_read_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+			return (EIO);
+		}
+
+		/*
+		 * Note: we currently ignore "lxur_orig_eax" here, as
+		 * this path should not be used for system call stops.
+		 */
+		LX_REG(&uc, EBX) = lxur.lxur_ebx;
+		LX_REG(&uc, ECX) = lxur.lxur_ecx;
+		LX_REG(&uc, EDX) = lxur.lxur_edx;
+		LX_REG(&uc, ESI) = lxur.lxur_esi;
+		LX_REG(&uc, EDI) = lxur.lxur_edi;
+		LX_REG(&uc, EBP) = lxur.lxur_ebp;
+		LX_REG(&uc, EAX) = lxur.lxur_eax;
+		LX_REG(&uc, EIP) = lxur.lxur_eip;
+		LX_REG(&uc, CS) = lxur.lxur_xcs;
+		LX_REG(&uc, EFL) = lxur.lxur_eflags;
+		LX_REG(&uc, UESP) = lxur.lxur_esp;
+		LX_REG(&uc, SS) = lxur.lxur_xss;
+
+		LX_REG(&uc, DS) = lxur.lxur_xds;
+		LX_REG(&uc, ES) = lxur.lxur_xes;
+		LX_REG(&uc, FS) = lxur.lxur_xfs;
+		LX_REG(&uc, GS) = lxur.lxur_xgs;
+
+		if (lx_write_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+			return (EIO);
+		}
+
+		return (EIO);
+	}
+
+	default:
+		return (EIO);
+	}
+#else
+	panic("no 32-bit kernel support yet");
+#endif /* __amd64 */
+}
+
+/*
+ * Copy register state from a ucontext_t in the tracee to a usermode
+ * "lx_user_regs_t" in the tracer.
+ */
+int
+lx_uc_to_userregs(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
+{
+	klwp_t *lwp = lwpd->br_lwp;
+	proc_t *p = lwptoproc(lwp);
+
+#if defined(__amd64)
+	switch (get_udatamodel()) {
+	case DATAMODEL_LP64: {
+		lx_user_regs_t lxur;
+
+		switch (lwp_getdatamodel(lwp)) {
+		case DATAMODEL_LP64: {
+			ucontext_t uc;
+
+			if (lx_read_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+				return (EIO);
+			}
+
+			lxur.lxur_r15 = LX_REG(&uc, REG_R15);
+			lxur.lxur_r14 = LX_REG(&uc, REG_R14);
+			lxur.lxur_r13 = LX_REG(&uc, REG_R13);
+			lxur.lxur_r12 = LX_REG(&uc, REG_R12);
+			lxur.lxur_rbp = LX_REG(&uc, REG_RBP);
+			lxur.lxur_rbx = LX_REG(&uc, REG_RBX);
+			lxur.lxur_r11 = LX_REG(&uc, REG_R11);
+			lxur.lxur_r10 = LX_REG(&uc, REG_R10);
+			lxur.lxur_r9 = LX_REG(&uc, REG_R9);
+			lxur.lxur_r8 = LX_REG(&uc, REG_R8);
+			lxur.lxur_rax = LX_REG(&uc, REG_RAX);
+			lxur.lxur_rcx = LX_REG(&uc, REG_RCX);
+			lxur.lxur_rdx = LX_REG(&uc, REG_RDX);
+			lxur.lxur_rsi = LX_REG(&uc, REG_RSI);
+			lxur.lxur_rdi = LX_REG(&uc, REG_RDI);
+			lxur.lxur_orig_rax = 0;
+			lxur.lxur_rip = LX_REG(&uc, REG_RIP);
+			lxur.lxur_xcs = LX_REG(&uc, REG_CS);
+			lxur.lxur_rflags = LX_REG(&uc, REG_RFL);
+			lxur.lxur_rsp = LX_REG(&uc, REG_RSP);
+			lxur.lxur_xss = LX_REG(&uc, REG_SS);
+			lxur.lxur_xfs_base = LX_REG(&uc, REG_FSBASE);
+			lxur.lxur_xgs_base = LX_REG(&uc, REG_GSBASE);
+
+			lxur.lxur_xds = LX_REG(&uc, REG_DS);
+			lxur.lxur_xes = LX_REG(&uc, REG_ES);
+			lxur.lxur_xfs = LX_REG(&uc, REG_FS);
+			lxur.lxur_xgs = LX_REG(&uc, REG_GS);
+
+			if (copyout(&lxur, uregsp, sizeof (lxur)) != 0) {
+				return (EFAULT);
+			}
+
+			return (0);
+		}
+
+		case DATAMODEL_ILP32: {
+			ucontext32_t uc;
+
+			if (lx_read_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+				return (EIO);
+			}
+
+			lxur.lxur_r15 = 0;
+			lxur.lxur_r14 = 0;
+			lxur.lxur_r13 = 0;
+			lxur.lxur_r12 = 0;
+			lxur.lxur_rbp = LX_REG(&uc, EBP);
+			lxur.lxur_rbx = LX_REG(&uc, EBX);
+			lxur.lxur_r11 = 0;
+			lxur.lxur_r10 = 0;
+			lxur.lxur_r9 = 0;
+			lxur.lxur_r8 = 0;
+			lxur.lxur_rax = LX_REG(&uc, EAX);
+			lxur.lxur_rcx = LX_REG(&uc, ECX);
+			lxur.lxur_rdx = LX_REG(&uc, EDX);
+			lxur.lxur_rsi = LX_REG(&uc, ESI);
+			lxur.lxur_rdi = LX_REG(&uc, EDI);
+			lxur.lxur_orig_rax = 0;
+			lxur.lxur_rip = LX_REG(&uc, EIP);
+			lxur.lxur_xcs = LX_REG(&uc, CS);
+			lxur.lxur_rflags = LX_REG(&uc, EFL);
+			lxur.lxur_rsp = LX_REG(&uc, UESP);
+			lxur.lxur_xss = LX_REG(&uc, SS);
+			lxur.lxur_xfs_base = 0;
+			lxur.lxur_xgs_base = 0;
+
+			lxur.lxur_xds = LX_REG(&uc, DS);
+			lxur.lxur_xes = LX_REG(&uc, ES);
+			lxur.lxur_xfs = LX_REG(&uc, FS);
+			lxur.lxur_xgs = LX_REG(&uc, GS);
+
+			if (copyout(&lxur, uregsp, sizeof (lxur)) != 0) {
+				return (EFAULT);
+			}
+
+			return (0);
+		}
+
+		default:
+			return (EIO);
+		}
+	}
+
+	case DATAMODEL_ILP32: {
+		lx_user_regs32_t lxur;
+		ucontext32_t uc;
+
+		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
+			/*
+			 * XXX The target is not a 32-bit LWP.  We refuse to
+			 * present truncated 64-bit registers to a 32-bit
+			 * tracer.
+			 */
+			return (EIO);
+		}
+
+		if (lx_read_uc(p, ucp, &uc, sizeof (uc)) != 0) {
+			return (EIO);
+		}
+
+		lxur.lxur_ebx = LX_REG(&uc, EBX);
+		lxur.lxur_ecx = LX_REG(&uc, ECX);
+		lxur.lxur_edx = LX_REG(&uc, EDX);
+		lxur.lxur_esi = LX_REG(&uc, ESI);
+		lxur.lxur_edi = LX_REG(&uc, EDI);
+		lxur.lxur_ebp = LX_REG(&uc, EBP);
+		lxur.lxur_eax = LX_REG(&uc, EAX);
+		lxur.lxur_orig_eax = 0;
+		lxur.lxur_eip = LX_REG(&uc, EIP);
+		lxur.lxur_xcs = LX_REG(&uc, CS);
+		lxur.lxur_eflags = LX_REG(&uc, EFL);
+		lxur.lxur_esp = LX_REG(&uc, UESP);
+		lxur.lxur_xss = LX_REG(&uc, SS);
+
+		lxur.lxur_xds = LX_REG(&uc, DS);
+		lxur.lxur_xes = LX_REG(&uc, ES);
+		lxur.lxur_xfs = LX_REG(&uc, FS);
+		lxur.lxur_xgs = LX_REG(&uc, GS);
+
+		if (copyout(&lxur, uregsp, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		return (0);
+	}
+
+	default:
+		return (EIO);
+	}
+#else
+	panic("no 32-bit kernel support yet");
+#endif
+}
+
+/*
+ * Load a usermode "lx_user_regs_t" into the register state of the target LWP.
+ */
+int
+lx_userregs_to_regs(lx_lwp_data_t *lwpd, void *uregsp)
+{
+	klwp_t *lwp = lwpd->br_lwp;
+	proc_t *p = lwptoproc(lwp);
+
+#if defined(__amd64)
+	struct regs *rp = lwptoregs(lwp);
+	struct pcb *pcb = &lwp->lwp_pcb;
+
+	switch (get_udatamodel()) {
+	case DATAMODEL_LP64: {
+		lx_user_regs_t lxur;
+
+		if (copyin(uregsp, &lxur, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		rp->r_r15 = lxur.lxur_r15;
+		rp->r_r14 = lxur.lxur_r14;
+		rp->r_r13 = lxur.lxur_r13;
+		rp->r_r12 = lxur.lxur_r12;
+		rp->r_rbp = lxur.lxur_rbp;
+		rp->r_rbx = lxur.lxur_rbx;
+		rp->r_r11 = lxur.lxur_r11;
+		rp->r_r10 = lxur.lxur_r10;
+		rp->r_r9 = lxur.lxur_r9;
+		rp->r_r8 = lxur.lxur_r8;
+		rp->r_rax = lxur.lxur_rax;
+		rp->r_rcx = lxur.lxur_rcx;
+		rp->r_rdx = lxur.lxur_rdx;
+		rp->r_rsi = lxur.lxur_rsi;
+		rp->r_rdi = lxur.lxur_rdi;
+		lwpd->br_syscall_num = (int)lxur.lxur_orig_rax;
+		rp->r_rip = lxur.lxur_rip;
+		rp->r_cs = lxur.lxur_xcs;
+		rp->r_rfl = lxur.lxur_rflags;
+		rp->r_rsp = lxur.lxur_rsp;
+		rp->r_ss = lxur.lxur_xss;
+		pcb->pcb_fsbase = lxur.lxur_xfs_base;
+		pcb->pcb_gsbase = lxur.lxur_xgs_base;
+
+		kpreempt_disable();
+		pcb->pcb_rupdate = 1;
+		pcb->pcb_ds = lxur.lxur_xds;
+		pcb->pcb_es = lxur.lxur_xes;
+		pcb->pcb_fs = lxur.lxur_xfs;
+		pcb->pcb_gs = lxur.lxur_xgs;
+		kpreempt_enable();
+
+		return (0);
+	}
+
+	case DATAMODEL_ILP32: {
+		lx_user_regs32_t lxur;
+
+		if (copyin(uregsp, &lxur, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		rp->r_rbx = lxur.lxur_ebx;
+		rp->r_rcx = lxur.lxur_ecx;
+		rp->r_rdx = lxur.lxur_edx;
+		rp->r_rsi = lxur.lxur_esi;
+		rp->r_rdi = lxur.lxur_edi;
+		rp->r_rbp = lxur.lxur_ebp;
+		rp->r_rax = lxur.lxur_eax;
+		lwpd->br_syscall_num = (int)lxur.lxur_orig_eax;
+		rp->r_rip = lxur.lxur_eip;
+		rp->r_cs = lxur.lxur_xcs;
+		rp->r_rfl = lxur.lxur_eflags;
+		rp->r_rsp = lxur.lxur_esp;
+		rp->r_ss = lxur.lxur_xss;
+
+		kpreempt_disable();
+		pcb->pcb_rupdate = 1;
+		pcb->pcb_ds = lxur.lxur_xds;
+		pcb->pcb_es = lxur.lxur_xes;
+		pcb->pcb_fs = lxur.lxur_xfs;
+		pcb->pcb_gs = lxur.lxur_xgs;
+		kpreempt_enable();
+
+		return (0);
+	}
+
+	default:
+		return (EIO);
+	}
+#else
+	panic("no 32-bit kernel support yet");
+#endif /* __amd64 */
+}
+
+/*
+ * Copy the current LWP register state of the target LWP to a usermode
+ * "lx_user_regs_t".
+ */
+int
+lx_regs_to_userregs(lx_lwp_data_t *lwpd, void *uregsp)
+{
+	klwp_t *lwp = lwpd->br_lwp;
+	struct regs *rp = lwptoregs(lwp);
+#if defined(__amd64)
+	struct pcb *pcb = &lwp->lwp_pcb;
+	long r0, orig_r0;
+
+	/*
+	 * We must precisely emulate the "syscall-entry-stop" and
+	 * "syscall-exit-stop" register appearance from the Linux kernel.
+	 */
+	switch (lwpd->br_ptrace_whatstop) {
+	case LX_PR_SYSENTRY:
+		orig_r0 = lwpd->br_syscall_num;
+		r0 = -lx_stol_errno[ENOTSUP];
+		break;
+	case LX_PR_SYSEXIT:
+		orig_r0 = lwpd->br_syscall_num;
+		r0 = rp->r_rax;
+		break;
+	default:
+		orig_r0 = 0;
+		r0 = rp->r_rax;
+	}
+
+	switch (get_udatamodel()) {
+	case DATAMODEL_LP64: {
+		lx_user_regs_t lxur;
+
+		lxur.lxur_r15 = rp->r_r15;
+		lxur.lxur_r14 = rp->r_r14;
+		lxur.lxur_r13 = rp->r_r13;
+		lxur.lxur_r12 = rp->r_r12;
+		lxur.lxur_rbp = rp->r_rbp;
+		lxur.lxur_rbx = rp->r_rbx;
+		lxur.lxur_r11 = rp->r_r11;
+		lxur.lxur_r10 = rp->r_r10;
+		lxur.lxur_r9 = rp->r_r9;
+		lxur.lxur_r8 = rp->r_r8;
+		lxur.lxur_rax = r0;
+		lxur.lxur_rcx = rp->r_rcx;
+		lxur.lxur_rdx = rp->r_rdx;
+		lxur.lxur_rsi = rp->r_rsi;
+		lxur.lxur_rdi = rp->r_rdi;
+		lxur.lxur_orig_rax = orig_r0;
+		lxur.lxur_rip = rp->r_rip;
+		lxur.lxur_xcs = rp->r_cs;
+		lxur.lxur_rflags = rp->r_rfl;
+		lxur.lxur_rsp = rp->r_rsp;
+		lxur.lxur_xss = rp->r_ss;
+		lxur.lxur_xfs_base = pcb->pcb_fsbase;
+		lxur.lxur_xgs_base = pcb->pcb_gsbase;
+
+		kpreempt_disable();
+		if (pcb->pcb_rupdate == 1) {
+			lxur.lxur_xds = pcb->pcb_ds;
+			lxur.lxur_xes = pcb->pcb_es;
+			lxur.lxur_xfs = pcb->pcb_fs;
+			lxur.lxur_xgs = pcb->pcb_gs;
+		} else {
+			lxur.lxur_xds = rp->r_ds;
+			lxur.lxur_xes = rp->r_es;
+			lxur.lxur_xfs = rp->r_fs;
+			lxur.lxur_xgs = rp->r_gs;
+		}
+		kpreempt_enable();
+
+		if (copyout(&lxur, uregsp, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		return (0);
+	}
+
+	case DATAMODEL_ILP32: {
+		lx_user_regs32_t lxur;
+
+		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
+			/*
+			 * XXX The target is not a 32-bit LWP.  We refuse to
+			 * present truncated 64-bit registers to a 32-bit
+			 * tracer.
+			 */
+			return (EIO);
+		}
+
+		lxur.lxur_ebx = (int32_t)rp->r_rbx;
+		lxur.lxur_ecx = (int32_t)rp->r_rcx;
+		lxur.lxur_edx = (int32_t)rp->r_rdx;
+		lxur.lxur_esi = (int32_t)rp->r_rsi;
+		lxur.lxur_edi = (int32_t)rp->r_rdi;
+		lxur.lxur_ebp = (int32_t)rp->r_rbp;
+		lxur.lxur_eax = (int32_t)r0;
+		lxur.lxur_orig_eax = (int32_t)orig_r0;
+		lxur.lxur_eip = (int32_t)rp->r_rip;
+		lxur.lxur_xcs = (int32_t)rp->r_cs;
+		lxur.lxur_eflags = (int32_t)rp->r_rfl;
+		lxur.lxur_esp = (int32_t)rp->r_rsp;
+		lxur.lxur_xss = (int32_t)rp->r_ss;
+
+		kpreempt_disable();
+		if (pcb->pcb_rupdate == 1) {
+			lxur.lxur_xds = pcb->pcb_ds;
+			lxur.lxur_xes = pcb->pcb_es;
+			lxur.lxur_xfs = pcb->pcb_fs;
+			lxur.lxur_xgs = pcb->pcb_gs;
+		} else {
+			lxur.lxur_xds = rp->r_ds;
+			lxur.lxur_xes = rp->r_es;
+			lxur.lxur_xfs = rp->r_fs;
+			lxur.lxur_xgs = rp->r_gs;
+		}
+		kpreempt_enable();
+
+		if (copyout(&lxur, uregsp, sizeof (lxur)) != 0) {
+			return (EFAULT);
+		}
+
+		return (0);
+	}
+
+	default:
+		return (EIO);
+	}
+#else
+	panic("no 32-bit kernel support yet");
+#endif /* __amd64 */
+}
 
 /*
  * Load registers and repoint the stack and program counter.  This function is

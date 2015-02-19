@@ -79,7 +79,7 @@ lx_fork_common(boolean_t is_vfork)
 			(void) sleep(lx_rpm_delay);
 		}
 
-		lx_ptrace_stop_if_option(ptopt, B_TRUE, 0);
+		lx_ptrace_stop_if_option(ptopt, B_TRUE, 0, NULL);
 
 		/*
 		 * Re-enable signal delivery in the child and return to the
@@ -89,7 +89,7 @@ lx_fork_common(boolean_t is_vfork)
 		return (0);
 
 	default:
-		lx_ptrace_stop_if_option(ptopt, B_FALSE, (ulong_t)ret);
+		lx_ptrace_stop_if_option(ptopt, B_FALSE, (ulong_t)ret, NULL);
 
 		/*
 		 * Re-enable signal delivery in the parent and return from

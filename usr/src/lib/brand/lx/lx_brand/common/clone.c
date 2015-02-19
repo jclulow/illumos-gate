@@ -128,7 +128,7 @@ lx_exit(uintptr_t p1)
 	lx_tsd->lxtsd_exit_status = status;
 
 	lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEEXIT, B_FALSE,
-	    (ulong_t)status);
+	    (ulong_t)status, NULL);
 
 	/*
 	 * Block all signals in the exit context to avoid taking any signals
@@ -263,11 +263,6 @@ clone_start(void *arg)
 	*(cs->c_clone_res) = rval;
 
 	/*
-	 * Fire the ptrace(2) event stop in the new thread:
-	 */
-	lx_ptrace_stop_if_option(cs->c_ptrace_event, B_TRUE, 0);
-
-	/*
 	 * We want to load the general registers from this context, and
 	 * switch to the BRAND stack.
 	 */
@@ -289,6 +284,11 @@ clone_start(void *arg)
 	 * Return 0 to the child:
 	 */
 	cs->c_uc.uc_mcontext.gregs[REG_R0] = (uintptr_t)0;
+
+	/*
+	 * Fire the ptrace(2) event stop in the new thread:
+	 */
+	lx_ptrace_stop_if_option(cs->c_ptrace_event, B_TRUE, 0, &cs->c_uc);
 
 	/*
 	 * Jump to the Linux process.  The system call must not return.
@@ -460,7 +460,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 
 			if (rval > 0) {
 				lx_ptrace_stop_if_option(ptrace_event, B_FALSE,
-				    (ulong_t)rval);
+				    (ulong_t)rval, NULL);
 			}
 
 			/*
@@ -513,7 +513,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		/*
 		 * Stop for ptrace if required.
 		 */
-		lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0);
+		lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0, NULL);
 
 		/*
 		 * Re-enable signal delivery in the child process.
@@ -639,7 +639,8 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			;
 
 		rval = clone_res;
-		lx_ptrace_stop_if_option(ptrace_event, B_FALSE, (ulong_t)rval);
+		lx_ptrace_stop_if_option(ptrace_event, B_FALSE, (ulong_t)rval,
+		    NULL);
 
 		return (rval);
 	} else {
