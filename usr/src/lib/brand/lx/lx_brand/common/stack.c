@@ -37,6 +37,7 @@ typedef struct lx_stack_list_ent {
 	thread_t sle_tid;
 	void *sle_stack;
 	size_t sle_stack_size;
+	lx_tsd_t *sle_tsd;
 } lx_stack_list_ent_t;
 
 static mutex_t lx_stack_list_lock = DEFAULTMUTEX;
@@ -77,6 +78,14 @@ lx_free_stack(void)
 
 		(void) munmap(lx_stack_list[i].sle_stack,
 		    lx_stack_list[i].sle_stack_size);
+
+		/*
+		 * Free the thread-specific data structure for this thread.
+		 */
+		if (lx_stack_list[i].sle_tsd != NULL) {
+			free(lx_stack_list[i].sle_tsd->lxtsd_clone_state);
+			free(lx_stack_list[i].sle_tsd);
+		}
 
 		/*
 		 * Free up this stack list entry:
@@ -122,6 +131,14 @@ lx_free_other_stacks(void)
 		}
 
 		/*
+		 * Free the thread-specific data structure for this thread.
+		 */
+		if (lx_stack_list[i].sle_tsd != NULL) {
+			free(lx_stack_list[i].sle_tsd->lxtsd_clone_state);
+			free(lx_stack_list[i].sle_tsd);
+		}
+
+		/*
 		 * Unmap the stack of every other LWP.
 		 */
 		(void) munmap(lx_stack_list[i].sle_stack,
@@ -136,8 +153,9 @@ lx_free_other_stacks(void)
 	 * Ensure the stack data for this LWP is in the first slot and shrink
 	 * the list.
 	 */
-	if (this_stack != 0)
+	if (this_stack != 0) {
 		lx_stack_list[0] = lx_stack_list[this_stack];
+	}
 	lx_stack_list_elems = 1;
 	lx_stack_list = realloc(lx_stack_list, lx_stack_list_elems *
 	    sizeof (lx_stack_list[0]));
@@ -202,7 +220,7 @@ lx_alloc_stack(void **nstack, size_t *nstack_size)
  * pointer for this thread.  If a stack is not passed, allocate one first.
  */
 void
-lx_install_stack(void *stack, size_t stacksize)
+lx_install_stack(void *stack, size_t stacksize, lx_tsd_t *tsd)
 {
 	thread_t me = thr_self();
 	int i;
@@ -237,6 +255,7 @@ lx_install_stack(void *stack, size_t stacksize)
 	lx_stack_list[i].sle_tid = me;
 	lx_stack_list[i].sle_stack = stack;
 	lx_stack_list[i].sle_stack_size = stacksize;
+	lx_stack_list[i].sle_tsd = tsd;
 
 	mutex_unlock(&lx_stack_list_lock);
 	_sigon();

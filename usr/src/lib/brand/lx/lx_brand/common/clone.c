@@ -245,9 +245,11 @@ clone_start(void *arg)
 	lxtsd->lxtsd_clone_state = cs;
 
 	/*
-	 * Install the emulation stack for this thread.
+	 * Install the emulation stack for this thread.  Register the
+	 * thread-specific data structure with the stack list so that it may be
+	 * freed at thread exit or fork(2).
 	 */
-	lx_install_stack(cs->c_ntv_stk, cs->c_ntv_stk_sz);
+	lx_install_stack(cs->c_ntv_stk, cs->c_ntv_stk_sz, lxtsd);
 
 	if (sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL) < 0) {
 		*(cs->c_clone_res) = -errno;
@@ -476,11 +478,14 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		 * process.
 		 */
 
-		/*
-		 * We must free the stacks for every thread except the one
-		 * duplicated from the parent by forkx().
-		 */
-		lx_free_other_stacks();
+		if (!IS_VFORK(flags)) {
+			/*
+			 * We must free the stacks and thread-specific data
+			 * objects for every thread except the one duplicated
+			 * from the parent by forkx().
+			 */
+			lx_free_other_stacks();
+		}
 
 		if (rval == 0 && (flags & LX_CLONE_CHILD_SETTID)) {
 			/*

@@ -776,8 +776,10 @@ lx_init(int argc, char *argv[], char *envp[])
 
 	/*
 	 * Allocate the brand emulation stack for the main process thread.
+	 * Register the thread-specific data structure with the stack list so
+	 * that it may be freed at thread exit or fork(2).
 	 */
-	lx_install_stack(NULL, 0);
+	lx_install_stack(NULL, 0, lxtsd);
 
 	/*
 	 * The brand linker expects the stack pointer to point to
@@ -794,19 +796,15 @@ void
 lx_exit_common(void)
 {
 	lx_tsd_t *lxtsd = lx_get_tsd();
-	lx_exit_type_t exit_type = lxtsd->lxtsd_exit;
-	int ev = (0xff & lxtsd->lxtsd_exit_status);
 
-	free(lxtsd->lxtsd_clone_state);
-	free(lxtsd);
-
-	switch (exit_type) {
+	switch (lxtsd->lxtsd_exit) {
 	case LX_ET_EXIT:
 		/*
 		 * If the thread is exiting, but not the entire process, we
 		 * must free the stack we allocated for usermode emulation.
 		 * This is safe to do here because the setcontext() put us
-		 * back on the BRAND stack for this process.
+		 * back on the BRAND stack for this process.  This function
+		 * also frees the thread-specific data object for this thread.
 		 */
 		lx_free_stack();
 
@@ -818,7 +816,7 @@ lx_exit_common(void)
 		break;
 
 	case LX_ET_EXIT_GROUP:
-		exit(ev);
+		exit(0xff & lxtsd->lxtsd_exit_status);
 		break;
 
 	default:

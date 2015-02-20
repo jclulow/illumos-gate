@@ -70,8 +70,9 @@ lx_fork_common(boolean_t is_vfork)
 
 	case 0:
 		/*
-		 * Returning in the new child.  We must free the stacks for the
-		 * threads we did not duplicate; i.e. every other thread.
+		 * Returning in the new child.  We must free the stacks and
+		 * thread-specific data objects for the threads we did not
+		 * duplicate; i.e. every other thread.
 		 */
 		lx_free_other_stacks();
 
