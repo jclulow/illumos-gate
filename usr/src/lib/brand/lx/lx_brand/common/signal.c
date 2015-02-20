@@ -325,13 +325,13 @@ static lx_sighandlers_t lx_sighandlers;
 struct lx_vsyscall
 {
 	uintptr_t lv_addr;
-	long (*lv_func)();
+	uintptr_t lv_scnum;
 	char *lv_msg;
 } lx_vsyscalls[] = {
-	{LX_VSYS_gettimeofday, lx_gettimeofday,
+	{LX_VSYS_gettimeofday, LX_SYS_gettimeofday,
 	    "vsyscall gettimeofday(%p, %p)" },
-	{LX_VSYS_time, lx_time, "vsyscall time(%p)" },
-	{LX_VSYS_getcpu, lx_getcpu, "vsyscall getcpu(%p, %lx, %lx)" },
+	{LX_VSYS_time, LX_SYS_time, "vsyscall time(%p)" },
+	{LX_VSYS_getcpu, LX_SYS_getcpu, "vsyscall getcpu(%p, %lx, %lx)" },
 	{NULL, NULL, NULL}
 };
 
@@ -1456,35 +1456,6 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
 	LX_SIGDELIVER(lx_sig, lxsap, lx_ssp, lx_ucp);
 }
 
-#if defined(_LP64)
-static void
-lx_vsyscall_return(long ret, ucontext_t *ucp)
-{
-	lx_debug("\tvsyscall return val = %lX", ret);
-	ucp->uc_mcontext.gregs[REG_RAX] = ret;
-	/*
-	 * Simulate a 'ret' by grabbing the return address off the caller's
-	 * stack and incrementing rsp manually before sigreturning back.
-	 */
-	(void) uucopy((void*)ucp->uc_mcontext.gregs[REG_SP],
-	    &ucp->uc_mcontext.gregs[REG_PC], sizeof (void*));
-	lx_debug("\tvsyscall return to %p", ucp->uc_mcontext.gregs[REG_PC]);
-	ucp->uc_mcontext.gregs[REG_SP] += sizeof (void*);
-
-	/*
-	 * Make sure that libc's ul_sigmask reflects what the sigmask is about
-	 * to become.
-	 */
-	thr_sigsetmask(SIG_SETMASK, &ucp->uc_sigmask, NULL);
-
-	/*
-	 * XXX We should reconcile this with B_JUMP_TO_LINUX or a regular
-	 * return from the signal handler, or whatever.
-	 */
-	abort();
-}
-#endif
-
 /*
  * This is the second level interposition handler for Linux signals.
  */
@@ -1543,6 +1514,7 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 	if (sig == SIGSEGV) {
 		int i;
 		for (i = 0; lx_vsyscalls[i].lv_addr != NULL; i++) {
+			extern void lx_vsyscall_tramp(void);
 			uintptr_t addr = (uintptr_t)sip->si_addr;
 
 			if (lx_vsyscalls[i].lv_addr != addr)
@@ -1558,11 +1530,19 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 			lx_debug(lx_vsyscalls[i].lv_msg, LX_REG(ucp, REG_RDI),
 			    LX_REG(ucp, REG_RSI), LX_REG(ucp, REG_RDX));
-			long ret = lx_vsyscalls[i].lv_func(
-			    LX_REG(ucp, REG_RDI), LX_REG(ucp, REG_RSI),
-			    LX_REG(ucp, REG_RDX));
-			lx_vsyscall_return(ret, ucp);
-			assert(0);
+
+			/*
+			 * Modify the interrupted context so that, on return
+			 * from the signal handler, the kernel revectors this
+			 * LWP to the vsyscall trampoline.  That trampoline
+			 * will immediately invoke the "syscall" instruction
+			 * and returns to the address on the stack when
+			 * complete.
+			 */
+			LX_REG(ucp, REG_R0) = lx_vsyscalls[i].lv_scnum;
+			LX_REG(ucp, REG_PC) = (uintptr_t)&lx_vsyscall_tramp;
+			lx_debug("\treturning from signal handler\n");
+			return;
 		}
 
 		/*
@@ -1895,7 +1875,6 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 			    strerror(errno));
 		}
 	}
-
 
 	assert(0);
 
