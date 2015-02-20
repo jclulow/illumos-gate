@@ -10,17 +10,17 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2015 Joyent, Inc.
  */
 
 provider lx {
 	probe debug(char *buf);
-	probe sigdeliver(int sig, void *lx_sigaction, void *lx_sigstack,
-	    void *lx_ucontext);
+	probe sigdeliver(int sig, void *lx_sigaction, void *lx_sigstack);
 	probe sigreturn(void *lx_ucontext, void *ucontext, uintptr_t sp);
 
 	probe signal_delivery_frame_create(void *lx_sigdeliver_frame);
 	probe signal_delivery_frame_found(void *lx_sigdeliver_frame);
+	probe signal_delivery_frame_corrupt(void *lx_sigdeliver_frame);
 
 	probe signal_post_handler(uintptr_t old_sp, uintptr_t new_sp);
 

@@ -92,31 +92,24 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  *
  * Adding a Linux branded thread to the mix complicates things somewhat.
  *
- * First (for 32-bit code), when a thread receives a signal, it may be running
- * with a Linux value in the x86 %gs segment register as opposed to the value
- * Illumos threads expect; if control were passed directly to Illumos code,
- * such as libc's sigacthandler(), that code would experience a segmentation
- * fault the first time it tried to dereference a memory location using %gs.
- *
- * For 64-bit code the %gs is usually 0 for both native and Linux code and the
- * thread pointer for both Illumos and Linux libc is referenced off the %fsbase
- * register, as per the AMD64 ABI. When a thread receives a signal, it may be
- * running with the Linux value in the x86 %fsbase register as opposed to the
- * value Illumos libc expects. Switching the %fsbase value is handled in the
- * kernel module at the same time as we switch the syscall mode flag. We track
- * the syscall mode flag in the kernel using the per-lwp br_scms integer so we
- * can save/restore the correct mode at the end of the signal handling. The
- * flag value is saved/restored in the per-thread br_scms variable which is
- * used like a stack to push/pop the flag bit as we take signals and return.
+ * First, when a thread receives a signal, it may either be running in an
+ * emulated Linux context or a native illumos context.  In either case, the
+ * in-kernel brand module is responsible for preserving the register state
+ * from the interrupted context, regardless of whether emulated or native
+ * software was running at the time.  The kernel is also responsible for
+ * ensuring that the illumos native sigacthandler() is called with register
+ * values appropriate for native code.  Of particular note is the %gs segment
+ * selector for 32-bit code, and the %fsbase segment base register for 64-bit
+ * code; these are used by libc to locate per-thread data structures.
  *
  * Second, the signal number translation referenced above must take place.
- * Further, for 32-bit code, as was the case with Illumos libc, before the
- * Linux signal handler is called, the value of the %gs segment register MUST
- * be restored to the value Linux code expects.
+ * Finally, when we hand control to the Linux signal handler we must do so
+ * on the brand stack, and with registers configured appropriately for the
+ * Linux application.
  *
- * This need to translate signal numbers (and manipulate the %gs register)
- * means that with standard Illumos libc, following a signal from generation to
- * delivery looks something like:
+ * This need to translate signal numbers (and manipulate the signal handling
+ * context) means that with standard Illumos libc, following a signal from
+ * generation to delivery looks something like:
  *
  * 	kernel ->
  *	    sigacthandler() ->
@@ -126,20 +119,14 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  * but for the brand's Linux threads, this would look like:
  *
  *	kernel ->
- *	    lx_sigacthandler() ->
- *		sigacthandler() ->
- *		    call_user_handler() ->
- *			lx_call_user_handler() ->
- *                          lx_sigdeliver() JMP to
- *                              Linux user signal handler
+ *	    sigacthandler() ->
+ *		call_user_handler() ->
+ *		    lx_call_user_handler() ->
+ *			lx_sigdeliver() ->
+ *			    syscall(B_JUMP_TO_LINUX, ...) ->
+ *				Linux user signal handler
  *
  * The new addtions are:
- *
- * 	lx_sigacthandler
- *	================
- *	This routine is responsible for setting the %gs segment register to the
- *	value 32-bit Illumos code expects (it does nothing in 64-bit code) and
- *	jumping to Illumos' libc signal interposition handler, sigacthandler().
  *
  * 	lx_call_user_handler
  *	====================
@@ -149,25 +136,8 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  *	registered Linux signal handler. It is, in effect, the Linux thread
  *	equivalent to libc's call_user_handler().
  *
- * Installing lx_sigacthandler() is a bit tricky, as normally libc's
- * sigacthandler() routine is hidden from user programs. To facilitate this, a
- * libc private function is used; setsigacthandler():
- *
- *	void setsigacthandler(void (*new_handler)(int, siginfo_t *, void *),
- *	    void (**old_handler)(int, siginfo_t *, void *)
- *	    int (*brsetctxt)(const ucontext_t *))
- *
- * The routine works by modifying the per-thread data structure (uberdata) in
- * libc that keeps track of the address of its own interposition handler with
- * the address passed in; the old handler's address is returned in the pointer
- * pointed to by the second argument, if it is non-NULL, mimicking the behavior
- * of sigaction() itself. In a similar way, this function can also set a
- * replacement handler for the libc __setcontext call which is made by libc's
- * setcontext() when returning from a signal handler. Using this we can hook
- * in to managing the syscall mode flag for 64-bit code when returning to the
- * interrupted code. Once setsigacthandler() has been executed, all future
- * branded threads this thread may create will automatically have the proper
- * interposition handler(s) invoked as the result of a normal sigaction() call.
+ * 	lx_sigdeliver
+ *	=============
  *
  * Note that none of this interposition is necessary unless a Linux thread
  * registers a user signal handler, as the default action for all signals is the
@@ -184,19 +154,19 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  * WTERMSIG()), the brand's interposiiton upon wait(2) is responsible for
  * translating the value WTERMSIG() would return from a Illumos signal number
  * to the appropriate Linux value.
+
+ * lx_call_user_handler() calls lx_sigdeliver() with a helper function
+ * (typically lx_build_signal_frame) which builds a stack frame for the 32-bit
+ * Linux signal handler, or populates a local (on the stack) structure for the
+ * 64-bit Linux signal handler. The stack at that time looks like this:
  *
- * lx_call_user_handler() calls lx_sigdeliver with a helper function (typically
- * lx_build_signal_frame) which builds a stack frame for the 32-bit Linux
- * signal handler, or populates a local (on the stack) structure for the 64-bit
- * Linux signal handler, then jmp's into the handler. The stack at that time
- * looks like this:
- *
- * 	=================================================
- * |	| LX_SIGRT_MAGIC				|
- * | 	=================================================
- * |	| Linux signal frame (32-bit) or local data	|
- * V	| (64-bit) built by stack_builder()		|
- * 	=================================================
+ * 	=========================================================
+ * |	| lx_sigdeliver_frame_t -- includes LX_SIGRT_MAGIC and	|
+ * |	| a return context for the eventual sigreturn(2) call	|
+ * | 	=========================================================
+ * |	| Linux signal frame (32-bit) or local data		|
+ * V	| (64-bit) built by stack_builder()			|
+ * 	=========================================================
  *
  * The process of returning to an interrupted thread of execution from a user
  * signal handler is entirely different between Illumos and Linux.  While
@@ -208,25 +178,7 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  * call to setcontext(2), the rt_sigreturn(2) Linux system call is responsible
  * for accomplishing much the same thing. It's for this reason that the stack
  * frame we build has the lx_(rt_)sigreturn_tramp code on the top of the
- * stack.
- *
- * The lx_rt_sigreturn() function will handle the syscall, do its cleanup,
- * then return to the libc signal handling code (call_user_handler) so that
- * libc can use setcontext() to get back to the point where things were
- * interrupted. However, for the 64-bit case, due to the syscall mode switching,
- * we cannot simply let the libc setcontext() take us back because we may also
- * have to switch the syscall mode back to Linux (it depends on where we were
- * when we took the signal). For the 64-bit case we used setsigacthandler()
- * to setup a libc replacement function on __setcontext(). This is the
- * lx_setcontext() function. This function uses a brand call (B_SIGNAL_RETURN)
- * which combines the syscall mode switching and setcontext handling in the lx
- * kernel module.
- * XXX NO WE DONT
- *
- * An additional oddity in the signal return code is that in the stack builder
- * function we push some x86 code onto the bottom of the stack that looks like
- * it invokes the Linux (rt)_sigreturn syscall. This is needed by gdb to
- * tell that it's in a signal handler. The code looks like this:
+ * stack.  The code looks like this:
  *
  *	32-bit					64-bit
  *	--------------------------------	-----------------------------
@@ -241,11 +193,13 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  * trampoline code on the stack to determine whether it is in a signal stack
  * frame or not.  Really.)
  *
- * When the 32-bit Linux user signal handler is eventually called, the stack
- * frame looks like this (in the case of a "modern" signal stack; see the
- * lx_sigstack structure definition):
+ * When the 32-bit Linux user signal handler is eventually called, the brand
+ * stack frame looks like this (in the case of a "modern" signal stack; see
+ * the lx_sigstack structure definition):
  *
  *	=========================================================
+ * |	| lx_sigdeliver_frame_t					|
+ * |	=========================================================
  * |	| Trampoline code (marker for gdb, not really executed)	|
  * |	=========================================================
  * |	| Linux struct _fpstate					|
@@ -266,6 +220,8 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  * The 64-bit stack-local data looks like this:
  *
  *	=========================================================
+ * |	| lx_sigdeliver_frame_t					|
+ * |	=========================================================
  * |	| Trampoline code (marker for gdb, not really executed)	|
  * |	=========================================================
  * |	| Linux struct _fpstate					|
@@ -279,12 +235,15 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  *
  * As usual in 64-bit code, %rdi is arg0 which is the signal number.
  *
- * As mentioned above, the brand intercepts the Linux (rt_)sigreturn(2) system
- * call. This turns into some stack cleanup and a call to lx_sigreturn_tolibc()
- * which returns through the libc call stack that Illumos expects, with the
- * caveat that 64-bit code combines the __setcontext and syscall mode switch
- * via a brand call. This returns the thread executing the code back to the
- * location originally interrupted by receipt of the signal.
+ * The *sigreturn(2) family of emulated system call handlers locates the
+ * "lx_sigdeliver_frame_t" struct on the Linux stack as part of processing
+ * the system call.  This object contains a guard value (LX_SIGRT_MAGIC) to
+ * detect stack smashing or an incorrect stack pointer.  It also contains a
+ * "return" context, which we use to get back to the "lx_sigdeliver()" frame
+ * on the native stack that originally dispatched to the Linux signal
+ * handler.  The lx_sigdeliver() function is then able to return to the
+ * native libc signal handler in the usual way.  This results in a further
+ * setcontext() back to whatever was running when we took the signal.
  */
 
 typedef struct lx_sigdeliver_frame {
@@ -1010,6 +969,7 @@ lx_sigreturn(void)
 	lx_debug("lx_sigreturn: lxsdf: magic %p retucp %p sigucp %p\n",
 	    lxsdf->lxsdf_magic, lxsdf->lxsdf_retucp, lxsdf->lxsdf_sigucp);
 	if (lxsdf->lxsdf_magic != LX_SIGRT_MAGIC) {
+		LX_SIGNAL_DELIVERY_FRAME_CORRUPT(lxsdf);
 		lx_err_fatal("sp @ 0x%p, expected 0x%x, found 0x%x!",
 		    sp, LX_SIGRT_MAGIC, lxsdf->lxsdf_magic);
 	}
@@ -1032,6 +992,8 @@ lx_sigreturn(void)
 	 */
 	lx_ossp->sigc.sc_esp_at_signal = lx_ossp->sigc.sc_esp;
 	bcopy(&lx_ossp->sigc, &sigucp->uc_mcontext, sizeof (gregset_t));
+
+	LX_SIGRETURN(NULL, sigucp, sp);
 
 	/* copy back FP regs if present */
 	if (lx_ossp->sigc.sc_fpstate != NULL)
@@ -1140,9 +1102,12 @@ lx_rt_sigreturn(void)
 	 */
 	lxsdf = (lx_sigdeliver_frame_t *)sp;
 	if (lxsdf->lxsdf_magic != LX_SIGRT_MAGIC) {
+		LX_SIGNAL_DELIVERY_FRAME_CORRUPT(lxsdf);
 		lx_err_fatal("sp @ 0x%p, expected 0x%x, found 0x%x!",
 		    sp, LX_SIGRT_MAGIC, lxsdf->lxsdf_magic);
 	}
+
+	LX_SIGNAL_DELIVERY_FRAME_FOUND(lxsdf);
 
 	sigucp = lxsdf->lxsdf_sigucp;
 
@@ -1206,6 +1171,8 @@ lx_rt_sigreturn(void)
 	bcopy(&lx_ucp->uc_sigcontext, &sigucp->uc_mcontext.gregs,
 	    sizeof (gregset_t));
 #endif
+
+	LX_SIGRETURN(lx_ucp, sigucp, sp);
 
 	if (lx_ucp->uc_sigcontext.sc_fpstate != NULL) {
 		ltos_fpstate(lx_ucp->uc_sigcontext.sc_fpstate,
@@ -1306,8 +1273,6 @@ lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
 	 */
 	bcopy((void *)lx_sigreturn_tramp, lx_ossp->trampoline,
 	    sizeof (lx_ossp->trampoline));
-
-	LX_SIGDELIVER(lx_sig, lxsap, NULL, NULL);
 }
 #endif
 
@@ -1452,12 +1417,10 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
 	bcopy((void *)lx_rt_sigreturn_tramp, lx_ssp->trampoline,
 	    sizeof (lx_ssp->trampoline));
 #endif
-
-	LX_SIGDELIVER(lx_sig, lxsap, lx_ssp, lx_ucp);
 }
 
 /*
- * This is the second level interposition handler for Linux signals.
+ * This is the interposition handler for Linux signals.
  */
 static void
 lx_call_user_handler(int sig, siginfo_t *sip, void *p)
@@ -1606,19 +1569,34 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 
 	/*
 	 * We need to handle restarting system calls if requested by the
-	 * program:
+	 * program for this signal type:
 	 */
 	if (lxsap->lxsa_flags & LX_SA_RESTART) {
-		unsigned int flags = (uintptr_t)ucp->uc_brand_data[0];
-		long ret;
+		uintptr_t flags = (uintptr_t)ucp->uc_brand_data[0];
+		long ret = (long)LX_REG(ucp, REG_R0);
+		boolean_t interrupted = (ret == -lx_errno(EINTR));
 
 		/*
-		 * XXX
+		 * If the system call returned EINTR, and the system
+		 * call handler set "br_syscall_restart" when returning,
+		 * we modify the context to try the system call again
+		 * when we return from this signal handler.
 		 */
-		ret = (long)LX_REG(ucp, REG_R0);
-		if (flags & LX_UC_RESTART_SYSCALL && ret == -4) {
+		if ((flags & LX_UC_RESTART_SYSCALL) && interrupted) {
 			lx_debug("restarting interrupted system call %d",
-			    (int)(uintptr_t)ucp->uc_brand_data[0]);
+			    (int)(uintptr_t)ucp->uc_brand_data[2]);
+
+			/*
+			 * Both the "int 0x80" and the "syscall" instruction
+			 * are two bytes long.  Wind the program counter back
+			 * to the start of this instruction.
+			 *
+			 * The system call we interrupted is preserved in the
+			 * brand-specific data in the ucontext_t when the
+			 * LX_UC_RESTART_SYSCALL flag is set.  This is
+			 * analogous to the "orig_[er]ax" field in the Linux
+			 * "user_regs_struct".
+			 */
 			LX_REG(ucp, REG_PC) -= 2;
 			LX_REG(ucp, REG_R0) =
 			    (int)(uintptr_t)ucp->uc_brand_data[2];
@@ -1627,7 +1605,12 @@ lx_call_user_handler(int sig, siginfo_t *sip, void *p)
 }
 
 /*
- * XXX
+ * The "lx_sigdeliver()" function is responsible for constructing the emulated
+ * signal delivery frame on the brand stack for this LWP.  A context is saved
+ * on the stack which will be used by the "sigreturn(2)" family of emulated
+ * system calls to get us back here after the Linux signal handler returns.
+ * This function is modelled on the in-kernel "sendsig()" signal delivery
+ * mechanism.
  */
 void
 lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
@@ -1832,6 +1815,8 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	if (newstack) {
 		lxtsd->lxtsd_sigaltstack.ss_flags |= LX_SS_ONSTACK;
 	}
+
+	LX_SIGDELIVER(lx_sig, lxsap, (void *)lxfp);
 
 	/*
 	 * Re-enable signal delivery.  If a signal was queued while we were
@@ -2300,12 +2285,17 @@ lx_siginit(void)
 	set_setcontext_enforcement(0);
 
 	/*
-	 * XXX
+	 * The illumos libc attempts to clean up dangling uc_link pointers in
+	 * signal handling contexts when libc believes us to have escaped a
+	 * signal handler incorrectly in the past.  We want to disable this
+	 * behaviour, so that the system call emulation context saved by the
+	 * kernel brand module for lx_emulate() may be part of the context
+	 * chain without itself being used for signal handling.
 	 */
 	set_escaped_context_cleanup(0);
 
 	/*
-	 * Reset the signal mask to what we came in with
+	 * Reset the signal mask to what we came in with.
 	 */
 	(void) sigprocmask(SIG_SETMASK, &oset, NULL);
 
@@ -2314,7 +2304,7 @@ lx_siginit(void)
 }
 
 /*
- * This code stongly resemebles lx_poll(), but is here to be able to take
+ * This code strongly resembles lx_poll(), but is here to be able to take
  * advantage of the Linux signal helper routines.
  */
 long
