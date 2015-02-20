@@ -1800,9 +1800,11 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 
 		if (uucopy(&frm, (void *)lxfp, sizeof (frm)) != 0) {
 			/*
-			 * XXX should induce SIGSEGV here, probably.
+			 * We could not modify the stack of the emulated Linux
+			 * program.  Act like the kernel and terminate the
+			 * program with a segmentation violation.
 			 */
-			lx_err_fatal("could not write to Linux stack");
+			(void) syscall(SYS_brand, B_EXIT_AS_SIG, SIGSEGV);
 		}
 
 		LX_SIGNAL_DELIVERY_FRAME_CREATE((void *)lxfp);
