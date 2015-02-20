@@ -201,13 +201,14 @@ lx_alloc_stack(void **nstack, size_t *nstack_size)
 		return (-1);
 	}
 
+#if DEBUG
 	/*
 	 * Write a recognisable pattern into the allocated stack pages.
-	 * XXX DEBUG-only?
 	 */
 	for (pos = 0; pos < ((stacksize - 1) / 4); pos++) {
 		((uint32_t *)stack)[pos] = 0x0facade0;
 	}
+#endif
 
 	*nstack = stack;
 	*nstack_size = stacksize;

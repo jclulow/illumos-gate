@@ -545,7 +545,7 @@ struct lx_lwp_data {
 	boolean_t br_syscall_restart;	/* should restart on EINTR */
 
 	/*
-	 * Store the LX_STACK_MODE for this lwp, and the current extent of the
+	 * Store the LX_STACK_MODE for this LWP, and the current extent of the
 	 * native (emulation) stack.  This is similar, in principle, to the
 	 * sigaltstack mechanism for signal handling.  We also use this mode
 	 * flag to determine how to process system calls from this LWP.

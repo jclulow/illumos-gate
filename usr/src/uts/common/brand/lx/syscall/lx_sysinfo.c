@@ -47,6 +47,10 @@ typedef struct lx_sysinfo {
 } lx_sysinfo_t;
 
 #if defined(_SYSCALL32_IMPL)
+/*
+ * 64-bit kernel view of the 32-bit usermode struct.
+ */
+#pragma pack(4)
 typedef struct lx_sysinfo32 {
 	int32_t si_uptime;	/* Seconds since boot */
 	uint32_t si_loads[3];	/* 1, 5, and 15 minute avg runq length */
@@ -61,7 +65,9 @@ typedef struct lx_sysinfo32 {
 	uint32_t si_totalhigh;	/* High memory size */
 	uint32_t si_freehigh;	/* Avail high memory */
 	uint32_t si_mem_unit;	/* Unit size of memory fields */
+	char __si_pad[8];
 } lx_sysinfo32_t;
+#pragma pack()
 #endif
 
 extern pgcnt_t swapfs_minfree;
@@ -157,10 +163,12 @@ lx_sysinfo64(caddr_t sip)
 {
 	lx_sysinfo_t si;
 
+	bzero(&si, sizeof (si));
 	lx_sysinfo_common(&si);
 
-	if (copyout(&si, sip, sizeof (si)) != 0)
+	if (copyout(&si, sip, sizeof (si)) != 0) {
 		return (set_errno(EFAULT));
+	}
 
 	return (0);
 }
@@ -175,6 +183,10 @@ lx_sysinfo32(caddr_t sip)
 
 	lx_sysinfo_common(&si);
 
+	/*
+	 * Convert the lx_sysinfo_t into the legacy 32-bit view:
+	 */
+	bzero(&si32, sizeof (si32));
 	si32.si_uptime = si.si_uptime;
 
 	for (i = 0; i < 3; i++) {
@@ -197,8 +209,9 @@ lx_sysinfo32(caddr_t sip)
 	si32.si_totalhigh = si.si_totalhigh;
 	si32.si_freehigh = si.si_freehigh;
 
-	if (copyout(&si32, sip, sizeof (si32)) != 0)
+	if (copyout(&si32, sip, sizeof (si32)) != 0) {
 		return (set_errno(EFAULT));
+	}
 
 	return (0);
 }

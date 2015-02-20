@@ -384,10 +384,6 @@ lx_call(lx_handle_sym_t lx_ch, uintptr_t p1, uintptr_t p2,
 	lx_swap_gs(LX_REG(ucp, GS), &cur_gs);
 #endif
 
-	/*
-	 * XXX it should be noted that this is AWFUL.
-	 */
-
 	lx_debug("lx_call: calling to Linux code at 0x%p", lx_ch);
 	ret = lx_funcp(p1, p2, p3, p4, p5, p6, p7, p8);
 
