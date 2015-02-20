@@ -214,7 +214,7 @@ lx_userregs_to_uc(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 
 		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
 			/*
-			 * XXX The target is not a 32-bit LWP.  We refuse to
+			 * The target is not a 32-bit LWP.  We refuse to
 			 * present truncated 64-bit registers to a 32-bit
 			 * tracer.
 			 */
@@ -262,7 +262,9 @@ lx_userregs_to_uc(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 		return (EIO);
 	}
 #else
-	panic("no 32-bit kernel support yet");
+	cmn_err(CE_WARN, "%s: no 32-bit kernel support", __FUNCTION__);
+	exit(CLD_KILLED, SIGSYS);
+	return (EIO);
 #endif /* __amd64 */
 }
 
@@ -379,7 +381,7 @@ lx_uc_to_userregs(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 
 		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
 			/*
-			 * XXX The target is not a 32-bit LWP.  We refuse to
+			 * The target is not a 32-bit LWP.  We refuse to
 			 * present truncated 64-bit registers to a 32-bit
 			 * tracer.
 			 */
@@ -420,7 +422,9 @@ lx_uc_to_userregs(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 		return (EIO);
 	}
 #else
-	panic("no 32-bit kernel support yet");
+	cmn_err(CE_WARN, "%s: no 32-bit kernel support", __FUNCTION__);
+	exit(CLD_KILLED, SIGSYS);
+	return (EIO);
 #endif
 }
 
@@ -483,6 +487,15 @@ lx_userregs_to_regs(lx_lwp_data_t *lwpd, void *uregsp)
 	case DATAMODEL_ILP32: {
 		lx_user_regs32_t lxur;
 
+		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
+			/*
+			 * The target is not a 32-bit LWP.  We refuse to
+			 * present truncated 64-bit registers to a 32-bit
+			 * tracer.
+			 */
+			return (EIO);
+		}
+
 		if (copyin(uregsp, &lxur, sizeof (lxur)) != 0) {
 			return (EFAULT);
 		}
@@ -516,7 +529,9 @@ lx_userregs_to_regs(lx_lwp_data_t *lwpd, void *uregsp)
 		return (EIO);
 	}
 #else
-	panic("no 32-bit kernel support yet");
+	cmn_err(CE_WARN, "%s: no 32-bit kernel support", __FUNCTION__);
+	exit(CLD_KILLED, SIGSYS);
+	return (EIO);
 #endif /* __amd64 */
 }
 
@@ -605,7 +620,7 @@ lx_regs_to_userregs(lx_lwp_data_t *lwpd, void *uregsp)
 
 		if (lwp_getdatamodel(lwp) != DATAMODEL_ILP32) {
 			/*
-			 * XXX The target is not a 32-bit LWP.  We refuse to
+			 * The target is not a 32-bit LWP.  We refuse to
 			 * present truncated 64-bit registers to a 32-bit
 			 * tracer.
 			 */
@@ -651,13 +666,13 @@ lx_regs_to_userregs(lx_lwp_data_t *lwpd, void *uregsp)
 		return (EIO);
 	}
 #else
-	panic("no 32-bit kernel support yet");
+	panic("no 32-bit kernel support");
 #endif /* __amd64 */
 }
 
 /*
  * Load registers and repoint the stack and program counter.  This function is
- * used by the B_JUMP_TO_LINUX brand system call to trampoline into a Linux
+ * used by the B_JUMP_TO_LINUX brand system call to revector to a Linux
  * entrypoint.
  */
 int
@@ -694,8 +709,8 @@ lx_runexe(klwp_t *lwp, void *ucp)
 /*
  * The usermode emulation code is illumos library code.  This routine ensures
  * the segment registers are set up correctly for native illumos code.  It
- * should be called _after_ we have stored the outgoing Linux machine state but
- * _before_ we return from the kernel to any illumos native code; e.g. the
+ * should be called _after_ we have stored the outgoing Linux machine state
+ * but _before_ we return from the kernel to any illumos native code; e.g. the
  * usermode emulation library, or any interposed signal handlers.
  *
  * See the comment on lwp_segregs_save() for how we handle the usermode
@@ -795,20 +810,24 @@ lx_switch_to_native(klwp_t *lwp)
 void
 lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 {
-	proc_t *p = ttoproc(curthread);
-	label_t lab;
-	volatile uintptr_t top;
-	uintptr_t sp;
-	uintptr_t uc_addr;
-	uintptr_t args_addr;
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	struct regs *rp = lwptoregs(lwp);
-	size_t frsz;
+	label_t lab;
+	uintptr_t uc_addr;
+	uintptr_t args_addr;
+	uintptr_t top;
+	/*
+	 * Variables used after on_fault() returns for a fault
+	 * must be volatile.
+	 */
+	volatile size_t frsz;
+	volatile uintptr_t sp;
+	volatile proc_t *p = lwptoproc(lwp);
+	volatile int watched;
 
 	/*
-	 * We should not be able to get here unless we have jumped
-	 * to Linux code.  XXX Certainly the br_ntv_syscall is invariant,
-	 * but it might be possible to affect a different stack_mode...
+	 * We should not be able to get here unless we are running Linux
+	 * code for a system call we cannot emulate in the kernel.
 	 */
 	VERIFY(lwpd->br_stack_mode == LX_STACK_MODE_BRAND);
 
@@ -856,12 +875,10 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	uc_addr = top - SA(sizeof (ucontext_t));
 	args_addr = uc_addr - SA(6 * sizeof (uintptr_t));
 
-	/*
-	 * XXX call to watch_disable_addr() here ?
-	 */
-
-	if (on_fault(&lab))
+	watched = watch_disable_addr((caddr_t)sp, frsz, S_WRITE);
+	if (on_fault(&lab)) {
 		goto badstack;
+	}
 
 	/*
 	 * Save the register state we preserved on the way into this brand
@@ -884,8 +901,8 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 		/*
 		 * Mark this as a system call emulation context:
 		 */
-		uc.uc_brand_data[0] = (void *)((uintptr_t)uc.uc_brand_data[0] |
-		    LX_UC_FRAME_IS_SYSCALL);
+		uc.uc_brand_data[0] = (void *)((uintptr_t)
+		    uc.uc_brand_data[0] | LX_UC_FRAME_IS_SYSCALL);
 
 		copyout_noerr(&uc, (void *)(uintptr_t)uc_addr, sizeof (uc));
 	}
@@ -906,6 +923,9 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	suword64_noerr((void *)sp, 0);
 
 	no_fault();
+	if (watched) {
+		watch_enable_addr((caddr_t)sp, frsz, S_WRITE);
+	}
 
 	/*
 	 * Pass the arguments to lx_emulate() in the appropriate registers.
@@ -929,8 +949,8 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	lx_lwp_set_native_stack_current(lwpd, sp);
 
 	/*
-	 * Divert execution, on our return, to the usermode emulation stack and
-	 * handler:
+	 * Divert execution, on our return, to the usermode emulation stack
+	 * and handler:
 	 */
 	rp->r_fp = 0;
 	rp->r_sp = sp;
@@ -941,24 +961,19 @@ lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	 */
 	lx_switch_to_native(lwp);
 
-	/*
-	 * XXX call to watch_enable_addr() here?
-	 */
-
 	return;
 
 badstack:
 	no_fault();
-	/*
-	 * XXX call to watch_enable_addr() here?
-	 */
+	if (watched) {
+		watch_enable_addr((caddr_t)sp, frsz, S_WRITE);
+	}
 
-	printf("lx_emulate_user: bad stack (pid %d)!\n",
-	    p->p_pid);
+#ifdef DEBUG
+	printf("lx_emulate_user: bad native stack cmd=%s, pid=%d, sp=0x%p\n",
+	    PTOU(p)->u_comm, p->p_pid, sp);
+#endif
 
-	/*
-	 * XXX
-	 */
 	exit(CLD_KILLED, SIGSEGV);
 }
 
@@ -991,20 +1006,24 @@ struct lx_emu_frame32 {
 void
 lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 {
-	proc_t *p = ttoproc(curthread);
-	label_t lab;
-	caddr32_t top;
-	caddr32_t sp;
-	caddr32_t uc_addr;
-	caddr32_t args_addr;
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
 	struct regs *rp = lwptoregs(lwp);
-	size_t frsz;
+	label_t lab;
+	caddr32_t uc_addr;
+	caddr32_t args_addr;
+	caddr32_t top;
+	/*
+	 * Variables used after on_fault() returns for a fault
+	 * must be volatile.
+	 */
+	volatile size_t frsz;
+	volatile caddr32_t sp;
+	volatile proc_t *p = lwptoproc(lwp);
+	volatile int watched;
 
 	/*
-	 * We should not be able to get here unless we have jumped
-	 * to Linux code.  XXX Certainly the br_ntv_syscall is invariant,
-	 * but it might be possible to affect a different stack_mode...
+	 * We should not be able to get here unless we are running Linux
+	 * code for a system call we cannot emulate in the kernel.
 	 */
 	VERIFY(lwpd->br_stack_mode == LX_STACK_MODE_BRAND);
 
@@ -1023,12 +1042,10 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	uc_addr = top - SA32(sizeof (ucontext32_t));
 	args_addr = uc_addr - SA32(6 * sizeof (uint32_t));
 
-	/*
-	 * XXX call to watch_disable_addr() here ?
-	 */
-
-	if (on_fault(&lab))
+	watched = watch_disable_addr((caddr_t)(uintptr_t)sp, frsz, S_WRITE);
+	if (on_fault(&lab)) {
 		goto badstack;
+	}
 
 	/*
 	 * Save the register state we preserved on the way into this brand
@@ -1047,6 +1064,7 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 		 * those intentional side effects.
 		 */
 		savecontext32(&uc, NULL);
+
 		/*
 		 * Mark this as a system call emulation context:
 		 */
@@ -1090,7 +1108,9 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	}
 
 	no_fault();
-
+	if (watched) {
+		watch_enable_addr((caddr_t)(uintptr_t)sp, frsz, S_WRITE);
+	}
 
 	/*
 	 * Set stack pointer and return address to the usermode emulation
@@ -1100,8 +1120,8 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	lx_lwp_set_native_stack_current(lwpd, sp);
 
 	/*
-	 * Divert execution, on our return, to the usermode emulation stack and
-	 * handler:
+	 * Divert execution, on our return, to the usermode emulation stack
+	 * and handler:
 	 */
 	rp->r_fp = 0;
 	rp->r_sp = sp;
@@ -1112,24 +1132,19 @@ lx_emulate_user32(klwp_t *lwp, int syscall_num, uintptr_t *args)
 	 */
 	lx_switch_to_native(lwp);
 
-	/*
-	 * XXX call to watch_enable_addr() here?
-	 */
-
 	return;
 
 badstack:
 	no_fault();
-	/*
-	 * XXX call to watch_enable_addr() here?
-	 */
+	if (watched) {
+		watch_enable_addr((caddr_t)(uintptr_t)sp, frsz, S_WRITE);
+	}
 
-	printf("lx_emulate_user32: bad stack (pid %d)!\n",
-	    p->p_pid);
+#ifdef DEBUG
+	printf("lx_emulate_user32: bad native stack cmd=%s, pid=%d, sp=0x%p\n",
+	    PTOU(p)->u_comm, p->p_pid, sp);
+#endif
 
-	/*
-	 * XXX
-	 */
 	exit(CLD_KILLED, SIGSEGV);
 }
 #endif	/* _SYSCALL32_IMPL */
@@ -1139,8 +1154,8 @@ badstack:
 void
 lx_emulate_user(klwp_t *lwp, int syscall_num, uintptr_t *args)
 {
-	printf("lx_emulate_user: implement for 32-bit kernel!\n");
-	exit(CLD_KILLED, SIGBUS);
+	cmn_err(CE_WARN, "%s: no 32-bit kernel support", __FUNCTION__);
+	exit(CLD_KILLED, SIGSYS);
 }
 
 #endif	/* __amd64 */
