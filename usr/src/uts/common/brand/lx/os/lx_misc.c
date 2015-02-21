@@ -332,9 +332,9 @@ lx_initlwp(klwp_t *lwp)
 	}
 
 	/*
-	 * Install branded system call hook for this lwp:
+	 * Install branded system call hook for this LWP:
 	 */
-	lwp->lwp_brand_syscall = lx_syscall_hook;
+	lwp->lwp_brand_syscall = lx_syscall_enter;
 
 	return (0);
 }

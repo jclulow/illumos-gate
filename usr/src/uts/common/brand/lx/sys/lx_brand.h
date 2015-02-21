@@ -610,7 +610,7 @@ extern int lx_uc_to_userregs(lx_lwp_data_t *, void *, void *);
 extern int lx_userregs_to_regs(lx_lwp_data_t *lwpd, void *);
 extern int lx_userregs_to_uc(lx_lwp_data_t *lwpd, void *, void *);
 
-extern int lx_syscall_hook(void);
+extern int lx_syscall_enter(void);
 extern int lx_syscall_return(klwp_t *, int, long);
 
 extern void lx_trace_sysenter(int, uintptr_t *);

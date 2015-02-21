@@ -285,11 +285,6 @@ lx_helper_rt_sigqueueinfo(pid_t tgid, int sig, siginfo_t *uinfo)
 	int err;
 	siginfo_t kinfo;
 
-	/*
-	 * XXX SURELY THIS ONLY WORKS FOR 64-BIT PROCESSES?
-	 * XXX SURELY WE MUST USE SIGINFO32_T.
-	 */
-
 	if (copyin(uinfo, &kinfo, sizeof (siginfo_t)) != 0)
 		return (set_errno(EFAULT));
 	/* Unlike in lx_kill, this process id must be exact, no negatives. */
@@ -355,11 +350,6 @@ lx_helper_rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *uinfo)
 	sigqueue_t *sqp;
 	kthread_t *t;
 	siginfo_t kinfo;
-
-	/*
-	 * XXX SURELY THIS ONLY WORKS FOR 64-BIT PROCESSES?
-	 * XXX SURELY WE MUST USE SIGINFO32_T.
-	 */
 
 	if (copyin(uinfo, &kinfo, sizeof (siginfo_t)) != 0)
 		return (set_errno(EFAULT));

@@ -217,9 +217,15 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 
 	if (error != 0) {
 		/*
-		 * XXX bounds check on stol_errno
 		 * Convert from illumos to Linux errno:
 		 */
+		if (error < 1 || error >= (sizeof (lx_stol_errno) /
+		    sizeof (lx_stol_errno[0]))) {
+			/*
+			 * The provided error number is not valid.
+			 */
+			error = EINVAL;
+		}
 		ret = -lx_stol_errno[error];
 	}
 
@@ -260,10 +266,15 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 }
 
 /*
- * XXX Runs in the system call handler, in place of the actual system call!
+ * This function is used to override the processing of arguments and
+ * invocation of a handler for emulated system calls, installed on each
+ * branded LWP as "lwp_brand_syscall".  If this system call should use the
+ * native path, we return 1.  If we handled this system call (and have made
+ * arrangements with respect to post-return usermode register state) we
+ * return 0.
  */
 int
-lx_syscall_hook(void)
+lx_syscall_enter(void)
 {
 	klwp_t *lwp = ttolwp(curthread);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
@@ -276,7 +287,8 @@ lx_syscall_hook(void)
 	unsigned int unsup_reason;
 
 	/*
-	 * If we got here, we should have an lwp-specific brand data structure.
+	 * If we got here, we should have an LWP-specific brand data
+	 * structure.
 	 */
 	VERIFY(lwpd != NULL);
 

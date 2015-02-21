@@ -45,6 +45,9 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 
+#define	LX_O_NONBLOCK	04000
+#define	LX_O_CLOEXEC	02000000
+
 /*
  * Based on native pipe(2) system call, except that the pipe is half-duplex.
  */
@@ -181,17 +184,19 @@ lx_pipe2(intptr_t arg, int lxflags)
 	/*
 	 * Validate allowed flags.
 	 */
-	if ((lxflags & ~(04000 | 02000000)) != 0) {
+	if ((lxflags & ~(LX_O_NONBLOCK | LX_O_CLOEXEC)) != 0) {
 		return (set_errno(EINVAL));
 	}
 
 	/*
 	 * Convert from Linux flags to illumos flags.
 	 */
-	if (lxflags & 04000 /* XXX LX_O_NONBLOCK*/)
+	if (lxflags & LX_O_NONBLOCK) {
 		flags |= FNONBLOCK;
-	if (lxflags & 02000000 /* XXX LX_O_CLOEXEC */)
+	}
+	if (lxflags & LX_O_CLOEXEC) {
 		flags |= FCLOEXEC;
+	}
 
 	return (lx_hd_pipe(arg, flags));
 }
