@@ -76,28 +76,8 @@
 #include <sys/lx_aio.h>
 
 /*
- * General emulation guidelines.
- *
- * XXX THIS COMMENT REQUIRES REWORK
- *
- * Once the emulation handler has been installed onto the process, we need to
- * be concerned about system calls made by the emulation, as well as any
- * library calls which in turn make system calls. This is actually only an
- * issue for the 64-bit case, since the kernel sycall entry point is common for
- * both Illumos and Linux. The trampoline code in the kernel needs some way to
- * distinguish when it should bounce out for emulation (Linux system call) vs.
- * stay in the kernel (emulation system call). For the 32-bit case Linux uses
- * int80 for system calls which is orthogonal to all of the Illumos system call
- * entry points and thus there is no issue.
- *
- * To cope with this for the 64-bit case, we maintain a mode flag on each
- * LWP so we can tell when a system call comes from Linux. We then set the mode
- * flag to Illumos so that all future system calls from the emulation are
- * handled correctly. The emulation must reset the mode when it is ready to
- * return control to Linux. This is done via the B_CLR_NTV_SYSC_FLAG brand
- * call. There is additional complexity with this mode switching in the
- * case of a user-defined signal handler. This is described in the signal
- * emulation code comments.
+ * There is a block comment in "uts/common/brand/lx/os/lx_brand.c" that
+ * describes the functioning of the LX brand in some detail.
  *
  * *** Setting errno
  *
@@ -105,39 +85,7 @@
  * application whose address space we're running in. The Linux libc errno is
  * independent of our native libc errno. To pass back an error the emulation
  * function should return -errno back to the Linux caller.
- *
- * *** General considerations
- *
- * The lx brand interposes on _all_ system calls. Linux system calls that need
- * special handling in the kernel are redirected back to the kernel via the
- * in-kernel emulation (IKE) mechanism which uses a range of the brand system
- * call command number to determine which in-kernel lx function to invoke.
- *
- * *** DTrace
- *
- * The lx-syscall DTrace provider (see lx_systrace_attach in
- * uts/common/brand/lx/dtrace/lx_systrace.c) works as follows:
- *
- * When probes are enabled:
- *    lx_systrace_enable -> lx_brand_systrace_enable
- *
- * This enables the trace jump table in the kernel (see
- * uts/intel/brand/lx/lx_brand_asm.s which has the functions
- * lx_brand_int80_enable and lx_brand_syscall_enable, and the corresponding
- * patch points lx_brand_int80_patch_point and lx_brand_syscall_patch_point).
- *
- * The library code defines lx_handler_table and lx_handler_trace_table
- * in the i386 and amd64 lx_handler.s code.
- *
- * The trace jump table enables lx_traceflag which is used in the lx_emulate
- * function to make the B_SYSENTRY/B_SYSRETURN brandsys syscalls. These in turn
- * will call lx_systrace_entry_ptr/lx_systrace_return_ptr so that we can DTrace
- * the Linux syscalls via the provider.
- *
- * When probes are disbaled, we undo the patch points via:
- *    lx_systrace_disable -> lx_brand_systrace_disable
  */
-
 
 /*
  * Map Illumos errno to the Linux equivalent.
@@ -429,6 +377,9 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	int emu_errno = 0;
 
 	LX_EMULATE_ENTER(ucp, syscall_num, args);
+	lx_debug("lx_emulate(%p, %d, [%p, %p, %p, %p, %p, %p])\n",
+	    ucp, syscall_num, args[0], args[1], args[2], args[3], args[4],
+	    args[5]);
 
 	/*
 	 * The kernel should have saved us a context that will not restore the
@@ -465,6 +416,8 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	 * Return to the context we were passed
 	 */
 	LX_EMULATE_RETURN(ucp, syscall_num, emu_ret, emu_errno);
+	lx_debug("\tlx_emulate(%d) done (ret %ld / 0x%p ; errno %d)\n",
+	    syscall_num, emu_ret, emu_ret, emu_errno);
 	(void) syscall(SYS_brand, B_EMULATION_DONE, ucp, syscall_num, emu_ret,
 	    emu_errno);
 
@@ -796,9 +749,12 @@ void
 lx_exit_common(void)
 {
 	lx_tsd_t *lxtsd = lx_get_tsd();
+	int ev = (0xff & lxtsd->lxtsd_exit_status);
 
 	switch (lxtsd->lxtsd_exit) {
 	case LX_ET_EXIT:
+		lx_debug("lx_exit_common(LX_ET_EXIT, %d)\n", ev);
+
 		/*
 		 * If the thread is exiting, but not the entire process, we
 		 * must free the stack we allocated for usermode emulation.
@@ -816,7 +772,8 @@ lx_exit_common(void)
 		break;
 
 	case LX_ET_EXIT_GROUP:
-		exit(0xff & lxtsd->lxtsd_exit_status);
+		lx_debug("lx_exit_common(LX_ET_EXIT_GROUP, %d)\n", ev);
+		exit(ev);
 		break;
 
 	default:

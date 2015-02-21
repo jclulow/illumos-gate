@@ -25,7 +25,111 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Joyent, Inc. All rights reserved.
+ */
+
+/*
+ * The LX Brand: emulation of a Linux operating environment within a zone.
+ *
+ * OVERVIEW
+ *
+ * The LX brand enables a full Linux userland -- including a C library,
+ * init(1) framework, and some set of applications -- to run unmodified
+ * within an illumos zone.  Unlike illumos, where applications are expected
+ * to link against and consume functions exported from libraries, the
+ * supported Linux binary compatibility boundary is the system call
+ * interface.  By accurately emulating the behaviour of Linux system calls,
+ * Linux software can be executed in this environment as if it were running
+ * on a native Linux system.
+ *
+ * EMULATING LINUX SYSTEM CALLS
+ *
+ * Linux system calls are made in 32-bit processes via the "int 0x80"
+ * instruction; in 64-bit processes the "syscall" instruction is used, as it
+ * is with native illumos processes.  In both cases, arguments to system
+ * calls are generally passed in registers and the usermode stack is not
+ * interpreted or modified by the Linux kernel.
+ *
+ * When the emulated Linux process makes a system call, it traps into the
+ * illumos kernel.  The in-kernel brand module contains various emulation
+ * routines, and can fully service some emulated system calls; e.g. read(2)
+ * and write(2).  Other system calls require assistance from the illumos
+ * libc, bouncing back out to the brand library ("lx_brand.so.1") for
+ * emulation.
+ *
+ * The brand mechanism allows for the provision of an alternative trap
+ * handler for the various system call mechanisms.  Traditionally this was
+ * used to immediately revector execution to the usermode emulation library,
+ * which was responsible for handling all system calls.  In the interests of
+ * more accurate emulation and increased performance, much of the regular
+ * illumos system call path is now invoked.  Only the argument processing and
+ * handler dispatch are replaced by the brand, via the per-LWP
+ * "lwp_brand_syscall" interposition function pointer.
+ *
+ * THE NATIVE AND BRAND STACKS
+ *
+ * Some runtime environments (e.g. the Go language) allocate very small
+ * thread stacks, preferring to grow or split the stack as necessary.  The
+ * Linux kernel generally does not use the usermode stack when servicing
+ * system calls, so this is not a problem.  In order for our emulation to
+ * have the same zero stack impact, we must execute usermode emulation
+ * routines on an _alternate_ stack.  This is similar, in principle, to the
+ * use of sigaltstack(3C) to run signal handlers off the main thread stack.
+ *
+ * To this end, the brand library allocates and installs an alternate stack
+ * (called the "native" stack) for each LWP.  The in-kernel brand code uses
+ * this stack for usermode emulation calls and interposed signal delivery,
+ * while the emulated Linux process sees only the data on the main thread
+ * stack, known as the "brand" stack.  The stack mode is tracked in the
+ * per-LWP brand-private data, using the LX_STACK_MODE_* enum.
+ *
+ * The stack mode doubles as a system call "mode bit".  When in the
+ * LX_STACK_MODE_BRAND mode, system calls are processed as emulated Linux
+ * system calls.  In other modes, system calls are assumed to be native
+ * illumos system calls as made during brand library initialisation and
+ * usermode emulation.
+ *
+ * USERMODE EMULATION
+ *
+ * When a Linux system call cannot be emulated within the kernel, we preserve
+ * the register state of the Linux process and revector the LWP to the brand
+ * library usermode emulation handler: the "lx_emulate()" function in
+ * "lx_brand.so.1".  This revectoring is modelled on the delivery of signals,
+ * and is performed in "lx_emulate_user()".
+ *
+ * First, the emulated process state is written out to the usermode stack of
+ * the process as a "ucontext_t" object.  Arguments to the emulation routine
+ * are passed on the stack or in registers, depending on the ABI.  When the
+ * usermode emulation is complete, the result is passed back to the kernel
+ * (via the "B_EMULATION_DONE" brandsys subcommand) with the saved context
+ * for restoration.
+ *
+ * SIGNAL DELIVERY, SETCONTEXT AND GETCONTEXT
+ *
+ * When servicing emulated system calls in the usermode brand library, or
+ * during signal delivery, various state is preserved by the kernel so that
+ * the running LWP may be revectored to a handling routine.  The context
+ * allows the kernel to restart the program at the point of interruption,
+ * either at the return of the signal handler, via setcontext(3C); or after
+ * the usermode emulation request has been serviced, via B_EMULATION_DONE.
+ *
+ * In illumos native processes, the saved context (a "ucontext_t" object)
+ * includes the state of registers and the current signal mask at the point
+ * of interruption.  The context also includes a link to the most recently
+ * saved context, forming a chain to be unwound as requests complete.  The LX
+ * brand requires additional book-keeping to describe the machine state: in
+ * particular, the current stack mode and the occupied extent of the native
+ * stack.
+ *
+ * The brand code is able to interpose on the context save and restore
+ * operations in the kernel -- see "lx_savecontext()" and
+ * "lx_restorecontext()" -- to enable getcontext(3C) and setcontext(3C) to
+ * function correctly in the face of a dual stack LWP.  The brand also
+ * interposes on the signal delivery mechanism -- see "lx_sendsig()" and
+ * "lx_sendsig_stack()" -- to allow all signals to be delivered to the brand
+ * library interposer on the native stack, regardless of the interrupted
+ * execution mode.  Linux sigaltstack(2) emulation is performed entirely by
+ * the usermode brand library during signal handler interposition.
  */
 
 #include <sys/types.h>
