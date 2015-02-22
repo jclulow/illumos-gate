@@ -1195,7 +1195,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,		/* 244: mq_notify */
 	NULL,		/* 245: mq_getsetattr */
 	NULL,		/* 246: kexec_load */
-	NULL	,	/* 247: waitid */
+	NULL,		/* 247: waitid */
 	NULL,		/* 248: add_key */
 	NULL,		/* 249: request_key */
 	NULL,		/* 250: keyctl */

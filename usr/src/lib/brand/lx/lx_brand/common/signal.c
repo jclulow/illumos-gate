@@ -154,7 +154,7 @@ extern int pselect_large_fdset(int nfds, fd_set *in0, fd_set *out0, fd_set *ex0,
  * WTERMSIG()), the brand's interposiiton upon wait(2) is responsible for
  * translating the value WTERMSIG() would return from a Illumos signal number
  * to the appropriate Linux value.
-
+ *
  * lx_call_user_handler() calls lx_sigdeliver() with a helper function
  * (typically lx_build_signal_frame) which builds a stack frame for the 32-bit
  * Linux signal handler, or populates a local (on the stack) structure for the
