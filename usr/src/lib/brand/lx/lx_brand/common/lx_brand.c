@@ -526,6 +526,16 @@ lx_start(uintptr_t sp, uintptr_t entry)
 	LX_REG(&jump_uc, REG_SP) = sp;
 	LX_REG(&jump_uc, REG_PC) = entry;
 
+#if defined(_LP64)
+	/*
+	 * The AMD64 ABI states that at process entry, %rdx contains "a
+	 * function pointer that the application should register with
+	 * atexit()".  We make sure to pass NULL explicitly so that
+	 * no function is registered.
+	 */
+	LX_REG(&jump_uc, REG_RDX) = NULL;
+#endif
+
 	lx_debug("starting Linux program sp %p ldentry %p", sp, entry);
 
 	/*
