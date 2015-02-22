@@ -36,6 +36,7 @@ extern int getsetcontext(int, void *);
 extern int getsetcontext32(int, void *);
 #endif
 
+#if defined(__amd64)
 static int
 lx_rw_uc(proc_t *p, void *ucp, void *kucp, size_t ucsz, boolean_t writing)
 {
@@ -98,6 +99,7 @@ lx_write_uc(proc_t *p, void *ucp, void *kucp, size_t ucsz)
 {
 	return (lx_rw_uc(p, ucp, kucp, ucsz, B_TRUE));
 }
+#endif /* __amd64 */
 
 /*
  * Load register state from a usermode "lx_user_regs_t" in the tracer
@@ -106,10 +108,10 @@ lx_write_uc(proc_t *p, void *ucp, void *kucp, size_t ucsz)
 int
 lx_userregs_to_uc(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 {
+#if defined(__amd64)
 	klwp_t *lwp = lwpd->br_lwp;
 	proc_t *p = lwptoproc(lwp);
 
-#if defined(__amd64)
 	switch (get_udatamodel()) {
 	case DATAMODEL_LP64: {
 		lx_user_regs_t lxur;
@@ -275,10 +277,10 @@ lx_userregs_to_uc(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 int
 lx_uc_to_userregs(lx_lwp_data_t *lwpd, void *ucp, void *uregsp)
 {
+#if defined(__amd64)
 	klwp_t *lwp = lwpd->br_lwp;
 	proc_t *p = lwptoproc(lwp);
 
-#if defined(__amd64)
 	switch (get_udatamodel()) {
 	case DATAMODEL_LP64: {
 		lx_user_regs_t lxur;
@@ -437,6 +439,8 @@ lx_userregs_to_regs(lx_lwp_data_t *lwpd, void *uregsp)
 	klwp_t *lwp = lwpd->br_lwp;
 	proc_t *p = lwptoproc(lwp);
 
+	VERIFY(MUTEX_HELD(&p->p_lock));
+
 #if defined(__amd64)
 	struct regs *rp = lwptoregs(lwp);
 	struct pcb *pcb = &lwp->lwp_pcb;
@@ -542,9 +546,13 @@ lx_userregs_to_regs(lx_lwp_data_t *lwpd, void *uregsp)
 int
 lx_regs_to_userregs(lx_lwp_data_t *lwpd, void *uregsp)
 {
+#if defined(__amd64)
 	klwp_t *lwp = lwpd->br_lwp;
 	struct regs *rp = lwptoregs(lwp);
-#if defined(__amd64)
+	proc_t *p = lwptoproc(lwp);
+
+	VERIFY(MUTEX_HELD(&p->p_lock));
+
 	struct pcb *pcb = &lwp->lwp_pcb;
 	long r0, orig_r0;
 
@@ -666,7 +674,9 @@ lx_regs_to_userregs(lx_lwp_data_t *lwpd, void *uregsp)
 		return (EIO);
 	}
 #else
-	panic("no 32-bit kernel support");
+	cmn_err(CE_WARN, "%s: no 32-bit kernel support", __FUNCTION__);
+	exit(CLD_KILLED, SIGSYS);
+	return (EIO);
 #endif /* __amd64 */
 }
 
@@ -970,7 +980,7 @@ badstack:
 	}
 
 #ifdef DEBUG
-	printf("lx_emulate_user: bad native stack cmd=%s, pid=%d, sp=0x%p\n",
+	printf("lx_emulate_user: bad native stack cmd=%s, pid=%d, sp=0x%lx\n",
 	    PTOU(p)->u_comm, p->p_pid, sp);
 #endif
 
@@ -1141,7 +1151,7 @@ badstack:
 	}
 
 #ifdef DEBUG
-	printf("lx_emulate_user32: bad native stack cmd=%s, pid=%d, sp=0x%p\n",
+	printf("lx_emulate_user32: bad native stack cmd=%s, pid=%d, sp=0x%x\n",
 	    PTOU(p)->u_comm, p->p_pid, sp);
 #endif
 

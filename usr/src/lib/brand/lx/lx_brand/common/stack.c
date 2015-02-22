@@ -175,7 +175,6 @@ lx_alloc_stack(void **nstack, size_t *nstack_size)
 	static int stackprot = 0;
 	int stacksize = 0;
 	void *stack;
-	int pos;
 
 	/*
 	 * Fetch configuration once:

@@ -962,7 +962,6 @@ static int
 lx_ptrace_attach(pid_t lx_pid)
 {
 	int error = ESRCH;
-	int32_t one = 1;
 	/*
 	 * Our (Tracer) LWP:
 	 */

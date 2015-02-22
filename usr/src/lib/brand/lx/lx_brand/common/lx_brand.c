@@ -858,7 +858,6 @@ lx_find_brand_sp(void)
 ucontext_t *
 lx_syscall_regs(void)
 {
-	int ret;
 	ucontext_t *ucp = NULL;
 	uintptr_t flags;
 

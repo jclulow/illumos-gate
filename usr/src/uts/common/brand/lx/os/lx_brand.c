@@ -574,7 +574,6 @@ lx_savecontext(ucontext_t *ucp)
 {
 	klwp_t *lwp = ttolwp(curthread);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
-	struct regs *rp = lwptoregs(lwp);
 	uintptr_t flags = 0;
 
 	/*
@@ -627,7 +626,6 @@ lx_savecontext32(ucontext32_t *ucp)
 {
 	klwp_t *lwp = ttolwp(curthread);
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
-	struct regs *rp = lwptoregs(lwp);
 	unsigned int flags = 0;
 
 	/*
@@ -745,7 +743,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	klwp_t *lwp = ttolwp(t);
 	proc_t *p = ttoproc(t);
 	lx_proc_data_t *pd;
-	int ike_call;
 	struct termios *termios;
 	uint_t termios_len;
 	int error;

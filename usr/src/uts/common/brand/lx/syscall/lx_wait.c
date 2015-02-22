@@ -253,7 +253,7 @@ lx_wait4(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 
 		if (get_udatamodel() != DATAMODEL_NATIVE) {
 			krup = &ru32;
-			size_t rusz = sizeof (ru32);
+			rusz = sizeof (ru32);
 		}
 #endif
 
