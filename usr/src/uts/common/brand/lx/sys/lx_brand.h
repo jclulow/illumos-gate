@@ -189,6 +189,13 @@ typedef enum lx_ptrace_options {
  */
 #define	LX_NATIVE_STACK_PAGE_COUNT	64
 
+/*
+ * When returning in a new child process created with vfork(2) (or CLONE_VFORK)
+ * we discard some of the native stack to prevent corruption of the parent
+ * emulation state.
+ */
+#define	LX_NATIVE_STACK_VFORK_GAP	0x3000
+
 #ifndef	_ASM
 
 extern struct brand lx_brand;

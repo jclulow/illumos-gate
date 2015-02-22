@@ -508,10 +508,64 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			return (rval);
 		}
 
+		if (IS_VFORK(flags)) {
+			ucontext_t vforkuc;
+
+			/*
+			 * The vfork(2) interface is somewhat less than ideal.
+			 * The unfortunate notion of borrowing the address
+			 * space of the parent process requires us to jump
+			 * through several hoops to prevent corrupting parent
+			 * emulation state.
+			 *
+			 * When returning in the child, we make a copy of the
+			 * system call return context and discard three pages
+			 * of the native stack.  Returning normally would
+			 * clobber the native stack frame in which the brand
+			 * library in the parent process is presently waiting.
+			 *
+			 * The calling program is expected to correctly use
+			 * this dusty, underspecified relic.  Neglecting to
+			 * immediately call execve(2) or exit(2) is not
+			 * cricket; this stack space will be permanently lost,
+			 * not to mention myriad other undefined behaviour.
+			 */
+			bcopy(ucp, &vforkuc, sizeof (vforkuc));
+			vforkuc.uc_brand_data[1] -= LX_NATIVE_STACK_VFORK_GAP;
+			vforkuc.uc_link = NULL;
+
+			lx_debug("\tvfork native stack sp %p",
+			    vforkuc.uc_brand_data[1]);
+
+			/*
+			 * If provided, the child needs its new stack set up.
+			 */
+			if (cldstk != 0) {
+				lx_debug("\tvfork cldstk %p", cldstk);
+				LX_REG(&vforkuc, REG_SP) = (uintptr_t)cldstk;
+			}
+
+			/*
+			 * Stop for ptrace if required.
+			 */
+			lx_ptrace_stop_if_option(ptrace_event, B_TRUE, 0, NULL);
+
+			/*
+			 * Return to the child via the specially constructed
+			 * vfork(2) context.
+			 */
+			LX_EMULATE_RETURN(&vforkuc, LX_SYS_clone, 0, 0);
+			(void) syscall(SYS_brand, B_EMULATION_DONE, &vforkuc,
+			    LX_SYS_clone, 0, 0);
+
+			assert(0);
+		}
+
 		/*
 		 * If provided, the child needs its new stack set up.
 		 */
 		if (cldstk != 0) {
+			lx_debug("\tcldstk %p", cldstk);
 			LX_REG(ucp, REG_SP) = (uintptr_t)cldstk;
 		}
 

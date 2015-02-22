@@ -365,6 +365,12 @@ extern long lx_utimes(const char *, const struct timeval *);
 #define	LX_SYS_getcpu		309
 #endif
 
+#if defined(_LP64)
+#define	LX_SYS_clone		56
+#else
+#define	LX_SYS_clone		120
+#endif
+
 #ifdef	__cplusplus
 }
 #endif

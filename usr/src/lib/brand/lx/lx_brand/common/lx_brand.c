@@ -42,6 +42,7 @@
 #include <zone.h>
 #include <sys/brand.h>
 #include <sys/epoll.h>
+#include <sys/stack.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -416,7 +417,7 @@ lx_emulate(ucontext_t *ucp, int syscall_num, uintptr_t *args)
 	 * Return to the context we were passed
 	 */
 	LX_EMULATE_RETURN(ucp, syscall_num, emu_ret, emu_errno);
-	lx_debug("\tlx_emulate(%d) done (ret %ld / 0x%p ; errno %d)\n",
+	lx_debug("\tlx_emulate(%d) done (ret %ld / 0x%p ; errno %d)",
 	    syscall_num, emu_ret, emu_ret, emu_errno);
 	(void) syscall(SYS_brand, B_EMULATION_DONE, ucp, syscall_num, emu_ret,
 	    emu_errno);
@@ -497,7 +498,23 @@ lx_init_tsd(lx_tsd_t *lxtsd)
 		    "context: %s", strerror(errno));
 	}
 	LX_REG(&lxtsd->lxtsd_exit_context, REG_PC) = (uintptr_t)lx_exit_common;
+
+	/*
+	 * Align the stack pointer and clear the frame pointer.
+	 */
 	LX_REG(&lxtsd->lxtsd_exit_context, REG_FP) = 0;
+	LX_REG(&lxtsd->lxtsd_exit_context, REG_SP) &= ~(STACK_ALIGN - 1UL);
+#if defined(_LP64)
+#if (STACK_ENTRY_ALIGN != 8) && (STACK_ALIGN != 16)
+#error "lx_init_tsd: unexpected STACK_[ENTRY_]ALIGN values"
+#endif
+	/*
+	 * The AMD64 ABI requires that, on entry to a function, the stack
+	 * pointer must be 8-byte aligned, but _not_ 16-byte aligned.  When
+	 * the frame pointer is pushed, the alignment will then be correct.
+	 */
+	LX_REG(&lxtsd->lxtsd_exit_context, REG_SP) -= STACK_ENTRY_ALIGN;
+#endif
 
 	if ((err = thr_setspecific(lx_tsd_key, lxtsd)) != 0) {
 		lx_err_fatal("Unable to initialize thread-specific data: %s",
