@@ -480,7 +480,8 @@ stol_siginfo(siginfo_t *siginfop, lx_siginfo_t *lx_siginfop)
 
 		case LX_SIGCHLD:
 			lx_siginfo.lsi_pid = siginfop->si_pid;
-			if (siginfop->si_code == CLD_EXITED) {
+			if (siginfop->si_code <= 0 || siginfop->si_code ==
+			    CLD_EXITED) {
 				lx_siginfo.lsi_status = siginfop->si_status;
 			} else {
 				lx_siginfo.lsi_status = lx_stol_status(

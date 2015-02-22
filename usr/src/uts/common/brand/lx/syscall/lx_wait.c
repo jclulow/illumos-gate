@@ -342,7 +342,7 @@ stol_ksiginfo(k_siginfo_t *sip, uintptr_t lxsip)
 
 	case LX_SIGCHLD:
 		lsi.lsi_pid = sip->si_pid;
-		if (sip->si_code == CLD_EXITED) {
+		if (sip->si_code <= 0 || sip->si_code == CLD_EXITED) {
 			lsi.lsi_status = sip->si_status;
 		} else {
 			lsi.lsi_status = lx_stol_status(sip->si_status,
@@ -390,7 +390,7 @@ stol_ksiginfo32(k_siginfo_t *sip, uintptr_t lxsip)
 
 	case LX_SIGCHLD:
 		lsi.lsi_pid = sip->si_pid;
-		if (sip->si_code == CLD_EXITED) {
+		if (sip->si_code <= 0 || sip->si_code == CLD_EXITED) {
 			lsi.lsi_status = sip->si_status;
 		} else {
 			lsi.lsi_status = lx_stol_status(sip->si_status,
