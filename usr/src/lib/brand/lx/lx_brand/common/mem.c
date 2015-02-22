@@ -120,9 +120,11 @@ mmap_common(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	 *
 	 * In the interest of running software, unsafe or not, we fudge
 	 * something vaguely similar to overcommit by permanently enabling
-	 * MAP_NORESERVE:
+	 * MAP_NORESERVE unless MAP_LOCKED was requested:
 	 */
-	flags |= LX_MAP_NORESERVE;
+	if (!(flags & LX_MAP_LOCKED)) {
+		flags |= LX_MAP_NORESERVE;
+	}
 
 	/*
 	 * This is totally insane. The NOTES section in the linux mmap(2) man
