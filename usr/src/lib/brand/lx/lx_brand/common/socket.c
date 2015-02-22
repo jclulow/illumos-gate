@@ -2213,6 +2213,7 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 	void *new_cmsg = NULL;
 	int r, err;
 	socklen_t len, orig_len = 0;
+	void *msg_control = NULL;
 
 	int nosigpipe = flags & LX_MSG_NOSIGNAL;
 	struct sigaction newact, oact;
@@ -2238,8 +2239,7 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 		len = sizeof (struct sockaddr);
 		if (getsockname(sockfd, &sname, &len) < 0)
 			len = sizeof (struct sockaddr);
-		if ((name = SAFE_ALLOCA(len)) == NULL)
-			return (-ENOMEM);
+		name = alloca(len);
 		orig_name = msg.msg_name;
 		orig_len = msg.msg_namelen;
 		msg.msg_name = name;
@@ -2256,14 +2256,25 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 		if (msg.msg_controllen == 0) {
 			msg.msg_control = NULL;
 		} else {
-			msg.msg_control = SAFE_ALLOCA(msg.msg_controllen);
-			if (msg.msg_control == NULL)
-				return (-EINVAL);
+			/*
+			 * Note that control message buffers can be quite
+			 * long, e.g. 128KB or more.  The native stack is
+			 * not big enough for these two allocations so we
+			 * use malloc(3C).
+			 */
+			lx_debug("\tmsg.msg_controllen = %d",
+			    msg.msg_controllen);
+			if ((msg_control = malloc(msg.msg_controllen)) ==
+			    NULL) {
+				return (-ENOMEM);
+			}
+			msg.msg_control = msg_control;
 #if defined(_LP64)
-			new_cmsg = SAFE_ALLOCA(msg.msg_controllen +
-			    LX_CMSG_EXTRA);
-			if (new_cmsg == NULL)
+			if ((new_cmsg = malloc(msg.msg_controllen +
+			    LX_CMSG_EXTRA)) == NULL) {
+				free(msg_control);
 				return (-EINVAL);
+			}
 #endif
 		}
 	}
@@ -2283,16 +2294,18 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 		newact.sa_flags = 0;
 		(void) sigemptyset(&newact.sa_mask);
 
-		if (sigaction(SIGPIPE, &newact, &oact) < 0)
+		if (sigaction(SIGPIPE, &newact, &oact) < 0) {
 			lx_err_fatal("recvmsg(): could not ignore SIGPIPE to "
 			    "emulate LX_MSG_NOSIGNAL");
+		}
 	}
 
 	r = _so_recvmsg(sockfd, (struct msghdr *)&msg, flags | MSG_XPG4_2);
 
-	if ((nosigpipe) && (sigaction(SIGPIPE, &oact, NULL) < 0))
+	if ((nosigpipe) && (sigaction(SIGPIPE, &oact, NULL) < 0)) {
 		lx_err_fatal("recvmsg(): could not reset SIGPIPE handler to "
 		    "emulate LX_MSG_NOSIGNAL");
+	}
 
 	if (r >= 0 && msg.msg_controllen >= sizeof (struct cmsghdr)) {
 		/*
@@ -2300,12 +2313,18 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 		 * we need to convert them from Linux to Solaris.
 		 */
 		if ((err = convert_cmsgs(SOL_TO_LX, &msg, new_cmsg,
-		    "recvmsg()")) != 0)
+		    "recvmsg()")) != 0) {
+			free(msg_control);
+			free(new_cmsg);
 			return (-err);
+		}
 
 		if ((uucopy(msg.msg_control, cmsg,
-		    msg.msg_controllen)) != 0)
+		    msg.msg_controllen)) != 0) {
+			free(msg_control);
+			free(new_cmsg);
 			return (-errno);
+		}
 	}
 
 	msg.msg_control = cmsg;
@@ -2314,8 +2333,11 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 	if (msg.msg_name != NULL) {
 		err = stol_sockaddr(orig_name, &msg.msg_namelen, msg.msg_name,
 		    msg.msg_namelen, orig_len);
-		if (err != 0)
+		if (err != 0) {
+			free(msg_control);
+			free(new_cmsg);
 			return (-err);
+		}
 		msg.msg_name = orig_name;
 	}
 
@@ -2324,9 +2346,14 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 	 * call, so copy their values back to the caller.  Rather than iterate,
 	 * just copy the whole structure back.
 	 */
-	if (uucopy(&msg, lmp, sizeof (msg)) != 0)
+	if (uucopy(&msg, lmp, sizeof (msg)) != 0) {
+		free(msg_control);
+		free(new_cmsg);
 		return (-errno);
+	}
 
+	free(msg_control);
+	free(new_cmsg);
 	return ((r < 0) ? -errno : r);
 }
 
