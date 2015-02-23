@@ -1128,30 +1128,30 @@ lx_rt_sigreturn(void)
 	/*
 	 * General register layout is completely different.
 	 */
-	sigucp->uc_mcontext.gregs[REG_R15] = lx_ucp->uc_sigcontext.sc_r15;
-	sigucp->uc_mcontext.gregs[REG_R14] = lx_ucp->uc_sigcontext.sc_r14;
-	sigucp->uc_mcontext.gregs[REG_R13] = lx_ucp->uc_sigcontext.sc_r13;
-	sigucp->uc_mcontext.gregs[REG_R12] = lx_ucp->uc_sigcontext.sc_r12;
-	sigucp->uc_mcontext.gregs[REG_R11] = lx_ucp->uc_sigcontext.sc_r11;
-	sigucp->uc_mcontext.gregs[REG_R10] = lx_ucp->uc_sigcontext.sc_r10;
-	sigucp->uc_mcontext.gregs[REG_R9] = lx_ucp->uc_sigcontext.sc_r9;
-	sigucp->uc_mcontext.gregs[REG_R8] = lx_ucp->uc_sigcontext.sc_r8;
-	sigucp->uc_mcontext.gregs[REG_RDI] = lx_ucp->uc_sigcontext.sc_rdi;
-	sigucp->uc_mcontext.gregs[REG_RSI] = lx_ucp->uc_sigcontext.sc_rsi;
-	sigucp->uc_mcontext.gregs[REG_RBP] = lx_ucp->uc_sigcontext.sc_rbp;
-	sigucp->uc_mcontext.gregs[REG_RBX] = lx_ucp->uc_sigcontext.sc_rbx;
-	sigucp->uc_mcontext.gregs[REG_RDX] = lx_ucp->uc_sigcontext.sc_rdx;
-	sigucp->uc_mcontext.gregs[REG_RCX] = lx_ucp->uc_sigcontext.sc_rcx;
-	sigucp->uc_mcontext.gregs[REG_RAX] = lx_ucp->uc_sigcontext.sc_rax;
-	sigucp->uc_mcontext.gregs[REG_TRAPNO] = lx_ucp->uc_sigcontext.sc_trapno;
-	sigucp->uc_mcontext.gregs[REG_ERR] = lx_ucp->uc_sigcontext.sc_err;
-	sigucp->uc_mcontext.gregs[REG_RIP] = lx_ucp->uc_sigcontext.sc_rip;
-	sigucp->uc_mcontext.gregs[REG_CS] = lx_ucp->uc_sigcontext.sc_cs;
-	sigucp->uc_mcontext.gregs[REG_RFL] = lx_ucp->uc_sigcontext.sc_eflags;
-	sigucp->uc_mcontext.gregs[REG_RSP] = lx_ucp->uc_sigcontext.sc_rsp;
-	sigucp->uc_mcontext.gregs[REG_SS] = lx_ucp->uc_sigcontext.sc_pad0;
-	sigucp->uc_mcontext.gregs[REG_FS] = lx_ucp->uc_sigcontext.sc_fs;
-	sigucp->uc_mcontext.gregs[REG_GS] = lx_ucp->uc_sigcontext.sc_gs;
+	LX_REG(sigucp, REG_R15) = lx_ucp->uc_sigcontext.sc_r15;
+	LX_REG(sigucp, REG_R14) = lx_ucp->uc_sigcontext.sc_r14;
+	LX_REG(sigucp, REG_R13) = lx_ucp->uc_sigcontext.sc_r13;
+	LX_REG(sigucp, REG_R12) = lx_ucp->uc_sigcontext.sc_r12;
+	LX_REG(sigucp, REG_R11) = lx_ucp->uc_sigcontext.sc_r11;
+	LX_REG(sigucp, REG_R10) = lx_ucp->uc_sigcontext.sc_r10;
+	LX_REG(sigucp, REG_R9) = lx_ucp->uc_sigcontext.sc_r9;
+	LX_REG(sigucp, REG_R8) = lx_ucp->uc_sigcontext.sc_r8;
+	LX_REG(sigucp, REG_RDI) = lx_ucp->uc_sigcontext.sc_rdi;
+	LX_REG(sigucp, REG_RSI) = lx_ucp->uc_sigcontext.sc_rsi;
+	LX_REG(sigucp, REG_RBP) = lx_ucp->uc_sigcontext.sc_rbp;
+	LX_REG(sigucp, REG_RBX) = lx_ucp->uc_sigcontext.sc_rbx;
+	LX_REG(sigucp, REG_RDX) = lx_ucp->uc_sigcontext.sc_rdx;
+	LX_REG(sigucp, REG_RCX) = lx_ucp->uc_sigcontext.sc_rcx;
+	LX_REG(sigucp, REG_RAX) = lx_ucp->uc_sigcontext.sc_rax;
+	LX_REG(sigucp, REG_TRAPNO) = lx_ucp->uc_sigcontext.sc_trapno;
+	LX_REG(sigucp, REG_ERR) = lx_ucp->uc_sigcontext.sc_err;
+	LX_REG(sigucp, REG_RIP) = lx_ucp->uc_sigcontext.sc_rip;
+	LX_REG(sigucp, REG_CS) = lx_ucp->uc_sigcontext.sc_cs;
+	LX_REG(sigucp, REG_RFL) = lx_ucp->uc_sigcontext.sc_eflags;
+	LX_REG(sigucp, REG_RSP) = lx_ucp->uc_sigcontext.sc_rsp;
+	LX_REG(sigucp, REG_SS) = lx_ucp->uc_sigcontext.sc_pad0;
+	LX_REG(sigucp, REG_FS) = lx_ucp->uc_sigcontext.sc_fs;
+	LX_REG(sigucp, REG_GS) = lx_ucp->uc_sigcontext.sc_gs;
 
 #else /* is _ILP32 */
 	lx_ucp = &lx_ssp->uc;
@@ -1344,30 +1344,30 @@ lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
 	/*
 	 * General register layout is completely different.
 	 */
-	lx_ucp->uc_sigcontext.sc_r8 = ucp->uc_mcontext.gregs[REG_R8];
-	lx_ucp->uc_sigcontext.sc_r9 = ucp->uc_mcontext.gregs[REG_R9];
-	lx_ucp->uc_sigcontext.sc_r10 = ucp->uc_mcontext.gregs[REG_R10];
-	lx_ucp->uc_sigcontext.sc_r11 = ucp->uc_mcontext.gregs[REG_R11];
-	lx_ucp->uc_sigcontext.sc_r12 = ucp->uc_mcontext.gregs[REG_R12];
-	lx_ucp->uc_sigcontext.sc_r13 = ucp->uc_mcontext.gregs[REG_R13];
-	lx_ucp->uc_sigcontext.sc_r14 = ucp->uc_mcontext.gregs[REG_R14];
-	lx_ucp->uc_sigcontext.sc_r15 = ucp->uc_mcontext.gregs[REG_R15];
-	lx_ucp->uc_sigcontext.sc_rdi = ucp->uc_mcontext.gregs[REG_RDI];
-	lx_ucp->uc_sigcontext.sc_rsi = ucp->uc_mcontext.gregs[REG_RSI];
-	lx_ucp->uc_sigcontext.sc_rbp = ucp->uc_mcontext.gregs[REG_RBP];
-	lx_ucp->uc_sigcontext.sc_rbx = ucp->uc_mcontext.gregs[REG_RBX];
-	lx_ucp->uc_sigcontext.sc_rdx = ucp->uc_mcontext.gregs[REG_RDX];
-	lx_ucp->uc_sigcontext.sc_rax = ucp->uc_mcontext.gregs[REG_RAX];
-	lx_ucp->uc_sigcontext.sc_rcx = ucp->uc_mcontext.gregs[REG_RCX];
-	lx_ucp->uc_sigcontext.sc_rsp = ucp->uc_mcontext.gregs[REG_RSP];
-	lx_ucp->uc_sigcontext.sc_rip = ucp->uc_mcontext.gregs[REG_RIP];
-	lx_ucp->uc_sigcontext.sc_eflags = ucp->uc_mcontext.gregs[REG_RFL];
-	lx_ucp->uc_sigcontext.sc_cs = ucp->uc_mcontext.gregs[REG_CS];
-	lx_ucp->uc_sigcontext.sc_gs = ucp->uc_mcontext.gregs[REG_GS];
-	lx_ucp->uc_sigcontext.sc_fs = ucp->uc_mcontext.gregs[REG_FS];
-	lx_ucp->uc_sigcontext.sc_pad0 = ucp->uc_mcontext.gregs[REG_SS];
-	lx_ucp->uc_sigcontext.sc_err = ucp->uc_mcontext.gregs[REG_ERR];
-	lx_ucp->uc_sigcontext.sc_trapno = ucp->uc_mcontext.gregs[REG_TRAPNO];
+	lx_ucp->uc_sigcontext.sc_r8 = LX_REG(ucp, REG_R8);
+	lx_ucp->uc_sigcontext.sc_r9 = LX_REG(ucp, REG_R9);
+	lx_ucp->uc_sigcontext.sc_r10 = LX_REG(ucp, REG_R10);
+	lx_ucp->uc_sigcontext.sc_r11 = LX_REG(ucp, REG_R11);
+	lx_ucp->uc_sigcontext.sc_r12 = LX_REG(ucp, REG_R12);
+	lx_ucp->uc_sigcontext.sc_r13 = LX_REG(ucp, REG_R13);
+	lx_ucp->uc_sigcontext.sc_r14 = LX_REG(ucp, REG_R14);
+	lx_ucp->uc_sigcontext.sc_r15 = LX_REG(ucp, REG_R15);
+	lx_ucp->uc_sigcontext.sc_rdi = LX_REG(ucp, REG_RDI);
+	lx_ucp->uc_sigcontext.sc_rsi = LX_REG(ucp, REG_RSI);
+	lx_ucp->uc_sigcontext.sc_rbp = LX_REG(ucp, REG_RBP);
+	lx_ucp->uc_sigcontext.sc_rbx = LX_REG(ucp, REG_RBX);
+	lx_ucp->uc_sigcontext.sc_rdx = LX_REG(ucp, REG_RDX);
+	lx_ucp->uc_sigcontext.sc_rax = LX_REG(ucp, REG_RAX);
+	lx_ucp->uc_sigcontext.sc_rcx = LX_REG(ucp, REG_RCX);
+	lx_ucp->uc_sigcontext.sc_rsp = LX_REG(ucp, REG_RSP);
+	lx_ucp->uc_sigcontext.sc_rip = LX_REG(ucp, REG_RIP);
+	lx_ucp->uc_sigcontext.sc_eflags = LX_REG(ucp, REG_RFL);
+	lx_ucp->uc_sigcontext.sc_cs = LX_REG(ucp, REG_CS);
+	lx_ucp->uc_sigcontext.sc_gs = LX_REG(ucp, REG_GS);
+	lx_ucp->uc_sigcontext.sc_fs = LX_REG(ucp, REG_FS);
+	lx_ucp->uc_sigcontext.sc_pad0 = LX_REG(ucp, REG_SS);
+	lx_ucp->uc_sigcontext.sc_err = LX_REG(ucp, REG_ERR);
+	lx_ucp->uc_sigcontext.sc_trapno = LX_REG(ucp, REG_TRAPNO);
 
 #else /* is _ILP32 */
 	/*
@@ -1845,17 +1845,17 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 		jump_uc.uc_brand_data[0] = (void *)(LX_UC_STACK_BRAND |
 		    LX_UC_IGNORE_LINK);
 
-		jump_uc.uc_mcontext.gregs[REG_FP] = 0;
-		jump_uc.uc_mcontext.gregs[REG_SP] = lxfp;
-		jump_uc.uc_mcontext.gregs[REG_PC] = (uintptr_t)user_handler;
+		LX_REG(&jump_uc, REG_FP) = 0;
+		LX_REG(&jump_uc, REG_SP) = lxfp;
+		LX_REG(&jump_uc, REG_PC) = (uintptr_t)user_handler;
 
 #if defined(_LP64)
 		/*
 		 * Pass signal handler arguments by registers on AMD64.
 		 */
-		jump_uc.uc_mcontext.gregs[REG_RDI] = hargs[0];
-		jump_uc.uc_mcontext.gregs[REG_RSI] = hargs[1];
-		jump_uc.uc_mcontext.gregs[REG_RDX] = hargs[2];
+		LX_REG(&jump_uc, REG_RDI) = hargs[0];
+		LX_REG(&jump_uc, REG_RSI) = hargs[1];
+		LX_REG(&jump_uc, REG_RDX) = hargs[2];
 #endif
 
 		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
