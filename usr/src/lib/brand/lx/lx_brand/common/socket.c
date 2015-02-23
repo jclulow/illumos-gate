@@ -648,14 +648,28 @@ ltos_xform_cmsgs(struct lx_msghdr *msg, struct cmsghdr *ntv_cmsg)
 static int
 stol_xform_cmsgs(struct lx_msghdr *msg, lx_cmsghdr64_t *lx_cmsg)
 {
+	struct lx_msghdr tmsg;
 	lx_cmsghdr64_t *lcmsg, *last;
 	struct cmsghdr *cmsg, *lp;
 	int nlen = 0;
 	int err = 0;
 
-	lcmsg = lx_cmsg;
+	/*
+	 * Create a temporary "struct lx_msghdr" so that we can use the
+	 * LX_CMSG_*HDR() iteration macros.
+	 */
+	tmsg = *msg;
+	tmsg.msg_control = lx_cmsg;
+	tmsg.msg_controllen = msg->msg_controllen + LX_CMSG_EXTRA;
+
+	lcmsg = LX_CMSG_FIRSTHDR(&tmsg);
 	cmsg = CMSG_FIRSTHDR(msg);
 	while (cmsg != NULL && err == 0) {
+		if (lcmsg == NULL) {
+			err = ENOTSUP;
+			break;
+		}
+
 		lcmsg->cmsg_len =
 		    LX_CMSG_LEN(cmsg->cmsg_len - sizeof (struct cmsghdr));
 		lcmsg->cmsg_level = cmsg->cmsg_level;
@@ -668,12 +682,13 @@ stol_xform_cmsgs(struct lx_msghdr *msg, lx_cmsghdr64_t *lx_cmsg)
 		cmsg = CMSG_NXTHDR(msg, lp);
 
 		last = lcmsg;
-		lcmsg = LX_CMSG_NXTHDR(msg, last);
+		lcmsg = LX_CMSG_NXTHDR(&tmsg, last);
 
 		nlen += (int)((uint64_t)lcmsg - (uint64_t)last);
 
-		if (nlen > (msg->msg_controllen + LX_CMSG_EXTRA))
+		if (nlen > (msg->msg_controllen + LX_CMSG_EXTRA)) {
 			err = ENOTSUP;
+		}
 	}
 
 	if (err) {
@@ -876,7 +891,7 @@ ltos_sockaddr(struct sockaddr *addr, socklen_t *len,
 
 		case AF_INET6:
 			/*
-			 * The Solaris sockaddr_in6 has one more 32-bit field
+			 * The illumos sockaddr_in6 has one more 32-bit field
 			 * than the Linux version.  We assume the caller has
 			 * zeroed the sockaddr we're copying into.
 			 */
@@ -1063,7 +1078,7 @@ convert_sock_args(int in_dom, int in_type, int in_protocol, int *out_dom,
 
 	/*
 	 * Linux does not allow the app to specify IP Protocol for raw
-	 * sockets.  Solaris does, so bail out here.
+	 * sockets.  Illumos does, so bail out here.
 	 */
 	if (domain == AF_INET && type == SOCK_RAW && in_protocol == IPPROTO_IP)
 		return (-ESOCKTNOSUPPORT);
@@ -1092,25 +1107,25 @@ convert_sock_args(int in_dom, int in_type, int in_protocol, int *out_dom,
 static int
 convert_sockflags(int lx_flags, char *call)
 {
-	int solaris_flags = 0;
+	int native_flags = 0;
 
 	if (lx_flags & LX_MSG_OOB) {
-		solaris_flags |= MSG_OOB;
+		native_flags |= MSG_OOB;
 		lx_flags &= ~LX_MSG_OOB;
 	}
 
 	if (lx_flags & LX_MSG_PEEK) {
-		solaris_flags |= MSG_PEEK;
+		native_flags |= MSG_PEEK;
 		lx_flags &= ~LX_MSG_PEEK;
 	}
 
 	if (lx_flags & LX_MSG_DONTROUTE) {
-		solaris_flags |= MSG_DONTROUTE;
+		native_flags |= MSG_DONTROUTE;
 		lx_flags &= ~LX_MSG_DONTROUTE;
 	}
 
 	if (lx_flags & LX_MSG_CTRUNC) {
-		solaris_flags |= MSG_CTRUNC;
+		native_flags |= MSG_CTRUNC;
 		lx_flags &= ~LX_MSG_CTRUNC;
 	}
 
@@ -1120,22 +1135,22 @@ convert_sockflags(int lx_flags, char *call)
 	}
 
 	if (lx_flags & LX_MSG_TRUNC) {
-		solaris_flags |= MSG_TRUNC;
+		native_flags |= MSG_TRUNC;
 		lx_flags &= ~LX_MSG_TRUNC;
 	}
 
 	if (lx_flags & LX_MSG_DONTWAIT) {
-		solaris_flags |= MSG_DONTWAIT;
+		native_flags |= MSG_DONTWAIT;
 		lx_flags &= ~LX_MSG_DONTWAIT;
 	}
 
 	if (lx_flags & LX_MSG_EOR) {
-		solaris_flags |= MSG_EOR;
+		native_flags |= MSG_EOR;
 		lx_flags &= ~LX_MSG_EOR;
 	}
 
 	if (lx_flags & LX_MSG_WAITALL) {
-		solaris_flags |= MSG_WAITALL;
+		native_flags |= MSG_WAITALL;
 		lx_flags &= ~LX_MSG_WAITALL;
 	}
 
@@ -1200,7 +1215,7 @@ convert_sockflags(int lx_flags, char *call)
 		lx_unsupported("%s: unknown socket flag(s) 0x%x", call,
 		    lx_flags);
 
-	return (solaris_flags);
+	return (native_flags);
 }
 
 long
@@ -1374,7 +1389,7 @@ lx_accept(int sockfd, void *name, int *nlp)
 	 * If it is NULL, we don't care about the namelen pointer's value
 	 * or about dereferencing it.
 	 *
-	 * Happily, Solaris' accept(3SOCKET) treats NULL name pointers and
+	 * Happily, illumos' accept(3SOCKET) treats NULL name pointers and
 	 * zero namelens the same way.
 	 */
 	if ((name != NULL) &&
@@ -1948,7 +1963,7 @@ lx_getsockopt(int sockfd, int level, int optname, void *optval, int *optlenp)
 
 	/*
 	 * According to the Linux man page, a NULL optval should indicate
-	 * (as in Solaris) that no return value is expected.  Instead, it
+	 * (as in illumos) that no return value is expected.  Instead, it
 	 * actually triggers an EFAULT error.
 	 */
 	if (optval == NULL)
@@ -2132,7 +2147,7 @@ lx_sendmsg(int sockfd, void *lmp, int flags)
 
 	/*
 	 * If there are control messages bundled in this message, we need
-	 * to convert them from Linux to Solaris.
+	 * to convert them from Linux to illumos.
 	 */
 	if (msg.msg_control != NULL) {
 		if (msg.msg_controllen == 0) {
@@ -2309,8 +2324,8 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 
 	if (r >= 0 && msg.msg_controllen >= sizeof (struct cmsghdr)) {
 		/*
-		 * If there are control messages bundled in this message,
-		 * we need to convert them from Linux to Solaris.
+		 * If there are control messages bundled in this message, we
+		 * need to convert them from native illumos to Linux format.
 		 */
 		if ((err = convert_cmsgs(SOL_TO_LX, &msg, new_cmsg,
 		    "recvmsg()")) != 0) {
