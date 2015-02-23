@@ -131,12 +131,6 @@ lx_exit(uintptr_t p1)
 	    (ulong_t)status, NULL);
 
 	/*
-	 * Block all signals in the exit context to avoid taking any signals
-	 * (to the degree possible) while exiting.
-	 */
-	(void) sigfillset(&lx_tsd->lxtsd_exit_context.uc_sigmask);
-
-	/*
 	 * This thread is exiting.  Restore the state of the thread to
 	 * what it was before we started running linux code.
 	 */
@@ -172,12 +166,6 @@ lx_group_exit(uintptr_t p1)
 	lx_tsd->lxtsd_exit_status = status;
 
 	/*
-	 * Block all signals in the exit context to avoid taking any signals
-	 * (to the degree possible) while exiting.
-	 */
-	(void) sigfillset(&lx_tsd->lxtsd_exit_context.uc_sigmask);
-
-	/*
 	 * This thread is exiting.  Restore the state of the thread to
 	 * what it was before we started running linux code.
 	 */
@@ -186,7 +174,7 @@ lx_group_exit(uintptr_t p1)
 	/*
 	 * If we returned from the setcontext(2), something is very wrong.
 	 */
-	lx_err_fatal("group_exits: unable to set exit context: %s",
+	lx_err_fatal("group_exit: unable to set exit context: %s",
 	    strerror(errno));
 
 	/*NOTREACHED*/

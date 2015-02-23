@@ -516,6 +516,12 @@ lx_init_tsd(lx_tsd_t *lxtsd)
 	LX_REG(&lxtsd->lxtsd_exit_context, REG_SP) -= STACK_ENTRY_ALIGN;
 #endif
 
+	/*
+	 * Block all signals in the exit context to avoid taking any signals
+	 * (to the degree possible) while exiting.
+	 */
+	(void) sigfillset(&lxtsd->lxtsd_exit_context.uc_sigmask);
+
 	if ((err = thr_setspecific(lx_tsd_key, lxtsd)) != 0) {
 		lx_err_fatal("Unable to initialize thread-specific data: %s",
 		    strerror(err));
