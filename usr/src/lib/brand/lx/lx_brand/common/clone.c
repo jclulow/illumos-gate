@@ -339,7 +339,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	int rval;
 	int pid;
 	ucontext_t *ucp;
-	sigset_t sigmask;
+	sigset_t sigmask, osigmask;
 	int fork_flags = 0;
 	int ptrace_event;
 	int error = 0;
@@ -644,12 +644,13 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	 * Block all signals because the thread we create won't be able to
 	 * properly handle them until it's fully set up.
 	 */
-	if (sigprocmask(SIG_BLOCK, &sigmask, &cs->c_sigmask) < 0) {
+	if (sigprocmask(SIG_BLOCK, &sigmask, &osigmask) < 0) {
 		lx_debug("lx_clone sigprocmask() failed: %s", strerror(errno));
 		free(cs->c_lx_tsd);
 		free(cs);
 		return (-errno);
 	}
+	cs->c_sigmask = osigmask;
 
 	/*
 	 * Allocate the native stack for this new thread now, so that we
@@ -676,7 +677,7 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	/*
 	 * Release any pending signals
 	 */
-	(void) sigprocmask(SIG_SETMASK, &cs->c_sigmask, NULL);
+	(void) sigprocmask(SIG_SETMASK, &osigmask, NULL);
 
 	/*
 	 * Wait for the child to be created and have its tid assigned.
