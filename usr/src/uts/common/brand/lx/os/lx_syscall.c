@@ -265,6 +265,30 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	return (0);
 }
 
+static void
+lx_syscall_unsup_msg(lx_sysent_t *s, int syscall_num, int unsup_reason)
+{
+	char buf[100];
+
+	if (s == NULL) {
+		(void) snprintf(buf, sizeof (buf), "NOSYS (%d): out of bounds",
+		    syscall_num);
+	} else {
+		VERIFY(unsup_reason < (sizeof (nosys_reasons) /
+		    sizeof (*nosys_reasons)));
+
+		if (s->sy_name == NULL) {
+			(void) snprintf(buf, sizeof (buf), "NOSYS (%d): %s",
+			    syscall_num, nosys_reasons[unsup_reason]);
+		} else {
+			(void) snprintf(buf, sizeof (buf), "NOSYS (%s): %s",
+			    s->sy_name, nosys_reasons[unsup_reason]);
+		}
+	}
+
+	lx_unsupported(buf);
+}
+
 /*
  * This function is used to override the processing of arguments and
  * invocation of a handler for emulated system calls, installed on each
@@ -325,6 +349,8 @@ lx_syscall_enter(void)
 	 */
 	syscall_num = lwpd->br_syscall_num;
 	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
+		lx_syscall_unsup_msg(NULL, syscall_num, 0);
+
 		set_errno(ENOTSUP);
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
@@ -387,9 +413,7 @@ lx_syscall_enter(void)
 		/*
 		 * We are not emulating this system call at all.
 		 */
-		VERIFY(unsup_reason < (sizeof (nosys_reasons) /
-		    sizeof (*nosys_reasons)));
-		lx_unsupported(nosys_reasons[unsup_reason]);
+		lx_syscall_unsup_msg(s, syscall_num, unsup_reason);
 
 		set_errno(ENOTSUP);
 		lx_syscall_return(lwp, syscall_num, -1);
