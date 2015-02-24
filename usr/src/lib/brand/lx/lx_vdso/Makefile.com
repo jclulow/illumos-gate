@@ -53,6 +53,8 @@ CLEANFILES =	$(DYNLIB)
 ROOTLIBDIR =	$(ROOT)/usr/lib/brand/lx
 ROOTLIBDIR64 =	$(ROOT)/usr/lib/brand/lx/$(MACH64)
 
+VDSO_TOOL =	../tools/vdso_tool
+
 .KEEP_STATE:
 
 all: $(LIBS)
@@ -61,6 +63,7 @@ all: $(LIBS)
 	    $(AWK) '{ if ($$1 == "sh_addr:") { print $$2 } }')" $(DYNLIB)
 	$(ELFEDIT) -e 'ehdr:ei_osabi ELFOSABI_NONE' $(DYNLIB)
 	$(ELFEDIT) -e 'ehdr:ei_abiversion 0' $(DYNLIB)
+	$(VDSO_TOOL) -f $(DYNLIB)
 
 lint: $(LINTLIB) lintcheck
 
