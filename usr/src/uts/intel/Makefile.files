@@ -105,6 +105,11 @@ LX_PROC_OBJS +=	\
 	lx_prvfsops.o	\
 	lx_prvnops.o
 
+LX_SYSFS_OBJS +=		\
+	lx_sysfs_common.o	\
+	lx_sysfs_vfsops.o	\
+	lx_sysfs_vnops.o
+
 LX_AUTOFS_OBJS +=	\
 	lx_autofs.o
 
