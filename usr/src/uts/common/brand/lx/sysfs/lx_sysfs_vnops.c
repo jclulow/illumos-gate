@@ -31,9 +31,6 @@ vnodeops_t *lx_sysfs_vnodeops;
 static int
 lx_sysfs_open(vnode_t **vpp, int flag, cred_t *cr, caller_context_t *ct)
 {
-	vnode_t *vp = *vpp;
-	lx_sysfs_node_t *lxsn = (lx_sysfs_node_t *)vp->v_data;
-
 	if (flag & FWRITE) {
 		return (EROFS);
 	}
@@ -56,7 +53,7 @@ lx_sysfs_read(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 	int error;
 
 	/*
-	 * XXX only have the root directory for now...
+	 * We presently only support directories.
 	 */
 	lxpr_uiobuf_seterr(uiobuf, EISDIR);
 
@@ -70,18 +67,27 @@ static int
 lx_sysfs_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
     caller_context_t *ct)
 {
+	lx_sysfs_node_t *lxsn = (lx_sysfs_node_t *)vp->v_data;
+	lx_kobject_t *lxko = lxsn->lxsn_kobject;
+
 	bzero(vap, sizeof (*vap));
-	/*
-	 * XXX set atime, mtime, ctime, etc
-	 */
-	vap->va_nlink = 2; /* XXX */
-	vap->va_size = vap->va_nlink * LX_SYSFS_DIRSIZE;
+	vap->va_type = vp->v_type;
+
 	vap->va_mode = 0555;
+	vap->va_uid = 0;
+	vap->va_gid = 0;
+
 	vap->va_fsid = vp->v_vfsp->vfs_dev;
+	vap->va_nodeid = lx_sysfs_inode(lxko);
+
+	vap->va_nlink = 2 + lxko->lxko_nchildren;
+	vap->va_size = vap->va_nlink;
+
+	vap->va_atime = lxsn->lxsn_time;
+	vap->va_mtime = lxsn->lxsn_time;
+	vap->va_ctime = lxsn->lxsn_time;
+
 	vap->va_blksize = DEV_BSIZE;
-	vap->va_uid = 0; /* XXX */
-	vap->va_gid = 0; /* XXX */
-	vap->va_nodeid = 42; /* XXX */
 	vap->va_nblocks = btod(vap->va_size);
 
 	return (0);
@@ -110,7 +116,9 @@ lx_sysfs_lookup(vnode_t *dirvp, char *comp, vnode_t **vpp, pathname_t *pathp,
     int flags, vnode_t *rdir, cred_t *cr, caller_context_t *ct,
     int *direntflags, pathname_t *realpnp)
 {
+	lx_kobject_t *lxko;
 	lx_sysfs_node_t *lxsn = (lx_sysfs_node_t *)dirvp->v_data;
+	zone_t *z = lxsn->lxsn_mount->lxsys_zone;
 	VERIFY(dirvp->v_type == VDIR);
 
 	if (strcmp(comp, "..") == 0) {
@@ -125,6 +133,15 @@ lx_sysfs_lookup(vnode_t *dirvp, char *comp, vnode_t **vpp, pathname_t *pathp,
 		return (0);
 	}
 
+	if ((lxko = lx_kobject_lookup(z, lxsn->lxsn_kobject, comp)) != NULL) {
+		lx_sysfs_node_t *clxsn = lx_sysfs_node_alloc(lxsn->lxsn_mount,
+		    dirvp, B_FALSE, lxko);
+
+		VN_HOLD(clxsn->lxsn_vnode);
+		*vpp = clxsn->lxsn_vnode;
+		return (0);
+	}
+
 	*vpp = NULL;
 	return (ENOENT);
 }
@@ -133,8 +150,10 @@ static int
 lx_sysfs_readdir(vnode_t *dirvp, uio_t *uiop, cred_t *cr, int *eofp,
     caller_context_t *ct, int flags)
 {
-	int error, eof = 0;
 	lx_sysfs_node_t *lxsn = (lx_sysfs_node_t *)dirvp->v_data;
+	zone_t *z = lxsn->lxsn_mount->lxsys_zone;
+	lx_kobject_t *lxko = lxsn->lxsn_kobject;
+	int error, eof = 0;
 	ino64_t pino, ino;
 	gfs_readdir_state_t grst;
 	offset_t diridx;
@@ -156,15 +175,19 @@ lx_sysfs_readdir(vnode_t *dirvp, uio_t *uiop, cred_t *cr, int *eofp,
 		return (error);
 	}
 
-	/*
-	 * Activate the predicate function at least once, which ensures that
-	 * the "." and ".." dirents are emitted.
-	 */
-	if ((error = gfs_readdir_pred(&grst, uiop, &diridx)) == 0) {
-		/*
-		 * XXX We have no more to say at this time.
-		 */
-		eof = 1;
+	while ((error = gfs_readdir_pred(&grst, uiop, &diridx)) == 0) {
+		lx_kobject_t *ch;
+
+		if ((ch = lx_kobject_lookup_index(z, lxko, diridx)) == NULL) {
+			eof = 1;
+		} else {
+			error = gfs_readdir_emit(&grst, uiop, diridx,
+			    lx_sysfs_inode(ch), ch->lxko_name, 0);
+		}
+
+		if (error != 0 || eof != 0) {
+			break;
+		}
 	}
 
 	return (gfs_readdir_fini(&grst, error, eofp, eof));
@@ -208,7 +231,7 @@ lx_sysfs_realvp(vnode_t *vp, vnode_t **vpp, caller_context_t *ct)
 	return (0);
 }
 
-const fs_operation_def_t lx_sysfs_vnodeops_tmpl[] = {
+const fs_operation_def_t lx_sysfs_vnodeops_template[] = {
 	VOPNAME_OPEN,		{ .vop_open = lx_sysfs_open },
 	VOPNAME_CLOSE,		{ .vop_close = lx_sysfs_close },
 	VOPNAME_READ,		{ .vop_read = lx_sysfs_read },

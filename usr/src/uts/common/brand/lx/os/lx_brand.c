@@ -150,6 +150,7 @@
 #include <sys/lx_pid.h>
 #include <sys/lx_futex.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_kobject.h>
 #include <sys/param.h>
 #include <sys/termios.h>
 #include <sys/sunddi.h>
@@ -723,16 +724,32 @@ lx_savecontext32(ucontext32_t *ucp)
 void
 lx_init_brand_data(zone_t *zone)
 {
-	lx_zone_data_t *data;
-	ASSERT(zone->zone_brand == &lx_brand);
-	ASSERT(zone->zone_brand_data == NULL);
-	data = (lx_zone_data_t *)kmem_zalloc(sizeof (lx_zone_data_t), KM_SLEEP);
+	lx_zone_data_t *lxzd;
+	lx_kobject_t *ko_fs;
+
+	VERIFY3P(zone->zone_brand, ==, &lx_brand);
+	VERIFY3P(zone->zone_brand_data, ==, NULL);
+
+	lxzd = kmem_zalloc(sizeof (lx_zone_data_t), KM_SLEEP);
+	zone->zone_brand_data = lxzd;
+
 	/*
 	 * Set the default lxzd_kernel_version to 2.4.
 	 * This can be changed by a call to setattr() during zone boot.
 	 */
-	(void) strlcpy(data->lxzd_kernel_version, "2.4.21", LX_VERS_MAX);
-	zone->zone_brand_data = data;
+	(void) strlcpy(lxzd->lxzd_kernel_version, "2.4.21", LX_VERS_MAX);
+
+	/*
+	 * Set up the kobject hierarchy:
+	 */
+	mutex_init(&lxzd->lxzd_kobject_lock, NULL, MUTEX_DEFAULT, NULL);
+	lxzd->lxzd_kobject_root = lx_kobject_alloc(NULL, "root");
+
+	/*
+	 * Add the "/sys/fs/cgroup" directory.
+	 */
+	ko_fs = lx_kobject_add(zone, NULL, "fs");
+	(void) lx_kobject_add(zone, ko_fs, "cgroup");
 
 	/*
 	 * In Linux, if the init(1) process terminates the system panics.
@@ -744,7 +761,18 @@ lx_init_brand_data(zone_t *zone)
 void
 lx_free_brand_data(zone_t *zone)
 {
-	kmem_free(zone->zone_brand_data, sizeof (lx_zone_data_t));
+	lx_zone_data_t *lxzd = (lx_zone_data_t *)zone->zone_brand_data;
+
+	/*
+	 * Free the kobject hierarchy:
+	 */
+	mutex_enter(&lxzd->lxzd_kobject_lock);
+	lx_kobject_free(lxzd->lxzd_kobject_root);
+	lxzd->lxzd_kobject_root = NULL;
+	mutex_exit(&lxzd->lxzd_kobject_lock);
+	mutex_destroy(&lxzd->lxzd_kobject_lock);
+
+	kmem_free(lxzd, sizeof (*lxzd));
 }
 
 void

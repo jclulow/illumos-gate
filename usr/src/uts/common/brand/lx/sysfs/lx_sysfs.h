@@ -17,6 +17,8 @@
 #define	_LX_SYSFS_H
 
 #include <sys/vnode.h>
+#include <sys/lx_brand.h>
+#include <sys/lx_kobject.h>
 
 /*
  * Definitions for LX brand "sysfs" emulation.
@@ -26,50 +28,36 @@
 extern "C" {
 #endif
 
-/*
- * Fake directory entry size:
- */
-#define	LX_SYSFS_DIRSIZE	16
-
-/*
- * Node types for LX brand /sys directories and files.
- */
-typedef enum lx_sysfs_nodetype {
-	LX_SYSFS_NT_INVALID = 0,
-	LX_SYSFS_NT_ROOT			/* /sys		*/
-} lx_sysfs_nodetype_t;
-#define	LX_SYSFS_NT_MAXTYPEID	LX_SYSFS_NT_ROOT
-
-/*
- * Directory Entry
- */
-typedef struct lx_sysfs_dirent {
-	lx_sysfs_nodetype_t	d_type;
-	char			*d_name;
-} lx_sysfs_dirent_t;
+typedef struct lx_sysfs_node lx_sysfs_node_t;
+typedef struct lx_sysfs_mount lx_sysfs_mount_t;
 
 /*
  * Per-vnode Private Data
  */
-typedef struct lx_sysfs_node {
-	lx_sysfs_nodetype_t	lxsn_type;
+struct lx_sysfs_node {
+	lx_sysfs_mount_t	*lxsn_mount;
 	vnode_t			*lxsn_vnode;
 	vnode_t			*lxsn_parent;
-} lx_sysfs_node_t;
+	timestruc_t		lxsn_time;
+	lx_kobject_t		*lxsn_kobject;
+};
 
 /*
  * Per-filesystem Private Data
  */
-typedef struct lx_sysfs_mount {
+struct lx_sysfs_mount {
 	lx_sysfs_node_t		*lxsys_root;	/* fs root node */
-} lx_sysfs_mount_t;
+	zone_t			*lxsys_zone;
+};
 
 extern vnodeops_t *lx_sysfs_vnodeops;
 
 extern void lx_sysfs_common_init(void);
 extern void lx_sysfs_common_fini(void);
-extern lx_sysfs_node_t *lx_sysfs_node_alloc(vnode_t *, lx_sysfs_nodetype_t);
+extern lx_sysfs_node_t *lx_sysfs_node_alloc(lx_sysfs_mount_t *, vnode_t *,
+    boolean_t, lx_kobject_t *);
 extern void lx_sysfs_node_free(lx_sysfs_node_t *);
+extern ino64_t lx_sysfs_inode(lx_kobject_t *);
 
 #ifdef __cplusplus
 }

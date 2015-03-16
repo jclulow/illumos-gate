@@ -94,6 +94,8 @@ _fini(void)
 		goto done;
 	}
 
+	lx_sysfs_common_fini();
+
 done:
 	return (retval);
 }
@@ -136,17 +138,21 @@ lx_sysfs_init(int fstype, char *name)
 
 	lx_sysfs_dev = makedevice(dev, 0);
 
+	lx_sysfs_common_init();
+
 	return (0);
 }
 
 static int
 lx_sysfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 {
+	zone_t *zone = curzone;
+	lx_kobject_t *lxko = lx_kobject_lookup(zone, NULL, NULL);
 	lx_sysfs_mount_t *lxmnt;
-	zone_t *zone = curproc->p_zone;
+	int error;
 
-	if (secpolicy_fs_mount(cr, mvp, vfsp) != 0) {
-		return (EPERM);
+	if ((error = secpolicy_fs_mount(cr, mvp, vfsp)) != 0) {
+		return (error);
 	}
 
 	if (mvp->v_type != VDIR) {
@@ -162,9 +168,14 @@ lx_sysfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 		return (EBUSY);
 	}
 
+	if (lxko == NULL) {
+		return (EIO);
+	}
+
 	vfs_setresource(vfsp, "lx_sysfs", 0);
 
 	lxmnt = kmem_zalloc(sizeof (*lxmnt), KM_SLEEP);
+	zone_hold(lxmnt->lxsys_zone = zone);
 
 	mutex_enter(&lx_sysfs_mount_lock);
 
@@ -176,6 +187,7 @@ lx_sysfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	    (mvp->v_count > 1 || (mvp->v_flag & VROOT))) {
 		mutex_exit(&mvp->v_lock);
 		mutex_exit(&lx_sysfs_mount_lock);
+		zone_rele(lxmnt->lxsys_zone);
 		kmem_free(lxmnt, sizeof (*lxmnt));
 		return (EBUSY);
 	}
@@ -185,7 +197,8 @@ lx_sysfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	 * Allocate the sysfs node for the root of the mount, using the
 	 * mountpoint (a directory) as the parent vnode:
 	 */
-	lxmnt->lxsys_root = lx_sysfs_node_alloc(mvp, LX_SYSFS_NT_ROOT);
+	lxmnt->lxsys_root = lx_sysfs_node_alloc(lxmnt, mvp, B_TRUE, lxko);
+
 	/*
 	 * Reset vfsp for the root node to this (not the parent) filesystem:
 	 */
@@ -242,6 +255,7 @@ lx_sysfs_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 
 	dnlc_purge_vfsp(vfsp, 0);
 
+	zone_rele(lxmnt->lxsys_zone);
 	kmem_free(lxmnt, sizeof (*lxmnt));
 
 	mutex_exit(&lx_sysfs_mount_lock);

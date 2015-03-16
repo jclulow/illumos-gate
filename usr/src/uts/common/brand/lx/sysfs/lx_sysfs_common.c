@@ -19,6 +19,8 @@
 
 #include <sys/types.h>
 #include <sys/kmem.h>
+#include <sys/brand.h>
+#include <sys/lx_brand.h>
 
 #include "lx_sysfs.h"
 
@@ -56,7 +58,6 @@ lx_sysfs_node_ctor(void *buf, void *un, int kmflags)
 		return (-1);
 	}
 
-	lxsn->lxsn_type = LX_SYSFS_NT_INVALID;
 	lxsn->lxsn_parent = NULL;
 
 	(void) vn_setops(vp, lx_sysfs_vnodeops);
@@ -73,7 +74,6 @@ lx_sysfs_node_dtor(void *buf, void *un)
 	/*
 	 * Verify object cache invariants:
 	 */
-	VERIFY(lxsn->lxsn_type == LX_SYSFS_NT_INVALID);
 	VERIFY(lxsn->lxsn_parent == NULL);
 
 	vn_free(lxsn->lxsn_vnode);
@@ -81,35 +81,32 @@ lx_sysfs_node_dtor(void *buf, void *un)
 }
 
 lx_sysfs_node_t *
-lx_sysfs_node_alloc(vnode_t *dirvp, lx_sysfs_nodetype_t type)
+lx_sysfs_node_alloc(lx_sysfs_mount_t *lxmnt, vnode_t *dirvp,
+    boolean_t is_root, lx_kobject_t *lxko)
 {
 	lx_sysfs_node_t *lxsn;
 	vnode_t *vp;
 
-	VERIFY(type > LX_SYSFS_NT_INVALID && type < LX_SYSFS_NT_MAXTYPEID);
+	VERIFY(lxko != NULL);
 
 	lxsn = kmem_cache_alloc(lx_sysfs_node_cache, KM_SLEEP);
 
-	lxsn->lxsn_type = type;
 	VN_HOLD(dirvp);
 	lxsn->lxsn_parent = dirvp;
+	gethrestime(&lxsn->lxsn_time);
+	lxsn->lxsn_kobject = lxko;
+	lxsn->lxsn_mount = lxmnt;
 
 	/*
 	 * Initialise the vnode.
 	 */
 	VERIFY((vp = lxsn->lxsn_vnode) != NULL);
 	vn_reinit(vp);
+	vp->v_type = VDIR;
 	vp->v_flag = VNOCACHE | VNOMAP | VNOSWAP | VNOMOUNT;
 	vp->v_vfsp = dirvp->v_vfsp;
-
-	switch (type) {
-	case LX_SYSFS_NT_ROOT:
+	if (is_root) {
 		vp->v_flag |= VROOT;
-		vp->v_type = VDIR;
-		break;
-
-	default:
-		VERIFY(0);
 	}
 
 	return (lxsn);
@@ -129,7 +126,16 @@ lx_sysfs_node_free(lx_sysfs_node_t *lxsn)
 		lxsn->lxsn_parent = NULL;
 	}
 
-	lxsn->lxsn_type = LX_SYSFS_NT_INVALID;
+	lxsn->lxsn_time = (timestruc_t){ 0 };
+	lxsn->lxsn_kobject = NULL;
 
 	kmem_cache_free(lx_sysfs_node_cache, lxsn);
+}
+
+ino64_t
+lx_sysfs_inode(lx_kobject_t *lxko)
+{
+	VERIFY(lxko != NULL);
+
+	return ((ino64_t)(lxko->lxko_id + 0x1000));
 }

@@ -62,9 +62,9 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 CFLAGS		+= $(CCVERBOSE)
 
 #
-#	Depends on procfs and lx_brand
+#	Depends on procfs, lx_proc and lx_brand
 #
-LDFLAGS		+= -dy -Nfs/procfs -Nbrand/lx_brand
+LDFLAGS		+= -dy -Nfs/procfs -Nbrand/lx_brand -Nfs/lx_proc
 
 #
 #	Default build targets.

@@ -34,6 +34,7 @@
 #include <sys/types.h>
 #include <sys/cpuvar.h>
 #include <sys/zone.h>
+#include <sys/lx_kobject.h>
 #endif
 
 #ifdef	__cplusplus
@@ -562,6 +563,9 @@ struct lx_lwp_data {
 /* brand specific data */
 typedef struct lx_zone_data {
 	char lxzd_kernel_version[LX_VERS_MAX];
+	kmutex_t lxzd_kobject_lock;
+	lx_kobject_t *lxzd_kobject_root;
+	unsigned long lxko_kobject_nextid;
 } lx_zone_data_t;
 
 #define	BR_CPU_BOUND	0x0001
