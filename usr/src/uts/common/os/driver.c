@@ -127,6 +127,13 @@ devi_probe(dev_info_t *devi)
 	return (rv);
 }
 
+static volatile int whatever = 0;
+
+void
+trip_whatever(void)
+{
+	whatever = 1;
+}
 
 /*
  * devi_attach()
@@ -163,7 +170,22 @@ devi_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 * Call the driver's attach(9e) entrypoint
 	 */
 	i_attach_ctlop(devi, cmd, DDI_PRE, 0);
+
+	char buf[500];
+	if (whatever) {
+		printf("ATTACH ENTRY : %s : %s\n",
+		    ddi_driver_name(devi),
+		    ddi_pathname(devi, buf));
+	}
+
 	error = (*fn)(devi, cmd);
+
+	if (whatever) {
+		printf("ATTACH RETURN %d : %s : %s\n", error,
+		    ddi_driver_name(devi),
+		    ddi_pathname(devi, buf));
+	}
+
 	i_attach_ctlop(devi, cmd, DDI_POST, error);
 
 done:

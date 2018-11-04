@@ -255,16 +255,28 @@ iscsid_init(iscsi_hba_t *ihp)
 	persistent_init();
 	iscsid_threads_create(ihp);
 
-	if (modrootloaded == 1) {
-		/* normal case, load the persistent store */
+	if (modrootloaded) {
+		/*
+		 * The root file system is available so we can load the
+		 * persistent store.
+		 */
 		if (persistent_load() == B_TRUE) {
 			ihp->hba_persistent_loaded = B_TRUE;
 		} else {
 			return (B_FALSE);
 		}
-	}
+	} else {
+		/*
+		 * If the root file system is not yet mounted then we _must_ be
+		 * booting from an iSCSI device.  If not, we want to fail to
+		 * attach so that we can try again after the VFS root is
+		 * available.
+		 */
+		VERIFY(!modrootloaded);
+		if (iscsiboot_prop == NULL) {
+			return (B_FALSE);
+		}
 
-	if ((modrootloaded == 0) && (iscsiboot_prop != NULL)) {
 		if (!iscsid_boot_init_config(ihp)) {
 			rval = B_FALSE;
 		} else {

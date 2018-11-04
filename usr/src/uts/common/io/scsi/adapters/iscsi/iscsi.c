@@ -631,7 +631,7 @@ iscsi_attach_failed2:
 		rval = DDI_FAILURE;
 	}
 
-	if (rval != DDI_SUCCESS) {
+	if (rval != DDI_SUCCESS && modrootloaded) {
 		cmn_err(CE_WARN, "iscsi driver unable to attach "
 		    "hba instance %d", instance);
 	}

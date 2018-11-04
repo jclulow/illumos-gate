@@ -1485,12 +1485,12 @@ postattach_node(dev_info_t *dip)
 	/*
 	 * Plumbing during postattach may fail because of the
 	 * underlying device is not ready. This will fail ndi_devi_config()
-	 * in dv_filldir() and a warning message is issued. The message
-	 * from here will explain what happened
+	 * in dv_filldir().
 	 */
 	if (rval != DACF_SUCCESS) {
-		cmn_err(CE_WARN, "Postattach failed for %s%d\n",
-		    ddi_driver_name(dip), ddi_get_instance(dip));
+		NDI_CONFIG_DEBUG((CE_CONT, "postattach_node: %s%d (%p) "
+		    "postattach failed\n", ddi_driver_name(dip),
+		    ddi_get_instance(dip), (void *)dip));
 		return (DDI_FAILURE);
 	}
 
