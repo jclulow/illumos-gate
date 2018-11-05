@@ -3558,7 +3558,6 @@ walk_devs(dev_info_t *dip, int (*f)(dev_info_t *, void *), void *arg,
  *	They include, but not limited to, _init(9e), _fini(9e), probe(9e),
  *	attach(9e), and detach(9e).
  */
-
 void
 ddi_walk_devs(dev_info_t *dip, int (*f)(dev_info_t *, void *), void *arg)
 {
@@ -3578,7 +3577,6 @@ ddi_walk_devs(dev_info_t *dip, int (*f)(dev_info_t *, void *), void *arg)
  *
  * N.B. The same restrictions from ddi_walk_devs() apply.
  */
-
 void
 e_ddi_walk_driver(char *drv, int (*f)(dev_info_t *, void *), void *arg)
 {
@@ -3605,6 +3603,79 @@ e_ddi_walk_driver(char *drv, int (*f)(dev_info_t *, void *), void *arg)
 		dip = ddi_get_next(dip);
 	}
 	UNLOCK_DEV_OPS(&dnp->dn_lock);
+}
+
+struct earlyboot_walk_block_devices_arg {
+	int (*ebwb_func)(const char *, void *);
+	void *ebwb_arg;
+};
+
+static int
+earlyboot_walk_block_devices_walker(dev_info_t *dip, void *arg)
+{
+	struct earlyboot_walk_block_devices_arg *ebwb = arg;
+
+	if (i_ddi_devi_class(dip) == NULL ||
+	    strcmp(i_ddi_devi_class(dip), /* XXX ESC_DISK */ "disk") != 0) {
+		/*
+		 * We do not think that this is a disk.
+		 */
+		return (DDI_WALK_CONTINUE);
+	}
+
+	for (struct ddi_minor_data *md = DEVI(dip)->devi_minor; md != NULL;
+	    md = md->next) {
+		if (md->ddm_spec_type != S_IFBLK) {
+			/*
+			 * We don't want the raw version of any block device.
+			 */
+			continue;
+		}
+
+		if (strncmp(md->ddm_node_type, DDI_NT_BLOCK,
+		    strlen(DDI_NT_BLOCK)) != 0) {
+			/*
+			 * This minor node does not represent a block device.
+			 */
+			continue;
+		}
+
+		char buf[1000]; /* XXX */
+		if (ebwb->ebwb_func(ddi_pathname_minor(md, buf),
+		    ebwb->ebwb_arg) == 0) {
+			/*
+			 * The consumer does not need any more minor nodes.
+			 */
+			return (DDI_WALK_TERMINATE);
+		}
+	}
+
+	return (DDI_WALK_CONTINUE);
+}
+
+/*
+ * XXX Private routine for ZFS when it needs to attach and scan all of the
+ * block device minors in the system.
+ */
+void
+earlyboot_walk_block_devices(int (*f)(const char *, void *), void *arg)
+{
+	/*
+	 * First, force everything which can attach to do so.  The device class
+	 * is not derived until at least one minor mode is created, so we
+	 * cannot walk the device tree looking for a device class of "disk"
+	 * until everything is attached.
+	 * XXX Decide if this is really the right set of flags or not.
+	 */
+	(void) ndi_devi_config(ddi_root_node(), NDI_CONFIG | NDI_DEVI_PERSIST |
+	    NDI_NO_EVENT | NDI_DRV_CONF_REPROBE);
+
+	struct earlyboot_walk_block_devices_arg ebwb;
+	ebwb.ebwb_func = f;
+	ebwb.ebwb_arg = arg;
+
+	ddi_walk_devs(ddi_root_node(), earlyboot_walk_block_devices_walker,
+	    &ebwb);
 }
 
 /*

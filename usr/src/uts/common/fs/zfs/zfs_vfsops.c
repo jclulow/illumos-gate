@@ -1438,6 +1438,57 @@ zfs_mount_label_policy(vfs_t *vfsp, char *osname)
 	return (retv);
 }
 
+extern int vdev_disk_read_rootlabel(const char *, const char *,
+    nvlist_t **); /* XXX */
+
+static int
+zfs_xxx_callback(const char *path, void *arg)
+{
+	int r;
+	nvlist_t *cfg = NULL;
+	if ((r = vdev_disk_read_rootlabel(path, NULL, &cfg)) != 0) {
+		if (r != ENXIO && r != EIDRM) {
+			printf("ZFS XXX PATH: %s\n", path);
+			printf("  -- FAILED (%d)\n", r);
+			printf("\n");
+		}
+
+		return (1);
+	}
+
+	printf("ZFS XXX PATH: %s\n", path);
+
+	char *name;
+	if (nvlist_lookup_string(cfg, ZPOOL_CONFIG_POOL_NAME, &name) == 0) {
+		printf("  -- POOL NAME: %s\n", name);
+	}
+
+	uint64_t val;
+	if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_POOL_GUID,
+	    &val) == 0) {
+		printf("  -- POOL GUID: %llu\n", (long long unsigned)val);
+	}
+
+	if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_GUID,
+	    &val) == 0) {
+		printf("  -- VDEV GUID: %llu\n", (long long unsigned)val);
+	}
+
+	printf("\n");
+
+	nvlist_free(cfg);
+	return (1);
+}
+
+void
+zfs_xxx(void)
+{
+	extern void earlyboot_walk_block_devices(
+	    int (*f)(const char *, void *), void *arg);
+
+	earlyboot_walk_block_devices(zfs_xxx_callback, NULL);
+}
+
 static int
 zfs_mountroot(vfs_t *vfsp, enum whymountroot why)
 {

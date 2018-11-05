@@ -655,6 +655,7 @@ main(void)
 	process_cache = kmem_cache_create("process_cache", sizeof (proc_t),
 	    0, NULL, NULL, NULL, NULL, NULL, 0);
 
+#if 0
 	/*
 	 * XXX
 	 */
@@ -685,6 +686,21 @@ main(void)
 	ddi_walk_devs(ddi_root_node(), xxx_print_stuff, &xps);
 	printf("XXX walking complete (%u nodes, %u are disks)\n",
 	    xps.xps_count, xps.xps_disk_count);
+
+#endif
+
+	/*
+	 * Try asking ZFS to do things...
+	 * XXX
+	 */
+	printf("XXX loading zfs module...\n");
+	modload("fs", "zfs");
+	printf("XXX calling zfs_xxx...\n");
+
+	extern uintptr_t space_fetch(char *);
+
+	void (*zfs_xxx)(void) = (void *)space_fetch("zfs_xxx");
+	zfs_xxx();
 
 	debug_enter("before mountroot"); /* XXX */
 
