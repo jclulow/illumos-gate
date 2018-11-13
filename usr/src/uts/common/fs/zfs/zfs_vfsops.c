@@ -1499,6 +1499,8 @@ zfs_mountroot(vfs_t *vfsp, enum whymountroot why)
 	vnode_t *vp = NULL;
 	char *zfs_bootfs;
 	char *zfs_devid;
+	char *zfs_bootpool;
+	char *zfs_bootvdev;
 
 	ASSERT(vfsp);
 
@@ -1524,15 +1526,27 @@ zfs_mountroot(vfs_t *vfsp, enum whymountroot why)
 			return (SET_ERROR(EINVAL));
 		}
 		zfs_devid = spa_get_bootprop("diskdevid");
-		error = spa_import_rootpool(rootfs.bo_name, zfs_devid);
-		if (zfs_devid)
-			spa_free_bootprop(zfs_devid);
-		if (error) {
+		/*
+		 * The boot loader may also provide us with the GUID for both
+		 * the pool and the nominated boot vdev:
+		 */
+		zfs_bootpool = spa_get_bootprop("zfs-bootpool");
+		zfs_bootvdev = spa_get_bootprop("zfs-bootvdev");
+
+		error = spa_import_rootpool(rootfs.bo_name, zfs_devid,
+		    zfs_bootpool, zfs_bootvdev);
+
+		spa_free_bootprop(zfs_devid);
+		spa_free_bootprop(zfs_bootvdev);
+		spa_free_bootprop(zfs_bootpool);
+
+		if (error != 0) {
 			spa_free_bootprop(zfs_bootfs);
 			cmn_err(CE_NOTE, "spa_import_rootpool: error %d",
 			    error);
 			return (error);
 		}
+
 		if (error = zfs_parse_bootfs(zfs_bootfs, rootfs.bo_name)) {
 			spa_free_bootprop(zfs_bootfs);
 			cmn_err(CE_NOTE, "zfs_parse_bootfs: error %d",

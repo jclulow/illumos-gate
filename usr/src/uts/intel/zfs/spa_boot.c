@@ -49,6 +49,10 @@ spa_get_bootprop(char *propname)
 void
 spa_free_bootprop(char *value)
 {
+	if (value == NULL) {
+		return;
+	}
+
 	ddi_prop_free(value);
 }
 

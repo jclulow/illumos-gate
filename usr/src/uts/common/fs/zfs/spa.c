@@ -4901,6 +4901,53 @@ spa_alt_rootvdev(vdev_t *vd, vdev_t **avd, uint64_t *txg)
 	}
 }
 
+struct sir_args {
+	const char *sir_pool_guid;
+	const char *sir_vdev_guid;
+	char *sir_devpath;
+};
+
+static int
+spa_import_rootpool_walk(const char *devpath, void *arg)
+{
+	struct sir_args *sir = arg;
+
+	/*
+	 * Attempt to read the label from this block device.
+	 */
+	int r;
+	nvlist_t *cfg = NULL;
+	if ((r = vdev_disk_read_rootlabel((char *)devpath, NULL, &cfg)) != 0) {
+		/*
+		 * Move on to the next one.
+		 */
+		return (1);
+	}
+
+	uint64_t val;
+	char str[100];
+	if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_POOL_GUID, &val) != 0 ||
+	    snprintf(str, sizeof (str), "%llu", (long long unsigned)val) >= sizeof (str) ||
+	    strcmp(str, sir->sir_pool_guid) != 0) {
+		goto out;
+	}
+
+	if (nvlist_lookup_uint64(cfg, ZPOOL_CONFIG_GUID, &val) != 0 ||
+	    snprintf(str, sizeof (str), "%llu", (long long unsigned)val) >= sizeof (str) ||
+	    strcmp(str, sir->sir_vdev_guid) != 0) {
+		goto out;
+	}
+
+	/*
+	 * This path matches!
+	 */
+	sir->sir_devpath = strdup(devpath);
+
+out:
+	nvlist_free(cfg);
+	return (sir->sir_devpath == NULL ? 1 : 0);
+}
+
 /*
  * Import a root pool.
  *
@@ -4914,7 +4961,8 @@ spa_alt_rootvdev(vdev_t *vd, vdev_t **avd, uint64_t *txg)
  *	"/pci@1f,0/ide@d/disk@0,0:a"
  */
 int
-spa_import_rootpool(char *devpath, char *devid)
+spa_import_rootpool(char *devpath, char *devid, const char *pool_guid,
+    const char *vdev_guid)
 {
 	spa_t *spa;
 	vdev_t *rvd, *bvd, *avd = NULL;
@@ -4936,6 +4984,38 @@ spa_import_rootpool(char *devpath, char *devid)
 		}
 	}
 #endif
+
+	if (config == NULL && pool_guid != NULL && vdev_guid != NULL) {
+		/*
+		 * Try to locate the boot device at an alternative /devices
+		 * path.
+		 */
+		struct sir_args sir = {
+			.sir_pool_guid = pool_guid,
+			.sir_vdev_guid = vdev_guid,
+		};
+
+		extern void earlyboot_walk_block_devices(
+		    int (*f)(const char *, void *), void *arg);
+
+		printf("XXX ZFS import FAILED for %s\n", devpath);
+
+		printf("XXX ZFS searching for another /devices path...\n");
+		earlyboot_walk_block_devices(spa_import_rootpool_walk, &sir);
+
+		if (sir.sir_devpath != NULL) {
+			printf("XXX ZFS found another path: %s\n",
+			    sir.sir_devpath);
+
+			config = spa_generate_rootconf(sir.sir_devpath,
+			    NULL, &guid);
+
+			strfree(sir.sir_devpath);
+
+		} else {
+			printf("XXX ZFS did not find another path\n");
+		}
+	}
 	if (config == NULL) {
 		cmn_err(CE_NOTE, "Cannot read the pool label from '%s'",
 		    devpath);

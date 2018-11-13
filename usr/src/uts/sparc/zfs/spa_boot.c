@@ -56,6 +56,10 @@ spa_get_bootprop(char *propname)
 void
 spa_free_bootprop(char *propname)
 {
+	if (propname == NULL) {
+		return;
+	}
+
 	kmem_free(propname, strlen(propname) + 1);
 }
 
