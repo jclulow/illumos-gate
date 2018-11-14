@@ -4998,13 +4998,12 @@ spa_import_rootpool(char *devpath, char *devid, const char *pool_guid,
 		extern void earlyboot_walk_block_devices(
 		    int (*f)(const char *, void *), void *arg);
 
-		printf("XXX ZFS import FAILED for %s\n", devpath);
-
-		printf("XXX ZFS searching for another /devices path...\n");
+		cmn_err(CE_NOTE, "Original /devices path (%s) not available; "
+		    "ZFS is searching for an alternate path...", devpath);
 		earlyboot_walk_block_devices(spa_import_rootpool_walk, &sir);
 
 		if (sir.sir_devpath != NULL) {
-			printf("XXX ZFS found another path: %s\n",
+			cmn_err(CE_NOTE, "ZFS found another path: '%s'",
 			    sir.sir_devpath);
 
 			config = spa_generate_rootconf(sir.sir_devpath,
@@ -5013,7 +5012,7 @@ spa_import_rootpool(char *devpath, char *devid, const char *pool_guid,
 			strfree(sir.sir_devpath);
 
 		} else {
-			printf("XXX ZFS did not find another path\n");
+			cmn_err(CE_NOTE, "ZFS did not find an alternate path");
 		}
 	}
 	if (config == NULL) {
