@@ -6498,10 +6498,6 @@ _init(void)
 		return (error);
 	}
 
-	extern int space_store(char *key, uintptr_t ptr);
-	extern void zfs_xxx(void);
-	(void) space_store("zfs_xxx", (uintptr_t)(void *)&zfs_xxx);
-
 	tsd_create(&zfs_fsyncer_key, NULL);
 	tsd_create(&rrw_tsd_key, rrw_tsd_destroy);
 	tsd_create(&zfs_allow_log_key, zfs_allow_log_destroy);
