@@ -23,6 +23,7 @@
  * Use is subject to license terms.
  * Copyright (c) 2013 Joyent, Inc. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef _SYS_VDEV_DISK_H
@@ -54,11 +55,17 @@ extern int vdev_disk_physio(vdev_t *,
     caddr_t, size_t, uint64_t, int, boolean_t);
 
 /*
- * Since vdev_disk.c is not compiled into libzpool, this function should only be
- * defined in the zfs kernel module.
+ * Since vdev_disk.c is not compiled into libzpool, these functions should only
+ * be defined in the zfs kernel module.
  */
 #ifdef _KERNEL
 extern int vdev_disk_ldi_physio(ldi_handle_t, caddr_t, size_t, uint64_t, int);
+
+extern int vdev_disk_read_rootlabel(const char *, const char *, nvlist_t **);
+
+extern void vdev_disk_preroot_init(void);
+extern void vdev_disk_preroot_fini(void);
+extern const char *vdev_disk_preroot_lookup(uint64_t, uint64_t);
 #endif
 #ifdef	__cplusplus
 }
