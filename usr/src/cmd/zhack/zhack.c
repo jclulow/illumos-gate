@@ -121,11 +121,16 @@ space_delta_cb(dmu_object_type_t bonustype, void *data,
  * Target is the dataset whose pool we want to open.
  */
 static void
-zhack_import(char *target, boolean_t readonly)
+import_pool(const char *target, boolean_t readonly)
 {
 	nvlist_t *config;
-	nvlist_t *props;
+	nvlist_t *pools;
 	int error;
+	char *sepp;
+	spa_t *spa;
+	nvpair_t *elem;
+	nvlist_t *props;
+	const char *name;
 
 	kernel_init(readonly ? FREAD : (FREAD | FWRITE));
 	g_zfs = libzfs_init();
@@ -134,40 +139,68 @@ zhack_import(char *target, boolean_t readonly)
 	dmu_objset_register_type(DMU_OST_ZFS, space_delta_cb);
 
 	g_readonly = readonly;
+
+	/*
+	 * If we only want readonly access, it's OK if we find
+	 * a potentially-active (ie, imported into the kernel) pool from the
+	 * default cachefile.
+	 */
+	if (readonly && spa_open(target, &spa, FTAG) == 0) {
+		spa_close(spa, FTAG);
+		return;
+	}
+
 	g_importargs.unique = B_TRUE;
 	g_importargs.can_be_active = readonly;
 	g_pool = strdup(target);
+	if ((sepp = strpbrk(g_pool, "/@")) != NULL)
+		*sepp = '\0';
+	g_importargs.poolname = g_pool;
+	pools = zpool_search_import(g_zfs, &g_importargs);
 
-	error = zpool_tryimport(g_zfs, target, &config, &g_importargs);
-	if (error)
-		fatal(NULL, FTAG, "cannot import '%s': %s", target,
-		    libzfs_error_description(g_zfs));
+	if (nvlist_empty(pools)) {
+		if (!g_importargs.can_be_active) {
+			g_importargs.can_be_active = B_TRUE;
+			if (zpool_search_import(g_zfs, &g_importargs) != NULL ||
+			    spa_open(target, &spa, FTAG) == 0) {
+				fatal(spa, FTAG, "cannot import '%s': pool is "
+				    "active; run " "\"zpool export %s\" "
+				    "first\n", g_pool, g_pool);
+			}
+		}
+
+		fatal(NULL, FTAG, "cannot import '%s': no such pool "
+		    "available\n", g_pool);
+	}
+
+	elem = nvlist_next_nvpair(pools, NULL);
+	name = nvpair_name(elem);
+	verify(nvpair_value_nvlist(elem, &config) == 0);
 
 	props = NULL;
 	if (readonly) {
-		VERIFY(nvlist_alloc(&props, NV_UNIQUE_NAME, 0) == 0);
-		VERIFY(nvlist_add_uint64(props,
+		verify(nvlist_alloc(&props, NV_UNIQUE_NAME, 0) == 0);
+		verify(nvlist_add_uint64(props,
 		    zpool_prop_to_name(ZPOOL_PROP_READONLY), 1) == 0);
 	}
 
 	zfeature_checks_disable = B_TRUE;
-	error = spa_import(target, config, props,
-	    (readonly ?  ZFS_IMPORT_SKIP_MMP : ZFS_IMPORT_NORMAL));
+	error = spa_import(name, config, props, ZFS_IMPORT_NORMAL);
 	zfeature_checks_disable = B_FALSE;
 	if (error == EEXIST)
 		error = 0;
 
 	if (error)
-		fatal(NULL, FTAG, "can't import '%s': %s", target,
+		fatal(NULL, FTAG, "can't import '%s': %s", name,
 		    strerror(error));
 }
 
 static void
-zhack_spa_open(char *target, boolean_t readonly, void *tag, spa_t **spa)
+zhack_spa_open(const char *target, boolean_t readonly, void *tag, spa_t **spa)
 {
 	int err;
 
-	zhack_import(target, readonly);
+	import_pool(target, readonly);
 
 	zfeature_checks_disable = B_TRUE;
 	err = spa_open(target, spa, tag);
