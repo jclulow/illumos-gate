@@ -13,7 +13,7 @@
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 # Copyright 2014 Nexenta Systems, Inc. All rights reserved.
-# Copyright 2019, Joyent, Inc.
+# Copyright 2019 Joyent, Inc.
 #
 
 [DEFAULT]
@@ -38,6 +38,10 @@ outputdir = /var/tmp/test_results
 tests = ['json_00_blank', 'json_01_boolean', 'json_02_numbers',
     'json_03_empty_arrays', 'json_04_number_arrays', 'json_05_strings',
     'json_06_nested', 'json_07_nested_arrays']
+
+[/opt/util-tests/tests/strings]
+tests = ['strings_test0', 'strings_test1', 'strings_test2', 'strings_test3',
+    'strings_test4', 'strings_testpath']
 
 [/opt/util-tests/tests/grep_test]
 [/opt/util-tests/tests/date_test]
