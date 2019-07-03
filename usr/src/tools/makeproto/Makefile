@@ -14,7 +14,8 @@
 #
 
 PROG =		makeproto
-OBJS =		makeproto.o manifest.o strlist.o strpath.o strmap.o custr.o
+OBJS =		makeproto.o manifest.o strlist.o strpath.o strmap.o strset.o \
+		custr.o
 
 include ../Makefile.tools
 

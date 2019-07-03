@@ -180,7 +180,7 @@ manifest_read(const char *path, manifest_ent_cb_t *mecb, void *arg)
 			continue;
 
 		case MECB_CANCEL:
-			e = EINTR;
+			e = ECANCELED;
 			goto out;
 
 		case MECB_DONE:

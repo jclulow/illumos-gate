@@ -10,7 +10,9 @@
 #include <sys/avl.h>
 
 #include <strpath.h>
+#include <strset.h>
 #include <strmap.h>
+#include <strlist.h>
 #include "manifest.h"
 
 
@@ -31,6 +33,7 @@ typedef struct makeproto {
 	char			*mkp_proto;
 	char			mkp_errstr[1024];
 	avl_tree_t		mkp_targets;
+	strset_t		*mkp_tags;
 	strmap_t		*mkp_macros;
 } makeproto_t;
 
@@ -112,6 +115,7 @@ populate_list(const char *line, strlist_t *sl, void *arg)
 	makeproto_t *mkp = arg;
 	uint_t n = strlist_contig_count(sl);
 	targ_type_t tt;
+	uint_t nfields;
 
 	if (n < 1) {
 		return (MECB_NEXT);
@@ -119,17 +123,58 @@ populate_list(const char *line, strlist_t *sl, void *arg)
 
 	if (strcmp(strlist_get(sl, 0), "d") == 0) {
 		tt = TARG_DIRECTORY;
-		if (n < 2) {
-			goto invalid;
-		}
-
+		nfields = 2;
 	} else if (strcmp(strlist_get(sl, 0), "l") == 0) {
 		tt = TARG_SYMLINK;
-		if (n < 3) {
-			goto invalid;
-		}
+		nfields = 3;
 	} else {
 		goto invalid;
+	}
+
+	if (n < nfields) {
+		goto invalid;
+	}
+
+	/*
+	 * If there are more fields in the line than we expect for this type,
+	 * the remaining fields represent tags for which this entry is valid.
+	 * The absence of any tags means this entry is always valid.
+	 */
+	if (n > nfields) {
+		bool found = false;
+
+		for (uint_t i = nfields; i < n; i++) {
+			const char *tag = strlist_get(sl, i);
+
+			/*
+			 * We require tags to be prefixed with @ in an attempt
+			 * to avoid their being confused with arguments to an
+			 * entry of the wrong type; e.g., a directory (d) entry
+			 * that should have been a symlink (l) entry.
+			 */
+			if (tag[0] != '@') {
+				(void) snprintf(mkp->mkp_errstr,
+				    sizeof (mkp->mkp_errstr),
+				    "invalid tag (no @) in manifest: \"%s\"",
+				    tag, line);
+				return (MECB_CANCEL);
+			}
+
+			/*
+			 * Skip the '@' prefix when checking whether the tag is
+			 * active.
+			 */
+			tag++;
+
+			if (strset_contains(mkp->mkp_tags, tag)) {
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			return (MECB_NEXT);
+		}
 	}
 
 	targ_t *targ;
@@ -195,7 +240,7 @@ parse_opts(makeproto_t *mkp, int argc, char *argv[])
 {
 	int c;
 
-	while ((c = getopt(argc, argv, ":f:m:o:")) != -1) {
+	while ((c = getopt(argc, argv, ":f:m:o:t:")) != -1) {
 		switch (c) {
 		case 'f':
 			copystring(optarg, &mkp->mkp_manifest);
@@ -205,6 +250,11 @@ parse_opts(makeproto_t *mkp, int argc, char *argv[])
 			break;
 		case 'o':
 			copystring(optarg, &mkp->mkp_proto);
+			break;
+		case 't':
+			if (strset_add(mkp->mkp_tags, optarg) != 0) {
+				err(1, "strset_add");
+			}
 			break;
 		case ':':
 			(void) fprintf(stderr, "Option -%c requires an "
@@ -224,19 +274,45 @@ parse_opts(makeproto_t *mkp, int argc, char *argv[])
 	}
 }
 
+void
+makeproto_init(makeproto_t *mkp)
+{
+	avl_create(&mkp->mkp_targets, targets_compar, sizeof (targ_t),
+	    offsetof(targ_t, targ_node));
+
+	if (strmap_alloc(&mkp->mkp_macros, STRMAP_F_UNIQUE_NAMES) != 0) {
+		err(1, "strmap_alloc");
+	}
+
+	if (strset_alloc(&mkp->mkp_tags, STRSET_IGNORE_DUPLICATES) != 0) {
+		err(1, "strset_alloc");
+	}
+}
+
+void
+makeproto_fini(makeproto_t *mkp)
+{
+	targ_t *t;
+	void *c = NULL;
+
+	while ((t = avl_destroy_nodes(&mkp->mkp_targets, &c)) != NULL) {
+		custr_free(t->targ_path);
+		custr_free(t->targ_target);
+		free(t);
+	}
+	avl_destroy(&mkp->mkp_targets);
+
+	strmap_free(mkp->mkp_macros);
+	strset_free(mkp->mkp_tags);
+}
+
 int
 main(int argc, char *argv[])
 {
 	makeproto_t mkp;
 	bzero(&mkp, sizeof (mkp));
 
-	avl_create(&mkp.mkp_targets, targets_compar, sizeof (targ_t),
-	    offsetof(targ_t, targ_node));
-
-	if (strmap_alloc(&mkp.mkp_macros, STRMAP_F_UNIQUE_NAMES) != 0) {
-		err(1, "strmap_alloc");
-	}
-
+	makeproto_init(&mkp);
 	parse_opts(&mkp, argc, argv);
 
 	fprintf(stderr, "manifest path: %s\n", mkp.mkp_manifest);
@@ -279,6 +355,7 @@ main(int argc, char *argv[])
 	}
 
 	custr_free(path);
+	makeproto_fini(&mkp);
 
 	return (0);
 }
