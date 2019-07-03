@@ -19,17 +19,17 @@ typedef enum targ_type {
 } targ_type_t;
 
 typedef struct targ {
-	targ_type_t targ_type;
-	char *targ_path;
-	char *targ_target;
-	avl_node_t targ_node;
+	targ_type_t		targ_type;
+	char			*targ_path;
+	char			*targ_target;	/* valid for TARG_SYMLINK */
+	avl_node_t		targ_node;
 } targ_t;
 
 typedef struct makeproto {
-	char *mkp_manifest;
-	char *mkp_proto;
-	char mkp_errstr[1024];
-	avl_tree_t mkp_targets;
+	char			*mkp_manifest;
+	char			*mkp_proto;
+	char			mkp_errstr[1024];
+	avl_tree_t		mkp_targets;
 } makeproto_t;
 
 static int
@@ -205,7 +205,12 @@ main(int argc, char *argv[])
 	uint_t n = 0;
 	for (targ_t *t = avl_first(&mkp.mkp_targets); t != NULL;
 	    t = AVL_NEXT(&mkp.mkp_targets, t)) {
-		printf("[%u] \"%s\"\n", n++, t->targ_path);
+		if (t->targ_type == TARG_DIRECTORY) {
+			printf("[%u] mkdir \"%s\"\n", n++, t->targ_path);
+		} else {
+			printf("[%u] link \"%s\" -> \"%s\"\n", n++,
+			    t->targ_path, t->targ_target);
+		}
 	}
 
 	return (0);
