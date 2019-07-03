@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <sys/debug.h>
 #include <libcustr.h>
 
 #include "manifest.h"
@@ -114,7 +115,7 @@ out:
 }
 
 int
-read_manifest_file(const char *path, manifest_ent_cb_t *mecb, void *arg)
+manifest_read(const char *path, manifest_ent_cb_t *mecb, void *arg)
 {
 	FILE *mf = NULL;
 	char *line = NULL;
@@ -196,4 +197,117 @@ out:
 	strlist_free(sl);
 	errno = e;
 	return (r);
+}
+
+int
+manifest_macro_expand(const char *input, strmap_t *macros, custr_t *out)
+{
+	const char *c = input;
+	int e = 0;
+	enum {
+		ST_REST,
+		ST_DOLLAR,
+		ST_MACRO,
+	} state = ST_REST;
+	custr_t *macro = NULL;
+
+	custr_reset(out);
+
+	if (custr_alloc(&macro) != 0) {
+		e = errno;
+		goto out;
+	}
+
+	for (;;) {
+		char cc = *c;
+
+		switch (state) {
+		case ST_REST:
+			if (cc == '\0') {
+				goto out;
+
+			} else if (cc == '$') {
+				state = ST_DOLLAR;
+
+			} else {
+				if (custr_appendc(out, cc) != 0) {
+					e = errno;
+					goto out;
+				}
+			}
+			c++;
+			continue;
+
+		case ST_DOLLAR:
+			if (cc == '$') {
+				/*
+				 * An escaped literal dollar sign.
+				 */
+				if (custr_appendc(out, cc) != 0) {
+					e = errno;
+					goto out;
+				}
+
+			} else if (cc == '(') {
+				/*
+				 * The start of a macro to expand.
+				 */
+				state = ST_MACRO;
+				custr_reset(macro);
+
+			} else {
+				/*
+				 * Fail to expand input that is not
+				 * well-formed.
+				 */
+				e = EPROTO;
+				goto out;
+			}
+			c++;
+			continue;
+
+		case ST_MACRO:
+			if (cc == '\0') {
+				e = EPROTO;
+				goto out;
+
+			} else if (cc == '$' || cc == '(') {
+				/*
+				 * We do not support nested macro expansion
+				 * at this time.
+				 */
+				e = EPROTO;
+				goto out;
+
+			} else if (cc == ')') {
+				/*
+				 * Look up the macro name we have collected.
+				 */
+				const char *val = strmap_get(macros,
+				    custr_cstr(macro));
+
+				if (val == NULL) {
+					VERIFY3S(errno, ==, ENOENT);
+				} else if (custr_append(out, val) != 0) {
+					e = errno;
+					goto out;
+				}
+
+				state = ST_REST;
+
+			} else {
+				if (custr_appendc(macro, cc) != 0) {
+					e = errno;
+					goto out;
+				}
+			}
+			c++;
+			continue;
+		}
+	}
+
+out:
+	custr_free(macro);
+	errno = e;
+	return (e == 0 ? 0 : -1);
 }

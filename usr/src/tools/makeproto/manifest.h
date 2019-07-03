@@ -20,7 +20,9 @@
  * XXX Describe the purpose of the file here.
  */
 
+#include <libcustr.h>
 #include <strlist.h>
+#include <strmap.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,7 +36,8 @@ typedef enum me_cb_ret {
 
 typedef me_cb_ret_t manifest_ent_cb_t(const char *, strlist_t *, void *);
 
-extern int read_manifest_file(const char *, manifest_ent_cb_t *, void *);
+extern int manifest_read(const char *, manifest_ent_cb_t *, void *);
+extern int manifest_macro_expand(const char *, strmap_t *, custr_t *);
 
 #ifdef __cplusplus
 }
