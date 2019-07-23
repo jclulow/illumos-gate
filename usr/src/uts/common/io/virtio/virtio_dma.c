@@ -85,8 +85,8 @@ virtio_dma_cookie_size(virtio_dma_t *vidma, uint_t cookie)
 }
 
 int
-virtio_dma_init_early(virtio_t *vio, virtio_dma_t *vidma, ddi_dma_attr_t *attr,
-    int kmflags)
+virtio_dma_init_handle(virtio_t *vio, virtio_dma_t *vidma,
+    const ddi_dma_attr_t *attr, int kmflags)
 {
 	int r;
 	dev_info_t *dip = vio->vio_dip;
@@ -103,8 +103,8 @@ virtio_dma_init_early(virtio_t *vio, virtio_dma_t *vidma, ddi_dma_attr_t *attr,
 	 */
 	VERIFY0(vidma->vidma_level);
 
-	if ((r = ddi_dma_alloc_handle(dip, attr, dma_wait, NULL,
-	    &vidma->vidma_dma_handle)) != DDI_SUCCESS) {
+	if ((r = ddi_dma_alloc_handle(dip, (ddi_dma_attr_t *)attr, dma_wait,
+	    NULL, &vidma->vidma_dma_handle)) != DDI_SUCCESS) {
 		dev_err(dip, CE_WARN, "DMA handle allocation failed (%x)", r);
 		goto fail;
 	}
@@ -119,7 +119,7 @@ fail:
 
 int
 virtio_dma_init(virtio_t *vio, virtio_dma_t *vidma, size_t sz,
-    ddi_dma_attr_t *attr, int dmaflags, int kmflags)
+    const ddi_dma_attr_t *attr, int dmaflags, int kmflags)
 {
 	int r;
 	dev_info_t *dip = vio->vio_dip;
@@ -129,7 +129,7 @@ virtio_dma_init(virtio_t *vio, virtio_dma_t *vidma, size_t sz,
 	int (*dma_wait)(caddr_t) = (kmflags == KM_SLEEP) ? DDI_DMA_SLEEP :
 	    DDI_DMA_DONTWAIT;
 
-	if (virtio_dma_init_early(vio, vidma, attr, kmflags) !=
+	if (virtio_dma_init_handle(vio, vidma, attr, kmflags) !=
 	    DDI_SUCCESS) {
 		goto fail;
 	}
@@ -143,6 +143,12 @@ virtio_dma_init(virtio_t *vio, virtio_dma_t *vidma, size_t sz,
 		goto fail;
 	}
 	vidma->vidma_level |= VIRTIO_DMALEVEL_MEMORY_ALLOC;
+
+	/*
+	 * Zero the memory to avoid accidental exposure of arbitrary kernel
+	 * memory.
+	 */
+	bzero(va, vidma->vidma_real_size);
 
 	if (virtio_dma_bind(vidma, va, sz, dmaflags, kmflags) != DDI_SUCCESS) {
 		goto fail;
@@ -204,8 +210,8 @@ fail:
 }
 
 virtio_dma_t *
-virtio_dma_alloc(virtio_t *vio, size_t sz, ddi_dma_attr_t *attr, int dmaflags,
-    int kmflags)
+virtio_dma_alloc(virtio_t *vio, size_t sz, const ddi_dma_attr_t *attr,
+    int dmaflags, int kmflags)
 {
 	virtio_dma_t *vidma;
 
@@ -223,7 +229,7 @@ virtio_dma_alloc(virtio_t *vio, size_t sz, ddi_dma_attr_t *attr, int dmaflags,
 }
 
 virtio_dma_t *
-virtio_dma_alloc_nomem(virtio_t *vio, ddi_dma_attr_t *attr, int kmflags)
+virtio_dma_alloc_nomem(virtio_t *vio, const ddi_dma_attr_t *attr, int kmflags)
 {
 	virtio_dma_t *vidma;
 
@@ -231,7 +237,7 @@ virtio_dma_alloc_nomem(virtio_t *vio, ddi_dma_attr_t *attr, int kmflags)
 		return (NULL);
 	}
 
-	if (virtio_dma_init_early(vio, vidma, attr, kmflags) != DDI_SUCCESS) {
+	if (virtio_dma_init_handle(vio, vidma, attr, kmflags) != DDI_SUCCESS) {
 		kmem_free(vidma, sizeof (*vidma));
 		return (NULL);
 	}

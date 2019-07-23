@@ -87,7 +87,7 @@ static void virtio_queue_free(virtio_queue_t *);
  * virtqueue memory.
  */
 ddi_device_acc_attr_t virtio_acc_attr = {
-	.devacc_attr_version =		DDI_DEVICE_ATTR_V0,
+	.devacc_attr_version =		DDI_DEVICE_ATTR_V1,
 	.devacc_attr_endian_flags =	DDI_NEVERSWAP_ACC,
 	.devacc_attr_dataorder =	DDI_STORECACHING_OK_ACC,
 	.devacc_attr_access =		DDI_DEFAULT_ACC
@@ -175,7 +175,7 @@ virtio_put32(virtio_t *vio, uintptr_t offset, uint32_t value)
 	ddi_put32(vio->vio_barh, (uint32_t *)(vio->vio_bar + offset), value);
 }
 
-int
+void
 virtio_fini(virtio_t *vio, boolean_t failed)
 {
 	mutex_enter(&vio->vio_mutex);
@@ -221,8 +221,6 @@ virtio_fini(virtio_t *vio, boolean_t failed)
 	mutex_destroy(&vio->vio_mutex);
 
 	kmem_free(vio, sizeof (*vio));
-
-	return (DDI_SUCCESS);
 }
 
 /*
@@ -266,6 +264,18 @@ virtio_init(dev_info_t *dip, uint64_t driver_features, boolean_t allow_indirect)
 	vio->vio_dip = dip;
 
 	/*
+	 * Map PCI BAR0 for legacy device access.
+	 */
+	if ((r = ddi_regs_map_setup(dip, VIRTIO_LEGACY_PCI_BAR0,
+	    (caddr_t *)&vio->vio_bar, 0, 0, &virtio_acc_attr,
+	    &vio->vio_barh)) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "ddi_regs_map_setup failure (%d)", r);
+		kmem_free(vio, sizeof (*vio));
+		return (NULL);
+	}
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_REGS;
+
+	/*
 	 * We initialise the mutex without an interrupt priority to ease the
 	 * implementation of some of the configuration space access routines.
 	 * Drivers using the virtio framework MUST make a call to
@@ -277,17 +287,6 @@ virtio_init(dev_info_t *dip, uint64_t driver_features, boolean_t allow_indirect)
 
 	list_create(&vio->vio_queues, sizeof (virtio_queue_t),
 	    offsetof(virtio_queue_t, viq_link));
-
-	/*
-	 * Map PCI BAR0 for legacy device access.
-	 */
-	if ((r = ddi_regs_map_setup(dip, 1, (caddr_t *)&vio->vio_bar, 0, 0,
-	    &virtio_acc_attr, &vio->vio_barh)) != DDI_SUCCESS) {
-		dev_err(dip, CE_WARN, "ddi_regs_map_setup failure (%d)", r);
-		kmem_free(vio, sizeof (*vio));
-		return (NULL);
-	}
-	vio->vio_initlevel |= VIRTIO_INITLEVEL_REGS;
 
 	/*
 	 * Legacy virtio devices require a few common steps before we can
@@ -508,12 +507,11 @@ virtio_dev_get64(virtio_t *vio, uintptr_t offset)
 {
 	mutex_enter(&vio->vio_mutex);
 	/*
-	 * In some hypervisors, this BAR is an I/O space rather than a memory
-	 * space where we do not presently support 64-bit reads and writes.  In
-	 * legacy devices, there is no generation number to use to determine if
-	 * configuration may have changed half-way through a read.  We need to
-	 * continue to read both halves of the value until we read the same
-	 * value at least twice.
+	 * On at least some systems, a 64-bit read or write to this BAR is not
+	 * possible.  For legacy devices, there is no generation number to use
+	 * to determine if configuration may have changed half-way through a
+	 * read.  We need to continue to read both halves of the value until we
+	 * read the same value at least twice.
 	 */
 	uintptr_t o_lo = vio->vio_config_offset + offset;
 	uintptr_t o_hi = o_lo + 4;
@@ -662,7 +660,12 @@ virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
 	 */
 	(void) snprintf(space_name, sizeof (space_name), "%s%d_vq_%s",
 	    ddi_get_name(vio->vio_dip), ddi_get_instance(vio->vio_dip), name);
-	viq->viq_descmap = id_space_create(space_name, 0, qsz);
+	if ((viq->viq_descmap = id_space_create(space_name, 0, qsz)) == NULL) {
+		dev_err(vio->vio_dip, CE_WARN, "could not allocate descriptor "
+		    "ID space");
+		virtio_queue_free(viq);
+		return (NULL);
+	}
 
 	/*
 	 * For legacy devices, memory for the queue has a strict layout
@@ -685,12 +688,13 @@ virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
 		virtio_queue_free(viq);
 		return (NULL);
 	}
-	bzero(virtio_dma_va(&viq->viq_dma, 0), virtio_dma_size(&viq->viq_dma));
 
 	/*
-	 * NOTE: If the layout of this memory changes, the
-	 * VIRTQ_DMA_SYNC_FORDEV() and VIRTQ_DMA_SYNC_FORKERNEL() macros
-	 * must be kept in sync.
+	 * NOTE: The viq_dma_* members below are used by
+	 * VIRTQ_DMA_SYNC_FORDEV() and VIRTQ_DMA_SYNC_FORKERNEL() to calculate
+	 * offsets into the DMA allocation for partial synchronisation.  If the
+	 * ordering of, or relationship between, these pointers changes, the
+	 * macros must be kept in sync.
 	 */
 	viq->viq_dma_descs = virtio_dma_va(&viq->viq_dma, 0);
 	viq->viq_dma_driver = virtio_dma_va(&viq->viq_dma, sz_descs);
@@ -754,7 +758,9 @@ virtio_queue_free(virtio_queue_t *viq)
 
 	VERIFY(avl_is_empty(&viq->viq_inflight));
 	avl_destroy(&viq->viq_inflight);
-	id_space_destroy(viq->viq_descmap);
+	if (viq->viq_descmap != NULL) {
+		id_space_destroy(viq->viq_descmap);
+	}
 
 	mutex_exit(&viq->viq_mutex);
 	mutex_destroy(&viq->viq_mutex);
@@ -785,6 +791,7 @@ virtio_queue_complete(virtio_queue_t *viq, uint_t index)
 	virtio_chain_t *vic;
 
 	virtio_chain_t search;
+	bzero(&search, sizeof (search));
 	search.vic_head = index;
 
 	if ((vic = avl_find(&viq->viq_inflight, &search, NULL)) == NULL) {
@@ -836,9 +843,9 @@ virtio_queue_poll(virtio_queue_t *viq)
 	}
 
 	/*
-	 * We need to ensure that all reads from the descriptor and any
-	 * referenced memory occur after we have read the descriptor index
-	 * value.
+	 * We need to ensure that all reads from the descriptor (vqde_ring[])
+	 * and any referenced memory by the descriptor occur after we have read
+	 * the descriptor index value above (vqde_index).
 	 */
 	membar_consumer();
 
@@ -1067,6 +1074,8 @@ virtio_chain_append_impl(virtio_chain_t *vic, uint64_t pa, size_t len,
     uint16_t flags)
 {
 	virtio_queue_t *viq = vic->vic_vq;
+	virtio_vq_desc_t *vqd;
+	id_t index;
 
 	/*
 	 * We're modifying the queue-wide descriptor list so make sure we have
@@ -1082,11 +1091,9 @@ virtio_chain_append_impl(virtio_chain_t *vic, uint64_t pa, size_t len,
 			return (DDI_FAILURE);
 		}
 
-		virtio_vq_desc_t *vqd = virtio_dma_va(&vic->vic_indirect_dma,
-		    0);
+		vqd = virtio_dma_va(&vic->vic_indirect_dma, 0);
 
-		uint16_t index = vic->vic_indirect_used++;
-		if (index > 0) {
+		if ((index = vic->vic_indirect_used++) > 0) {
 			/*
 			 * Chain the current last indirect descriptor to the
 			 * new one.
@@ -1094,11 +1101,6 @@ virtio_chain_append_impl(virtio_chain_t *vic, uint64_t pa, size_t len,
 			vqd[index - 1].vqd_flags |= VIRTQ_DESC_F_NEXT;
 			vqd[index - 1].vqd_next = index;
 		}
-
-		vqd[index].vqd_addr = pa;
-		vqd[index].vqd_len = len;
-		vqd[index].vqd_flags = flags;
-		vqd[index].vqd_next = 0;
 
 	} else {
 		/*
@@ -1108,12 +1110,11 @@ virtio_chain_append_impl(virtio_chain_t *vic, uint64_t pa, size_t len,
 			return (DDI_FAILURE);
 		}
 
-		id_t index;
 		if ((index = id_alloc_nosleep(viq->viq_descmap)) == -1) {
 			return (DDI_FAILURE);
 		}
 
-		virtio_vq_desc_t *vqd = virtio_dma_va(&viq->viq_dma, 0);
+		vqd = virtio_dma_va(&viq->viq_dma, 0);
 
 		if (vic->vic_direct_used > 0) {
 			/*
@@ -1126,12 +1127,12 @@ virtio_chain_append_impl(virtio_chain_t *vic, uint64_t pa, size_t len,
 			vqd[p].vqd_next = index;
 		}
 		vic->vic_direct[vic->vic_direct_used++] = index;
-
-		vqd[index].vqd_addr = pa;
-		vqd[index].vqd_len = len;
-		vqd[index].vqd_flags = flags;
-		vqd[index].vqd_next = 0;
 	}
+
+	vqd[index].vqd_addr = pa;
+	vqd[index].vqd_len = len;
+	vqd[index].vqd_flags = flags;
+	vqd[index].vqd_next = 0;
 
 	return (DDI_SUCCESS);
 }
@@ -1168,8 +1169,9 @@ virtio_queue_flush_locked(virtio_queue_t *viq)
 	VERIFY(MUTEX_HELD(&viq->viq_mutex));
 
 	/*
-	 * Make sure our writes to the descriptors are visible to the device
-	 * and then update the ring pointer.
+	 * Make sure any writes we have just made to the descriptors
+	 * (vqdr_ring[]) are visible to the device before we update the ring
+	 * pointer (vqdr_index).
 	 */
 	membar_producer();
 	viq->viq_dma_driver->vqdr_index = viq->viq_driver_index;
@@ -1207,8 +1209,8 @@ virtio_chain_submit(virtio_chain_t *vic, boolean_t flush)
 		VERIFY3U(vic->vic_direct_used, ==, 1);
 
 		/*
-		 * This is an indirect descriptor queue.  The length of the
-		 * descriptor must be set to reflect the number of occupied
+		 * This is an indirect descriptor queue.  The length in bytes
+		 * of the descriptor must extend to cover the populated
 		 * indirect descriptor entries.
 		 */
 		vqd[vic->vic_direct[0]].vqd_len =
@@ -1510,23 +1512,52 @@ virtio_interrupts_teardown(virtio_t *vio)
 
 	virtio_interrupts_disable_locked(vio);
 
-	uint_t n = 0;
-	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
-	    viq = list_next(&vio->vio_queues, viq)) {
-		if (!viq->viq_handler_added) {
-			continue;
+	if (vio->vio_interrupt_type == DDI_INTR_TYPE_FIXED) {
+		/*
+		 * Remove the multiplexing interrupt handler.
+		 */
+		if (vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED) {
+			int r;
+
+			VERIFY3S(vio->vio_ninterrupts, ==, 1);
+
+			if ((r = ddi_intr_remove_handler(
+			    vio->vio_interrupts[0])) != DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN, "removing "
+				    "shared interrupt handler failed (%d)", r);
+			}
 		}
+	} else {
+		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
+		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
+			int r;
 
-		(void) ddi_intr_remove_handler(
-		    vio->vio_interrupts[viq->viq_handler_index]);
+			if (!viq->viq_handler_added) {
+				continue;
+			}
 
-		viq->viq_handler_added = B_FALSE;
+			if ((r = ddi_intr_remove_handler(
+			    vio->vio_interrupts[viq->viq_handler_index])) !=
+			    DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN, "removing "
+				    "interrupt handler (%s) failed (%d)",
+				    viq->viq_name, r);
+			}
+
+			viq->viq_handler_added = B_FALSE;
+		}
 	}
 	vio->vio_initlevel &= ~VIRTIO_INITLEVEL_INT_ADDED;
 
 	if (vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ALLOC) {
 		for (int i = 0; i < vio->vio_ninterrupts; i++) {
-			(void) ddi_intr_free(vio->vio_interrupts[i]);
+			int r;
+
+			if ((r = ddi_intr_free(vio->vio_interrupts[i])) !=
+			    DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN, "freeing "
+				    "interrupt %u failed (%d)", i, r);
+			}
 		}
 		kmem_free(vio->vio_interrupts,
 		    sizeof (ddi_intr_handle_t) * vio->vio_ninterrupts);

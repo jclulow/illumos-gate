@@ -216,13 +216,20 @@ struct virtio_net_hdr {
 
 /*
  * The virtio net header and the first buffer segment share the same DMA
- * allocation.  The header is 10 bytes; in case it helps the host, we'll round
- * up to a multiple of 32 bytes for the start of the data area.
+ * allocation.  We round up the virtio header size to a multiple of 4 and add 2
+ * bytes so that the IP header, which starts immediately after the 14 or 18
+ * byte Ethernet header, is then correctly aligned:
+ *
+ *   0                10      16   18                              32/36
+ *   | virtio_net_hdr | %4==0 | +2 | Ethernet header (14/18 bytes) | IPv4 ...
+ *
+ * Note that for this to work correctly, the DMA allocation must also be 4 byte
+ * aligned.
  */
-#define	VIOIF_HEADER_ALIGN		32
-#define	VIOIF_HEADER_SKIP		P2ROUNDUP( \
+#define	VIOIF_HEADER_ALIGN		4
+#define	VIOIF_HEADER_SKIP		(P2ROUNDUP( \
 					    sizeof (struct virtio_net_hdr), \
-					    VIOIF_HEADER_ALIGN)
+					    VIOIF_HEADER_ALIGN) + 2)
 
 /*
  * Given we are not negotiating VIRTIO_NET_F_MRG_RXBUF, the specification says
@@ -384,8 +391,8 @@ struct vioif {
 	 * These copy size thresholds are exposed as private MAC properties so
 	 * that they can be tuned without rebooting.
 	 */
-	unsigned long			vif_rxcopy_thresh;
-	unsigned long			vif_txcopy_thresh;
+	uint_t				vif_rxcopy_thresh;
+	uint_t				vif_txcopy_thresh;
 
 	/*
 	 * Statistics visible through mac:

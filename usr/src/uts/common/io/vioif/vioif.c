@@ -168,11 +168,6 @@ static mac_callbacks_t vioif_mac_callbacks = {
 	.mc_setprop =			vioif_m_setprop,
 	.mc_getprop =			vioif_m_getprop,
 	.mc_propinfo =			vioif_m_propinfo,
-
-	.mc_reserved =			NULL,
-	.mc_ioctl =			NULL,
-	.mc_open =			NULL,
-	.mc_close =			NULL,
 };
 
 static const uchar_t vioif_broadcast[ETHERADDRL] = {
@@ -186,7 +181,9 @@ uint_t vioif_reclaim_ms = 200;
 
 /*
  * DMA attribute template for transmit and receive buffers.  The SGL entry
- * count will be modified before using the template.
+ * count will be modified before using the template.  Note that these
+ * allocations are aligned so that VIOIF_HEADER_SKIP places the IP header in
+ * received frames at the correct offset for the networking stack.
  */
 ddi_dma_attr_t vioif_dma_attr_bufs = {
 	.dma_attr_version =		DMA_ATTR_V0,
@@ -245,11 +242,15 @@ static char *vioif_priv_props[] = {
 static vioif_txbuf_t *
 vioif_txbuf_alloc(vioif_t *vif)
 {
+	vioif_txbuf_t *tb;
+
 	VERIFY(MUTEX_HELD(&vif->vif_mutex));
 
-	vif->vif_ntxbufs_alloc++;
+	if ((tb = list_remove_head(&vif->vif_txbufs)) != NULL) {
+		vif->vif_ntxbufs_alloc++;
+	}
 
-	return (list_remove_head(&vif->vif_txbufs));
+	return (tb);
 }
 
 static void
@@ -267,11 +268,15 @@ vioif_txbuf_free(vioif_t *vif, vioif_txbuf_t *tb)
 static vioif_rxbuf_t *
 vioif_rxbuf_alloc(vioif_t *vif)
 {
+	vioif_rxbuf_t *rb;
+
 	VERIFY(MUTEX_HELD(&vif->vif_mutex));
 
-	vif->vif_nrxbufs_alloc++;
+	if ((rb = list_remove_head(&vif->vif_rxbufs)) != NULL) {
+		vif->vif_nrxbufs_alloc++;
+	}
 
-	return (list_remove_head(&vif->vif_rxbufs));
+	return (rb);
 }
 
 static void
@@ -302,13 +307,19 @@ vioif_rx_free_callback(caddr_t free_arg)
 	VERIFY3U(vif->vif_nrxbufs_onloan, >, 0);
 	vif->vif_nrxbufs_onloan--;
 
+	/*
+	 * Attempt to replenish the receive queue with at least the buffer we
+	 * just freed.  There isn't a great way to deal with failure here,
+	 * though because we'll only loan at most half of the buffers there
+	 * should always be at least some available even if this fails.
+	 */
 	(void) vioif_add_rx(vif);
 
 	mutex_exit(&vif->vif_mutex);
 }
 
 static void
-vioif_free_mems(vioif_t *vif)
+vioif_free_bufs(vioif_t *vif)
 {
 	VERIFY(MUTEX_HELD(&vif->vif_mutex));
 
@@ -390,7 +401,7 @@ vioif_free_mems(vioif_t *vif)
 }
 
 static int
-vioif_alloc_mems(vioif_t *vif)
+vioif_alloc_bufs(vioif_t *vif)
 {
 	VERIFY(MUTEX_HELD(&vif->vif_mutex));
 
@@ -421,7 +432,7 @@ vioif_alloc_mems(vioif_t *vif)
 
 	/*
 	 * Put everything in the free list straight away in order to simplify
-	 * the use of vioif_free_mems() for cleanup on allocation failure.
+	 * the use of vioif_free_bufs() for cleanup on allocation failure.
 	 */
 	for (uint_t i = 0; i < vif->vif_txbufs_capacity; i++) {
 		list_insert_tail(&vif->vif_txbufs, &vif->vif_txbufs_mem[i]);
@@ -492,6 +503,13 @@ vioif_alloc_mems(vioif_t *vif)
 		VERIFY3U(virtio_dma_cookie_size(rb->rb_dma, 0), >=,
 		    VIOIF_HEADER_SKIP + 1);
 
+		/*
+		 * Ensure that the frame data begins at a location with a
+		 * correctly aligned IP header.
+		 */
+		VERIFY3U((uintptr_t)virtio_dma_va(rb->rb_dma,
+		    VIOIF_HEADER_SKIP) % 4, ==, 2);
+
 		rb->rb_vioif = vif;
 		rb->rb_frtn.free_func = vioif_rx_free_callback;
 		rb->rb_frtn.free_arg = (caddr_t)rb;
@@ -500,7 +518,7 @@ vioif_alloc_mems(vioif_t *vif)
 	return (0);
 
 fail:
-	vioif_free_mems(vif);
+	vioif_free_bufs(vif);
 	return (ENOMEM);
 }
 
@@ -607,6 +625,12 @@ vioif_process_rx(vioif_t *vif)
 	VERIFY(MUTEX_HELD(&vif->vif_mutex));
 
 	while ((vic = virtio_queue_poll(vif->vif_rx_vq)) != NULL) {
+		/*
+		 * We have to use the chain received length here, as the device
+		 * does not tell us the received frame length any other way.
+		 * In a limited survey of hypervisors, virtio network devices
+		 * appear to provide the right value here.
+		 */
 		size_t len = virtio_chain_received_length(vic);
 		vioif_rxbuf_t *rb = virtio_chain_data(vic);
 
@@ -769,12 +793,11 @@ vioif_reclaim_used_tx(vioif_t *vif)
 			virtio_queue_no_interrupt(vif->vif_tx_vq, B_TRUE);
 			do_update = B_TRUE;
 		}
-		mutex_exit(&vif->vif_mutex);
 
-		/* Notify MAC outside the above lock */
 		if (do_update) {
 			mac_tx_update(vif->vif_mac_handle);
 		}
+		mutex_exit(&vif->vif_mutex);
 	}
 
 	return (num_reclaimed);
@@ -995,28 +1018,46 @@ vioif_send(vioif_t *vif, mblk_t *mp)
 	mutex_enter(&vif->vif_mutex);
 	if ((tb = vioif_txbuf_alloc(vif)) == NULL) {
 		vif->vif_notxbuf++;
-		mutex_exit(&vif->vif_mutex);
-		return (B_FALSE);
+		goto fail;
 	}
 	mutex_exit(&vif->vif_mutex);
 
 	/*
-	 * Use the inline buffer for the virtio net header.
+	 * Use the inline buffer for the virtio net header.  Zero the portion
+	 * of our DMA allocation prior to the packet data.
 	 */
 	vnh = virtio_dma_va(tb->tb_dma, 0);
-	bzero(vnh, sizeof (*vnh));
+	bzero(vnh, VIOIF_HEADER_SKIP);
 
-	mac_hcksum_get(mp, &csum_start, &csum_stuff, NULL,
-	    NULL, &csum_flags);
+	/*
+	 * For legacy devices, and those that have not negotiated
+	 * VIRTIO_F_ANY_LAYOUT, the virtio net header must appear in a separate
+	 * descriptor entry to the rest of the buffer.
+	 */
+	if (virtio_chain_append(tb->tb_chain,
+	    virtio_dma_cookie_pa(tb->tb_dma, 0), sizeof (struct virtio_net_hdr),
+	    VIRTIO_DIR_DEVICE_READS) != DDI_SUCCESS) {
+		mutex_enter(&vif->vif_mutex);
+		vif->vif_notxbuf++;
+		goto fail;
+	}
 
-	/* They want us to do the TCP/UDP csum calculation. */
+	mac_hcksum_get(mp, &csum_start, &csum_stuff, NULL, NULL, &csum_flags);
+
+	/*
+	 * They want us to do the TCP/UDP csum calculation.
+	 */
 	if (csum_flags & HCK_PARTIALCKSUM) {
 		int eth_hsize;
 
-		/* Did we ask for it? */
+		/*
+		 * Did we ask for it?
+		 */
 		ASSERT(vif->vif_tx_csum);
 
-		/* We only asked for partial csum packets. */
+		/*
+		 * We only asked for partial csum packets.
+		 */
 		ASSERT(!(csum_flags & HCK_IPV4_HDRCKSUM));
 		ASSERT(!(csum_flags & HCK_FULLCKSUM));
 
@@ -1031,21 +1072,12 @@ vioif_send(vioif_t *vif, mblk_t *mp)
 		vnh->vnh_csum_offset = csum_stuff - csum_start;
 	}
 
-	/* setup LSO fields if required */
+	/*
+	 * Setup LSO fields if required.
+	 */
 	if (lso_required) {
 		vnh->vnh_gso_type = VIRTIO_NET_HDR_GSO_TCPV4;
 		vnh->vnh_gso_size = (uint16_t)lso_mss;
-	}
-
-	/*
-	 * For legacy devices, and those that have not negotiated
-	 * VIRTIO_F_ANY_LAYOUT, the virtio net header must appear in a separate
-	 * descriptor entry to the rest of the buffer.
-	 */
-	if (virtio_chain_append(tb->tb_chain,
-	    virtio_dma_cookie_pa(tb->tb_dma, 0), sizeof (struct virtio_net_hdr),
-	    VIRTIO_DIR_DEVICE_READS) != DDI_SUCCESS) {
-		goto fail;
 	}
 
 	/*
@@ -1073,6 +1105,7 @@ vioif_send(vioif_t *vif, mblk_t *mp)
 	} else {
 		ret = vioif_tx_external(vif, tb, mp, msg_size);
 	}
+	mp = NULL;
 
 	mutex_enter(&vif->vif_mutex);
 
@@ -1096,7 +1129,7 @@ fail:
 	}
 	mutex_exit(&vif->vif_mutex);
 
-	return (B_TRUE);
+	return (mp == NULL);
 }
 
 static mblk_t *
@@ -1175,6 +1208,11 @@ vioif_m_start(void *arg)
 	 */
 	vif->vif_tx_drain = B_FALSE;
 
+	/*
+	 * Add as many receive buffers as we can to the receive queue.  If we
+	 * cannot add any, it may be because we have stopped and started again
+	 * and the descriptors are all in the queue already.
+	 */
 	(void) vioif_add_rx(vif);
 
 	mutex_exit(&vif->vif_mutex);
@@ -1288,7 +1326,7 @@ vioif_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 
 	case MAC_PROP_PRIVATE: {
 		long max, result;
-		unsigned long *resp;
+		uint_t *resp;
 		char *endptr;
 
 		if (strcmp(pr_name, VIOIF_MACPROP_TXCOPY_THRESH) == 0) {
@@ -1340,7 +1378,10 @@ vioif_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 			return (ENOTSUP);
 		}
 
-		(void) snprintf(pr_val, pr_valsize, "%u", value);
+		if (snprintf(pr_val, pr_valsize, "%u", value) >= pr_valsize) {
+			return (EOVERFLOW);
+		}
+
 		return (0);
 	}
 
@@ -1459,8 +1500,11 @@ vioif_get_mac(vioif_t *vif)
 	}
 	vif->vif_mac_from_host = 0;
 
-	dev_err(vif->vif_dip, CE_NOTE, "!Generated a random MAC address: %s",
-	    ether_sprintf((struct ether_addr *)vif->vif_mac));
+	dev_err(vif->vif_dip, CE_NOTE, "!Generated a random MAC address: "
+	    "%02x:%02x:%02x:%02x:%02x:%02x",
+	    (uint_t)vif->vif_mac[0], (uint_t)vif->vif_mac[1],
+	    (uint_t)vif->vif_mac[2], (uint_t)vif->vif_mac[3],
+	    (uint_t)vif->vif_mac[4], (uint_t)vif->vif_mac[5]);
 }
 
 /*
@@ -1473,6 +1517,12 @@ vioif_rx_handler(caddr_t arg0, caddr_t arg1)
 
 	mutex_enter(&vif->vif_mutex);
 	(void) vioif_process_rx(vif);
+
+	/*
+	 * Attempt to replenish the receive queue.  If we cannot add any
+	 * descriptors here, it may be because all of the recently received
+	 * packets were loaned up to the networking stack.
+	 */
 	(void) vioif_add_rx(vif);
 	mutex_exit(&vif->vif_mutex);
 
@@ -1588,13 +1638,18 @@ vioif_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	vioif_check_features(vif);
 
-	if (vioif_alloc_mems(vif) != 0) {
+	if (vioif_alloc_bufs(vif) != 0) {
 		mutex_exit(&vif->vif_mutex);
 		dev_err(dip, CE_WARN, "failed to allocate memory");
 		goto fail;
 	}
 
 	mutex_exit(&vif->vif_mutex);
+
+	if (virtio_interrupts_enable(vio) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "failed to enable interrupts");
+		goto fail;
+	}
 
 	if ((macp = mac_alloc(MAC_VERSION)) == NULL) {
 		dev_err(dip, CE_WARN, "failed to allocate a mac_register");
@@ -1611,24 +1666,18 @@ vioif_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	macp->m_margin = VLAN_TAGSZ;
 	macp->m_priv_props = vioif_priv_props;
 
-	vif->vif_macp = macp;
-
-	if (virtio_interrupts_enable(vio) != DDI_SUCCESS) {
-		dev_err(dip, CE_WARN, "failed to enable interrupts");
-		goto fail;
-	}
-
 	if ((ret = mac_register(macp, &vif->vif_mac_handle)) != 0) {
 		dev_err(dip, CE_WARN, "mac_register() failed (%d)", ret);
 		goto fail;
 	}
+	mac_free(macp);
 
 	mac_link_update(vif->vif_mac_handle, LINK_STATE_UP);
 
 	return (DDI_SUCCESS);
 
 fail:
-	vioif_free_mems(vif);
+	vioif_free_bufs(vif);
 	if (macp != NULL) {
 		mac_free(macp);
 	}
@@ -1700,7 +1749,7 @@ vioif_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	(void) virtio_fini(vif->vif_virtio, B_FALSE);
 
-	vioif_free_mems(vif);
+	vioif_free_bufs(vif);
 
 	mutex_exit(&vif->vif_mutex);
 	mutex_destroy(&vif->vif_mutex);

@@ -43,8 +43,8 @@ typedef struct virtio_vq_driver virtio_vq_driver_t;
 typedef struct virtio_vq_device virtio_vq_device_t;
 typedef struct virtio_vq_elem virtio_vq_elem_t;
 
-int virtio_dma_init(virtio_t *, virtio_dma_t *, size_t, ddi_dma_attr_t *, int,
-    int);
+int virtio_dma_init(virtio_t *, virtio_dma_t *, size_t, const ddi_dma_attr_t *,
+    int, int);
 void virtio_dma_fini(virtio_dma_t *);
 
 
@@ -185,7 +185,7 @@ struct virtio_vq_desc {
 	uint32_t			vqd_len;
 
 	/*
-	 * Flags.  Use with the VIRTQ_DESC_F_* family of constants.
+	 * Flags.  Use with the VIRTQ_DESC_F_* family of constants.  See below.
 	 */
 	uint16_t			vqd_flags;
 
@@ -196,27 +196,34 @@ struct virtio_vq_desc {
 	uint16_t			vqd_next;
 } __packed;
 
+/*
+ * VIRTIO DESCRIPTOR FLAGS (vqd_flags)
+ */
+
+/*
+ * NEXT:
+ *	Signals that this descriptor (direct or indirect) is part of a chain.
+ *	If populated, "vqd_next" names the next descriptor in the chain by its
+ *	table index.
+ */
 #define	VIRTQ_DESC_F_NEXT		(1 << 0)
-/*
- * Signals that this descriptor (direct or indirect) is part of a chain.  If
- * populated, "vqd_next" names the next descriptor in the chain by its table
- * index.
- */
 
+/*
+ * WRITE:
+ *	Determines whether this buffer is to be written by the device (WRITE is
+ *	set) or by the driver (WRITE is not set).
+ */
 #define	VIRTQ_DESC_F_WRITE		(1 << 1)
-/*
- * Determines whether this buffer is to be written by the device (WRITE is set)
- * or by the driver (WRITE is not set).
- */
 
-#define	VIRTQ_DESC_F_INDIRECT		(1 << 2)
 /*
- * This bit signals that a direct descriptor refers to an indirect descriptor
- * list, rather than directly to a buffer.  This bit may only be used in a
- * direct descriptor; indirect descriptors are not allowed to refer to
- * additional layers of indirect tables.  If this bit is set, NEXT must be
- * clear; indirect descriptors may not be chained.
+ * INDIRECT:
+ *	This bit signals that a direct descriptor refers to an indirect
+ *	descriptor list, rather than directly to a buffer.  This bit may only
+ *	be used in a direct descriptor; indirect descriptors are not allowed to
+ *	refer to additional layers of indirect tables.  If this bit is set,
+ *	NEXT must be clear; indirect descriptors may not be chained.
  */
+#define	VIRTQ_DESC_F_INDIRECT		(1 << 2)
 
 /*
  * This structure is variously known as the "available" or "avail" ring, or the
@@ -264,6 +271,13 @@ struct virtio_vq_device {
 /*
  * BASIC CONFIGURATION
  *
+ * Legacy devices expose both their generic and their device-specific
+ * configuration through PCI BAR0.  This is the second entry in the register
+ * address space set for these devices.
+ */
+#define	VIRTIO_LEGACY_PCI_BAR0		1
+
+/*
  * These are offsets into the base configuration space available through the
  * virtio_get*() and virtio_put*() family of functions.  These offsets are for
  * what the specification describes as the "legacy" mode of device operation.

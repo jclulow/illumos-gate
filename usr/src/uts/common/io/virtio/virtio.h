@@ -23,7 +23,9 @@
  * device types; e.g., Virtio Block (vioblk), Virtio Network (vioif), etc.  The
  * framework presently provides for what is now described as a "legacy" driver
  * in the current issue of the "Virtual I/O Device (VIRTIO) Version 1.1"
- * specification.
+ * specification.  Though several new specifications have been released, legacy
+ * devices are still the most widely available on current hypervisor platforms.
+ * Legacy devices make use of the native byte order of the host system.
  *
  * FRAMEWORK INITIALISATION: STARTING
  *
@@ -59,8 +61,8 @@
  *
  * During the initialisation phase, the client driver may configure some number
  * of virtqueues with virtio_queue_alloc().  Once initialisation has been
- * completed, no further queues can be configured without completely resetting
- * the framework.
+ * completed, no further queues can be configured without destroying the
+ * framework object and beginning again from scratch.
  *
  * When configuring a queue, the driver must know the queue index number.  This
  * generally comes from the section of the specification describing the
@@ -91,33 +93,19 @@
  * will report failure to the device instead of resetting it, which may be
  * reported by the hypervisor as a fault.
  *
- * VIRTQUEUE OPERATION
- *
- * The queue size (i.e., the number of direct descriptor entries) can be
- * found with virtio_queue_size().  This value is static over the lifetime
- * of the queue.
- *
- * The number of descriptor chains presently submitted to the device and not
- * yet returned can be obtained via virtio_queue_nactive().
- *
- * Over time the device will return descriptor chains to the driver in response
- * to device activity.  Any newly returned chains may be retrieved by the
- * driver by calling virtio_queue_poll().  See the DESCRIPTOR CHAINS section
- * for more detail about managing descriptor chain objects.  Note that the
- * framework will insert an appropriate memory barrier to ensure that writes by
- * the host are complete before returning the chain to the client driver.
- *
- * The NO_INTERRUPT flag on a queue may be set or cleared with
- * virtio_queue_no_interrupt().  Note that this flag is purely advisory, and
- * may not actually stop interrupts from the device in a timely fashion.
- *
  * DESCRIPTOR CHAINS
  *
  * Most devices accept I/O requests from the driver through a least one queue.
- * Some devices operate by asynchronous delivery of I/O requests to the driver;
- * e.g., a network device may receive incoming frames at any time.  Inbound
- * asynchronous delivery is usually achieved by populating a queue with a
- * series of memory buffers where the incoming data will be written.
+ * Some devices are operated by submission of synchronous requests.  The device
+ * is expected to process the request and return some kind of status; e.g., a
+ * block device accepts write requests from the file system and signals when
+ * they have completed or failed.
+ *
+ * Other devices operate by asynchronous delivery of I/O requests to the
+ * driver; e.g., a network device may receive incoming frames at any time.
+ * Inbound asynchronous delivery is usually achieved by populating a queue with
+ * a series of memory buffers where the incoming data will be written by the
+ * device at some later time.
  *
  * Whether for inbound or outbound transfers, buffers are inserted into the
  * ring through chains of one or more descriptors.  Each descriptor has a
@@ -158,6 +146,26 @@
  * virtio_chain_received_length().  There is some suggestion in more recent
  * Virtio specifications that, depending on the device type and the hypervisor
  * this value may not always be accurate or useful.
+ *
+ * VIRTQUEUE OPERATION
+ *
+ * The queue size (i.e., the number of direct descriptor entries) can be
+ * found with virtio_queue_size().  This value is static over the lifetime
+ * of the queue.
+ *
+ * The number of descriptor chains presently submitted to the device and not
+ * yet returned can be obtained via virtio_queue_nactive().
+ *
+ * Over time the device will return descriptor chains to the driver in response
+ * to device activity.  Any newly returned chains may be retrieved by the
+ * driver by calling virtio_queue_poll().  See the DESCRIPTOR CHAINS section
+ * for more detail about managing descriptor chain objects.  Note that the
+ * framework will insert an appropriate memory barrier to ensure that writes by
+ * the host are complete before returning the chain to the client driver.
+ *
+ * The NO_INTERRUPT flag on a queue may be set or cleared with
+ * virtio_queue_no_interrupt().  Note that this flag is purely advisory, and
+ * may not actually stop interrupts from the device in a timely fashion.
  *
  * INTERRUPT MANAGEMENT
  *
@@ -267,7 +275,7 @@ typedef enum virtio_direction {
 	VIRTIO_DIR_DEVICE_READS
 } virtio_direction_t;
 
-int virtio_fini(virtio_t *, boolean_t);
+void virtio_fini(virtio_t *, boolean_t);
 virtio_t *virtio_init(dev_info_t *, uint64_t, boolean_t);
 int virtio_init_complete(virtio_t *, int);
 int virtio_quiesce(virtio_t *);
@@ -312,8 +320,9 @@ size_t virtio_chain_received_length(virtio_chain_t *);
 int virtio_interrupts_enable(virtio_t *);
 void virtio_interrupts_disable(virtio_t *);
 
-virtio_dma_t *virtio_dma_alloc(virtio_t *, size_t, ddi_dma_attr_t *, int, int);
-virtio_dma_t *virtio_dma_alloc_nomem(virtio_t *, ddi_dma_attr_t *, int);
+virtio_dma_t *virtio_dma_alloc(virtio_t *, size_t, const ddi_dma_attr_t *, int,
+    int);
+virtio_dma_t *virtio_dma_alloc_nomem(virtio_t *, const ddi_dma_attr_t *, int);
 void virtio_dma_free(virtio_dma_t *);
 int virtio_dma_bind(virtio_dma_t *, void *, size_t, int, int);
 void virtio_dma_unbind(virtio_dma_t *);

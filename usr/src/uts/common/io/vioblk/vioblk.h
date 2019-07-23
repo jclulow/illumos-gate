@@ -50,7 +50,7 @@ extern "C" {
  * Virtio block devices have just one queue which is used to make the various
  * supported I/O requests.
  */
-#define	VIRTIO_NET_VIRTQ_IO		0
+#define	VIRTIO_BLK_VIRTQ_IO		0
 
 /*
  * VIRTIO BLOCK FEATURE BITS
@@ -79,7 +79,9 @@ extern "C" {
 /*
  * VIRTIO BLOCK REQUEST HEADER
  *
- * This structure appears at the start of each I/O request buffer.
+ * This structure appears at the start of each I/O request buffer.  Note that
+ * neither the data payload nor the status byte not appear in this structure as
+ * both are handled in separate descriptor entries.
  */
 struct vioblk_req_hdr {
 	uint32_t			vbh_type;
