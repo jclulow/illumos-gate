@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <netinet/in.h>		/* struct in_addr */
 #include <netinet/dhcp.h>
+#include <inet/ip.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <net/route.h>
@@ -329,8 +330,7 @@ daemonize(void)
  */
 
 static boolean_t
-update_default_route(uint32_t ifindex, int type, struct in_addr *gateway_nbo,
-    int flags)
+update_default_route(uint32_t ifindex, int type, dhcp_route_t *dhr, int flags)
 {
 	struct {
 		struct rt_msghdr	rm_mh;
@@ -345,20 +345,42 @@ update_default_route(uint32_t ifindex, int type, struct in_addr *gateway_nbo,
 	rtmsg.rm_mh.rtm_msglen	= sizeof (rtmsg);
 	rtmsg.rm_mh.rtm_type	= type;
 	rtmsg.rm_mh.rtm_pid	= getpid();
-	rtmsg.rm_mh.rtm_flags	= RTF_GATEWAY | RTF_STATIC | flags;
+	rtmsg.rm_mh.rtm_flags	= flags;
 	rtmsg.rm_mh.rtm_addrs	= RTA_GATEWAY | RTA_DST | RTA_NETMASK | RTA_IFP;
 
-	rtmsg.rm_gw.sin_family	= AF_INET;
-	rtmsg.rm_gw.sin_addr	= *gateway_nbo;
+	/*
+	 * XXX update comment
+	 * Interface routes have an all-zero next hop address in our table.  If
+	 * this is not an interface route, add the flags for a route with a
+	 * next hop.
+	 */
+	if (!dhr->dhr_interface) {
+		rtmsg.rm_mh.rtm_flags |= RTF_GATEWAY | RTF_STATIC;
+	}
+
+	if (dhr->dhr_prefix == IPV4_ABITS) {
+		rtmsg.rm_mh.rtm_flags |= RTF_HOST;
+	}
+
+	/*
+	 * XXX I think for an interface route this has to be the
+	 * actual IP of the interface?
+	 */
+	rtmsg.rm_gw.sin_family = AF_INET;
+	rtmsg.rm_gw.sin_addr = dhr->dhr_nexthop;
 
 	rtmsg.rm_dst.sin_family = AF_INET;
-	rtmsg.rm_dst.sin_addr.s_addr = htonl(INADDR_ANY);
+	rtmsg.rm_dst.sin_addr = dhr->dhr_network;
 
 	rtmsg.rm_mask.sin_family = AF_INET;
-	rtmsg.rm_mask.sin_addr.s_addr = htonl(0);
+	ipaddr_t mask = 0;
+	for (int n = 32; n >= 32 - (int)dhr->dhr_prefix; n--) {
+		rtmsg.rm_mask.sin_addr.s_addr |= (1ULL << n);
+	}
+	rtmsg.rm_mask.sin_addr.s_addr = htonl(mask);
 
-	rtmsg.rm_ifp.sdl_family	= AF_LINK;
-	rtmsg.rm_ifp.sdl_index	= ifindex;
+	rtmsg.rm_ifp.sdl_family = AF_LINK;
+	rtmsg.rm_ifp.sdl_index = ifindex;
 
 	return (write(rtsock_fd, &rtmsg, sizeof (rtmsg)) == sizeof (rtmsg));
 }
@@ -372,9 +394,9 @@ update_default_route(uint32_t ifindex, int type, struct in_addr *gateway_nbo,
  */
 
 boolean_t
-add_default_route(uint32_t ifindex, struct in_addr *gateway_nbo)
+add_default_route(uint32_t ifindex, dhcp_route_t *route)
 {
-	return (update_default_route(ifindex, RTM_ADD, gateway_nbo, RTF_UP));
+	return (update_default_route(ifindex, RTM_ADD, route, RTF_UP));
 }
 
 /*
@@ -386,12 +408,16 @@ add_default_route(uint32_t ifindex, struct in_addr *gateway_nbo)
  */
 
 boolean_t
-del_default_route(uint32_t ifindex, struct in_addr *gateway_nbo)
+del_default_route(uint32_t ifindex, dhcp_route_t *route)
 {
-	if (gateway_nbo->s_addr == htonl(INADDR_ANY)) /* no router */
+	if (!route->dhr_installed) {
+		/*
+		 * We never installed this route.
+		 */
 		return (B_TRUE);
+	}
 
-	return (update_default_route(ifindex, RTM_DELETE, gateway_nbo, 0));
+	return (update_default_route(ifindex, RTM_DELETE, route, 0));
 }
 
 /*

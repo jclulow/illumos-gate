@@ -102,8 +102,7 @@ struct dhcp_smach_s {
 	uint16_t	*dsm_pil;	/* if non-NULL, param ignore list */
 	uint_t		dsm_pillen;	/* param ignore list len */
 
-	uint_t		dsm_nrouters;	/* the number of default routers */
-	struct in_addr	*dsm_routers;	/* an array of default routers */
+	avl_tree_t	dsm_routes;	/* list of routes */
 
 	in6_addr_t	dsm_server;	/* our DHCP server */
 	uchar_t		*dsm_serverid;	/* server DUID for v6 */

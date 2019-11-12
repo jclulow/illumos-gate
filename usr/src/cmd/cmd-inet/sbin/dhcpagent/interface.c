@@ -438,6 +438,7 @@ insert_lif(dhcp_pif_t *pif, const char *lname, int *error)
 		lif->lif_max = 1024;
 	else
 		lif->lif_max = lifr.lifr_mtu;
+	lif->lif_mtu_orig = lif->lif_mtu = lif->lif_max;
 
 	if (ioctl(fd, SIOCGLIFADDR, &lifr) == -1) {
 		if (errno == ENXIO)
@@ -1225,6 +1226,41 @@ clear_lif_dhcp(dhcp_lif_t *lif)
 
 	lif->lif_flags = lifr.lifr_flags &= ~IFF_DHCPRUNNING;
 	(void) ioctl(fd, SIOCSLIFFLAGS, &lifr);
+}
+
+boolean_t
+set_lif_mtu(dhcp_lif_t *lif, uint_t mtu)
+{
+	struct lifreq lifr;
+	int fd = lif->lif_pif->pif_isv6 ? v6_sock_fd : v4_sock_fd;
+
+	if (lif->lif_mtu == mtu) {
+		/*
+		 * We set the MTU to this value already.
+		 */
+		return (B_TRUE);
+	}
+
+	(void) memset(&lifr, 0, sizeof (lifr));
+	(void) strlcpy(lifr.lifr_name, lif->lif_name, LIFNAMSIZ);
+	lifr.lifr_mtu = mtu;
+
+	if (ioctl(fd, SIOCSLIFMTU, &lifr) == -1) {
+		return (B_FALSE);
+	}
+
+	lif->lif_mtu = mtu;
+	return (B_TRUE);
+}
+
+boolean_t
+clear_lif_mtu(dhcp_lif_t *lif)
+{
+	if (lif->lif_mtu == lif->lif_mtu_orig) {
+		return (B_TRUE);
+	}
+
+	return (set_lif_mtu(lif, lif->lif_mtu_orig));
 }
 
 /*

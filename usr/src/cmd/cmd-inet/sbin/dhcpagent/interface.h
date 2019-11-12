@@ -76,6 +76,8 @@ struct dhcp_lif_s {
 	dhcp_smach_t	*lif_smachs;	/* pointer to list of state machines */
 	dhcp_lease_t	*lif_lease;	/* backpointer to lease holding LIF */
 	uint64_t	lif_flags;	/* Interface flags (IFF_*) */
+	uint_t		lif_mtu;	/* Interface MTU */
+	uint_t		lif_mtu_orig;	/* Original interface MTU */
 	int		lif_sock_ip_fd;	/* Bound to addr.BOOTPC for src addr */
 	iu_event_id_t	lif_packet_id;	/* event packet id */
 	uint_t		lif_max;	/* maximum IP message size */
@@ -183,6 +185,8 @@ dhcp_lif_t	*attach_lif(const char *, boolean_t, int *);
 int		set_lif_dhcp(dhcp_lif_t *);
 void		set_lif_deprecated(dhcp_lif_t *);
 boolean_t	clear_lif_deprecated(dhcp_lif_t *);
+boolean_t	set_lif_mtu(dhcp_lif_t *, uint_t);
+boolean_t	clear_lif_mtu(dhcp_lif_t *);
 boolean_t	open_ip_lif(dhcp_lif_t *, in_addr_t, boolean_t);
 void		close_ip_lif(dhcp_lif_t *);
 void		lif_mark_decline(dhcp_lif_t *, const char *);

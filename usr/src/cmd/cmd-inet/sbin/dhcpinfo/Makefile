@@ -33,6 +33,7 @@ ROOTFS_PROG = $(PROG)
 OBJS    = $(PROG).o
 
 include ../../../Makefile.cmd
+include ../../../Makefile.ctf
 
 LDLIBS  += -ldhcpagent -ldhcputil
 LINTFLAGS += -u	# due to problems with libgen

@@ -89,7 +89,8 @@ static dsym_type_t types[] = {
 	{ "SNUMBER64", DSYM_SNUMBER64, B_TRUE },
 	{ "IPV6", DSYM_IPV6, B_TRUE },
 	{ "DUID", DSYM_DUID, B_TRUE },
-	{ "DOMAIN", DSYM_DOMAIN, B_TRUE }
+	{ "DOMAIN", DSYM_DOMAIN, B_TRUE },
+	{ "ROUTE", DSYM_ROUTE, B_TRUE }
 };
 
 /*

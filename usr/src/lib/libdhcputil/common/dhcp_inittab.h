@@ -96,6 +96,7 @@ extern "C" {
 #define	ITAB_NOT_ENOUGH_IP	(-7)
 #define	ITAB_BAD_GRAN		(-8)
 #define	ITAB_NOMEM		(-9)
+#define	ITAB_BAD_ROUTE		(-10)
 
 extern uint8_t		inittab_type_to_size(const dhcp_symbol_t *);
 extern int		inittab_verify(const dhcp_symbol_t *, dhcp_symbol_t *);

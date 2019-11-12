@@ -117,6 +117,7 @@ SLP_SS		STANDARD,	79,	OCTET,	   1,	0,	sdmi
 ClientFQDN	STANDARD,	81,	OCTET,	   1,	0,	sdmi
 AgentOpt	STANDARD,	82,	OCTET,	   1,	0,	sdi
 FQDN		STANDARD,	89,	OCTET,	   1,	0,	sdmi
+ClasslessRoute	STANDARD,	121,	ROUTE,	   1,	128,	sdmi
 
 #
 # DHCP packet fields.	Code field is byte offset into DHCP packet.
