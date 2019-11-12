@@ -26,6 +26,7 @@
 # Copyright 2016 Garrett D'Amore <garrett@damore.org>
 # Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2019 RackTop Systems
+# Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
 #
 
 #
@@ -455,6 +456,9 @@ DRV_KMODS	+= vioblk
 
 # Virtio network driver
 DRV_KMODS	+= vioif
+
+# Virtio SCSI driver
+DRV_KMODS	+= vioscsi
 
 #
 #	DTrace and DTrace Providers
