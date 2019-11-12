@@ -28,6 +28,8 @@
 # Copyright 2020 Joyent, Inc.
 # Copyright 2016 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+# Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
+# Copyright 2020 RackTop Systems, Inc.
 #
 
 #
@@ -2082,6 +2084,9 @@ VIOBLK_OBJS = vioblk.o
 
 # Virtio network driver
 VIOIF_OBJS = vioif.o
+
+# Virtio SCSI driver
+VIOSCSI_OBJS = vioscsi.o vioscsi_cmd.o
 
 #
 #	kiconv modules
