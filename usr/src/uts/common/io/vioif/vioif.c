@@ -180,6 +180,11 @@ static const uchar_t vioif_broadcast[ETHERADDRL] = {
 uint_t vioif_reclaim_ms = 200;
 
 /*
+ * XXX Force a particular kind of interrupts.
+ */
+int vioif_allowed_int_types = DDI_INTR_TYPE_FIXED;
+
+/*
  * DMA attribute template for transmit and receive buffers.  The SGL entry
  * count will be modified before using the template.  Note that these
  * allocations are aligned so that VIOIF_HEADER_SKIP places the IP header in
@@ -1605,7 +1610,8 @@ vioif_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto fail;
 	}
 
-	if (virtio_init_complete(vio, 0) != DDI_SUCCESS) {
+	if (virtio_init_complete(vio, vioif_allowed_int_types) !=
+	    DDI_SUCCESS) {
 		dev_err(dip, CE_WARN, "failed to complete Virtio init");
 		goto fail;
 	}
