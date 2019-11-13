@@ -682,6 +682,7 @@ vioscsi_discover(void *arg)
 			    "disco REPORT LUNS poll failure (%u) = %u",
 			    target, res);
 			r = EIO;
+			vioscsi_cmd_free(vsc);
 			goto done;
 		}
 
@@ -714,6 +715,7 @@ vioscsi_discover(void *arg)
 			if (scsi_hba_tgtmap_set_add(vis->vis_tgtmap,
 			    SCSI_TGT_SCSI_DEVICE, addr, NULL) != DDI_SUCCESS) {
 				r = EIO;
+				vioscsi_cmd_free(vsc);
 				goto done;
 			}
 #if 0
