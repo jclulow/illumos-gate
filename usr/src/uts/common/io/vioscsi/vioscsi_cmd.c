@@ -96,7 +96,6 @@ vioscsi_q_pull(vioscsi_t *vis, virtio_queue_t *viq)
 
 	VERIFY(MUTEX_HELD(&vis->vis_mutex));
 
-top:
 	if ((vic = virtio_queue_poll(viq)) == NULL) {
 		return (NULL);
 	}

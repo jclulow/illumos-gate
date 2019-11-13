@@ -16,6 +16,7 @@
 #include "vioscsi.h"
 
 void *vioscsi_state;
+int vioscsi_force_discovery = 0;
 
 static int vioscsi_attach(dev_info_t *, ddi_attach_cmd_t);
 static int vioscsi_detach(dev_info_t *, ddi_detach_cmd_t);
@@ -252,7 +253,9 @@ vioscsi_handle_control(caddr_t arg0, caddr_t arg1)
 {
 	vioscsi_t *vis = (vioscsi_t *)arg0;
 
+#if 0
 	dev_err(vis->vis_dip, CE_WARN, "vioscsi_handle_control");
+#endif
 
 	mutex_enter(&vis->vis_mutex);
 
@@ -277,16 +280,14 @@ vioscsi_handle_event(caddr_t arg0, caddr_t arg1)
 {
 	vioscsi_t *vis = (vioscsi_t *)arg0;
 
+#if 0
 	dev_err(vis->vis_dip, CE_WARN, "vioscsi_handle_event");
+#endif
 
 	mutex_enter(&vis->vis_mutex);
 
 	vioscsi_cmd_t *vsc;
 	while ((vsc = vioscsi_q_pull(vis, vis->vis_q_event)) != NULL) {
-		/*
-		 * XXX DMA sync?
-		 */
-
 		struct virtio_scsi_event *vsev = virtio_dma_va(vsc->vsc_dma, 0);
 		dev_err(vis->vis_dip, CE_WARN,
 		    "lun %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x, "
@@ -460,6 +461,9 @@ vioscsi_hba_complete(vioscsi_cmd_t *vsc)
 	    vsc->vsc_response_offset);
 
 	VERIFY(MUTEX_HELD(&vis->vis_mutex));
+
+	DTRACE_PROBE1(vioscsi__hba__complete,
+	    struct virtio_scsi_req_cmd_write *, vsrq);
 
 	pkt->pkt_resid = vsrq->vsrq_residual;
 
@@ -806,6 +810,18 @@ vioscsi_periodic(void *arg)
 	/*
 	 * XXX Maintain!
 	 */
+
+	if (vioscsi_force_discovery) {
+		dev_err(vis->vis_dip, CE_WARN, "FORCED DISCOVERY REQUEST...\n");
+		vioscsi_force_discovery = 0;
+		vioscsi_discover_request(vis);
+	}
+
+	if (vis->vis_status & VIOSCSI_STATUS_DISCOVERY_PERIODIC) {
+		vis->vis_status &= ~VIOSCSI_STATUS_DISCOVERY_PERIODIC;
+
+		vioscsi_discover_request(vis);
+	}
 
 	mutex_exit(&vis->vis_mutex);
 }
