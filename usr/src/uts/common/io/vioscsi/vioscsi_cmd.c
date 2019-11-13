@@ -71,21 +71,12 @@ vioscsi_q_push(vioscsi_cmd_t *vsc)
 
 	VERIFY(MUTEX_HELD(&vis->vis_mutex));
 
-#if 0
-	if (ddi_dma_sync(vsc->vsc_dma.vsdma_dma_handle, 0, 0,
-	    DDI_DMA_SYNC_FORDEV) != DDI_SUCCESS) {
-		/*
-		 * XXX PANIC?
-		 */
-		dev_err(vis->vis_dip, CE_WARN, "DMA sync failure");
-	}
-#endif
-
 	VERIFY(!(vsc->vsc_status & VIOSCSI_CMD_STATUS_INFLIGHT));
 	vsc->vsc_status |= VIOSCSI_CMD_STATUS_INFLIGHT;
 
-	vsc->vsc_time_push = gethrtime();
+	virtio_dma_sync(vsc->vsc_dma, DDI_DMA_SYNC_FORDEV);
 
+	vsc->vsc_time_push = gethrtime();
 	virtio_chain_submit(vsc->vsc_chain, B_TRUE);
 }
 
@@ -107,15 +98,7 @@ vioscsi_q_pull(vioscsi_t *vis, virtio_queue_t *viq)
 	VERIFY(vsc->vsc_status & VIOSCSI_CMD_STATUS_INFLIGHT);
 	vsc->vsc_status &= ~VIOSCSI_CMD_STATUS_INFLIGHT;
 
-#if 0
-	if (ddi_dma_sync(vsc->vsc_dma.vsdma_dma_handle, 0, 0,
-	    DDI_DMA_SYNC_FORCPU) != DDI_SUCCESS) {
-		/*
-		 * XXX panic?
-		 */
-		dev_err(vis->vis_dip, CE_WARN, "DMA sync failure");
-	}
-#endif
+	virtio_dma_sync(vsc->vsc_dma, DDI_DMA_SYNC_FORCPU);
 
 	return (vsc);
 }
