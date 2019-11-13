@@ -205,6 +205,7 @@ struct vioscsi {
 	uint32_t		vis_max_target;
 	uint32_t		vis_max_lun_raw;
 	uint32_t		vis_max_lun;
+	uint32_t		vis_max_sectors;
 
 	ddi_taskq_t		*vis_discover_taskq;
 	hrtime_t		vis_time_last_discovery;

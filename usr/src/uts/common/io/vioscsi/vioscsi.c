@@ -688,7 +688,8 @@ vioscsi_discover(void *arg)
 
 		struct virtio_scsi_req_cmd_write *vsrq = virtio_dma_va(
 		    vsc->vsc_dma, vsc->vsc_response_offset);
-		if (vsrq->vsrq_response == VIRTIO_SCSI_S_OK) {
+		if (vsrq->vsrq_response == VIRTIO_SCSI_S_OK ||
+		    vsrq->vsrq_response == VIRTIO_SCSI_S_OVERRUN) {
 			/*
 			 * Successful REPORT LUNS!  Mark this target as
 			 * available.
@@ -1497,6 +1498,9 @@ vioscsi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	vis->vis_virtio = vio;
 	INITLEVEL_SET(vis, VIOSCSI_INITLEVEL_VIRTIO);
 
+	vis->vis_max_sectors = virtio_dev_get32(vio, VIRTIO_SCSI_CFG_MAX_SECTORS);
+	dev_err(dip, CE_WARN, "config: max_sectors = %u", vis->vis_max_sectors);
+
 	/*
 	 * XXX I believe this should be used to constrain the number of chained
 	 * descriptors to use for a command.
@@ -1506,6 +1510,10 @@ vioscsi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	vis->vis_hba_dma_attr = vioscsi_dma_attr;
 	vis->vis_hba_dma_attr.dma_attr_sgllen = vis->vis_seg_max - 2;
+	if (vis->vis_max_sectors != 0) {
+		vis->vis_hba_dma_attr.dma_attr_maxxfer = vis->vis_max_sectors *
+		    DEV_BSIZE;
+	}
 
 	/*
 	 * The SCSI device has several virtqueues:
