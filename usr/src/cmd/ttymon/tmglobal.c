@@ -65,15 +65,15 @@ struct pollfd *Pollp;		/* ptr to an array of poll struct	*/
 int	Npollfd;		/* size of the pollfd array		 */
 
 struct Gdef DEFAULT = {		/* default terminal settings	*/
-	"default",
-	"9600",
-	"9600 sane",
-	0,
+	.g_id =		"default",
+	.g_iflags =	"9600",
+	.g_fflags =	"9600 sane",
+	.g_autobaud =	0,
 	/*
 	 * next label is set to 4800 so we can start searching ttydefs.
 	 * if 4800 is not in ttydefs, we will loop back to use DEFAULT
 	 */
-	"4800"
+	.g_nextid =	"4800"
 };
 
 uid_t	Uucp_uid = 5;		/* owner's uid for bi-directional ports	*/

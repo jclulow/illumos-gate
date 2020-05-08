@@ -30,8 +30,6 @@
 #ifndef _UUCP_H
 #define _UUCP_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -40,14 +38,6 @@ extern "C" {
 #include <stdlib.h>
 #include <string.h>
 #include "parms.h"
-
-#ifdef DIAL
-#define EXTERN static
-#define GLOBAL static
-#else
-#define EXTERN extern
-#define GLOBAL
-#endif
 
 #ifdef BSD4_2
 #define V7
@@ -436,46 +426,46 @@ struct limits {
 
 /* external declarations */
 
-EXTERN int (*Read)(), (*Write)();
+extern int (*Read)(), (*Write)();
 #if defined(__STDC__)
-EXTERN int (*Ioctl)(int,int,...);
+extern int (*Ioctl)(int,int,...);
 #else
-EXTERN int (*Ioctl)();
+extern int (*Ioctl)();
 #endif
-EXTERN int Ifn, Ofn;
-EXTERN int Debug, Verbose;
-EXTERN uid_t Uid, Euid;		/* user-id and effective-uid */
-EXTERN long Ulimit;
-EXTERN mode_t Dev_mode;		/* save device mode here */
-EXTERN char Wrkdir[];
-EXTERN long Retrytime;
-EXTERN char **Env;
-EXTERN char Uucp[];
-EXTERN char Pchar;
-EXTERN struct nstat Nstat;
-EXTERN char Dc[];			/* line name			*/
-EXTERN int Seqn;			/* sequence #			*/
-EXTERN int Role;
-EXTERN int Sgrades;		/* flag for administrator defined service grades */
-EXTERN char Grade;
-EXTERN char Logfile[];
-EXTERN char Rmtname[];
-EXTERN char JobGrade[];
-EXTERN char User[];
-EXTERN char Loginuser[];
-EXTERN char *Spool;
-EXTERN char *Pubdir;
-EXTERN char Myname[];
-EXTERN char Progname[];
-EXTERN char RemSpool[];
-EXTERN char *Bnptr;		/* used when BASENAME macro is expanded */
-EXTERN int SizeCheck;		/* ulimit check supported flag */
-EXTERN long RemUlimit;		/* remote ulimit if supported */
-EXTERN int Restart;		/* checkpoint restart supported flag */
+extern int Ifn, Ofn;
+extern int Debug, Verbose;
+extern uid_t Uid, Euid;		/* user-id and effective-uid */
+extern long Ulimit;
+extern mode_t Dev_mode;		/* save device mode here */
+extern char Wrkdir[];
+extern long Retrytime;
+extern char **Env;
+extern char Uucp[];
+extern char Pchar;
+extern struct nstat Nstat;
+extern char Dc[];			/* line name			*/
+extern int Seqn;			/* sequence #			*/
+extern int Role;
+extern int Sgrades;		/* flag for administrator defined service grades */
+extern char Grade;
+extern char Logfile[];
+extern char Rmtname[];
+extern char JobGrade[];
+extern char User[];
+extern char Loginuser[];
+extern char *Spool;
+extern char *Pubdir;
+extern char Myname[];
+extern char Progname[];
+extern char RemSpool[];
+extern char *Bnptr;		/* used when BASENAME macro is expanded */
+extern int SizeCheck;		/* ulimit check supported flag */
+extern long RemUlimit;		/* remote ulimit if supported */
+extern int Restart;		/* checkpoint restart supported flag */
 
-EXTERN char Jobid[];		/* Jobid of current C. file */
-EXTERN int Uerror;		/* global error code */
-EXTERN char *UerrorText[];	/* text for error code */
+extern char Jobid[];		/* Jobid of current C. file */
+extern int Uerror;		/* global error code */
+extern char *UerrorText[];	/* text for error code */
 
 #define UERRORTEXT		UerrorText[Uerror]
 #define UTEXT(x)		UerrorText[x]
@@ -493,7 +483,7 @@ EXTERN char *UerrorText[];	/* text for error code */
 #define strrchr rindex
 #endif
 
-EXTERN struct stat __s_;
+extern struct stat __s_;
 #define READANY(f)	((stat((f),&__s_)==0) && ((__s_.st_mode&(0004))!=0) )
 #define READSOME(f)	((stat((f),&__s_)==0) && ((__s_.st_mode&(0444))!=0) )
 
@@ -517,29 +507,29 @@ extern char *sprintf();
 #endif /* BSD4_2 */
 
 /* uucp functions and subroutine */
-EXTERN void	(*genbrk)();
+extern void	(*genbrk)();
 extern int	iswrk(), gtwvec();			/* anlwrk.c */
 extern void	findgrade();				/* grades.c */
 extern void	chremdir(), mkremdir();			/* chremdir.c */
 extern void	toCorrupt();				/* cpmv.c  */
 extern int	xmv();					/* cpmv.c  */
 
-EXTERN int	getargs();				/* getargs.c */
-EXTERN void	bsfix();				/* getargs.c */
+extern int	getargs();				/* getargs.c */
+extern void	bsfix();				/* getargs.c */
 extern char	*getprm();				/* getprm.c */
 
 extern char	*next_token();				/* permission.c */
 extern char	*nextarg();				/* permission.c */
 extern int	getuline();				/* permission.c */
 
-EXTERN void	logent(), syslog(), closelog();		/* logent.c */
+extern void	logent(), syslog(), closelog();		/* logent.c */
 extern void	commandlog();				/* logent.c */
 extern time_t	millitick();				/* logent.c */
 
 extern unsigned long	getfilesize();			/* statlog.c */
 extern void 		putfilesize();			/* statlog.c */
 
-EXTERN char	*protoString();				/* permission.c */
+extern char	*protoString();				/* permission.c */
 extern int	logFind(), mchFind();			/* permission.c */
 extern int	chkperm(), chkpth();			/* permission.c */
 extern int	cmdOK(), switchRole();			/* permission.c */
@@ -550,16 +540,16 @@ extern void	myName();				/* permission.c */
 extern int	mkdirs();				/* expfile.c */
 extern int	scanlimit();				/* limits.c */
 extern void	systat();				/* systat.c */
-EXTERN int	fd_mklock(), fd_cklock();		/* ulockf.c */
-EXTERN int	fn_cklock();				/* ulockf.c */
-EXTERN int	mklock(), cklock(), mlock();		/* ulockf.c */
-EXTERN void	fd_rmlock(), delock(), rmlock();	/* ulockf.c */
+extern int	fd_mklock(), fd_cklock();		/* ulockf.c */
+extern int	fn_cklock();				/* ulockf.c */
+extern int	mklock(), cklock(), mlock();		/* ulockf.c */
+extern void	fd_rmlock(), delock(), rmlock();	/* ulockf.c */
 extern char	*timeStamp();				/* utility.c */
-EXTERN void	assert(), errent();			/* utility.c */
+extern void	assert(), errent();			/* utility.c */
 extern void	uucpname();				/* uucpname.c */
 extern int	versys();				/* versys.c */
 extern void	xuuxqt(), xuucico();			/* xqt.c */
-EXTERN void	cleanup();				/* misc main.c */
+extern void	cleanup();				/* misc main.c */
 
 #define ASSERT(e, s1, s2, i1) if (!(e)) {\
 	assert(s1, s2, i1, __FILE__, __LINE__);\
@@ -593,24 +583,24 @@ char *gethostname();
 #endif /* BSD4_2 */
 
 /* messages */
-EXTERN char *Ct_OPEN;
-EXTERN char *Ct_WRITE;
-EXTERN char *Ct_READ;
-EXTERN char *Ct_CREATE;
-EXTERN char *Ct_ALLOCATE;
-EXTERN char *Ct_LOCK;
-EXTERN char *Ct_STAT;
-EXTERN char *Ct_CHOWN;
-EXTERN char *Ct_CHMOD;
-EXTERN char *Ct_LINK;
-EXTERN char *Ct_CHDIR;
-EXTERN char *Ct_UNLINK;
-EXTERN char *Wr_ROLE;
-EXTERN char *Ct_CORRUPT;
-EXTERN char *Ct_FORK;
-EXTERN char *Ct_CLOSE;
-EXTERN char *Ct_BADOWN;
-EXTERN char *Fl_EXISTS;
+extern char *Ct_OPEN;
+extern char *Ct_WRITE;
+extern char *Ct_READ;
+extern char *Ct_CREATE;
+extern char *Ct_ALLOCATE;
+extern char *Ct_LOCK;
+extern char *Ct_STAT;
+extern char *Ct_CHOWN;
+extern char *Ct_CHMOD;
+extern char *Ct_LINK;
+extern char *Ct_CHDIR;
+extern char *Ct_UNLINK;
+extern char *Wr_ROLE;
+extern char *Ct_CORRUPT;
+extern char *Ct_FORK;
+extern char *Ct_CLOSE;
+extern char *Ct_BADOWN;
+extern char *Fl_EXISTS;
 
 #ifdef __cplusplus
 }

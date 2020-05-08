@@ -27,9 +27,6 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -43,6 +40,7 @@
 #include <stdarg.h>
 
 #include "tmstruct.h"
+#include "tmextern.h"
 #include "ttymon.h"
 
 static	int  nflg = 0;		/* -n seen */
@@ -52,7 +50,7 @@ static	int  lflg = 0;		/* -l seen */
 
 struct  Gdef Gdef[MAXDEFS];	/* array to hold entries in /etc/ttydefs */
 int	Ndefs = 0;		/* highest index to Gdef that was used   */
-static	struct Gdef DEFAULT = {		/* default terminal settings	*/
+struct Gdef DEFAULT = {		/* default terminal settings	*/
 	"default",
 	"9600",
 	"9600 sane",
@@ -72,9 +70,6 @@ static	void	remove_entry();
 static	int	copy_file();
 static	int	verify();
 static	FILE	*open_temp();
-extern  void	read_ttydefs();
-extern  int	check_version();
-extern  int	find_label();
 
 /*
  *	sttydefs - add, remove or check entries in /etc/ttydefs
@@ -100,9 +95,6 @@ main(int argc, char *argv[])
 	char	*argtmp;
 	char	*nextlabel;
 	struct Gdef ttydef, *ptr;
-
-	extern	char	*optarg;
-	extern	int	optind;
 
 	if (argc == 1)
 		usage();
@@ -248,7 +240,6 @@ struct Gdef *ttydef;
 	int	errflg = 0;
 	char tbuf[BUFSIZ], *tp;
 	int  add_version = FALSE;
-	extern	int	check_flags();
 
 	if (getuid()) {
 		(void)fprintf(stderr, "User not privileged for operation.\n");
@@ -262,7 +253,7 @@ struct Gdef *ttydef;
 			"%s version number is incorrect or missing.\n",TTYDEFS);
 			exit(1);
 		}
-		if (find_label(fp,ttydef->g_id)) {
+		if (find_label(fp,ttydef->g_id) != 0) {
 			(void)fclose(fp);
 			(void)fprintf(stderr,
 			"Invalid request -- ttylabel <%s> already exists.\n",
@@ -476,7 +467,6 @@ check_ref()
 {
 	int	i;
 	struct	Gdef	*np;
-	extern	struct	Gdef	*find_def();
 	np = &Gdef[0];
 	for (i = 0; i < Ndefs; i++, np++) {
 		if (find_def(np->g_nextid) == NULL) {

@@ -28,8 +28,6 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include	<unistd.h>
 #include	<string.h>
 #include	<sys/termios.h>
@@ -38,59 +36,61 @@
 int	Debug = 0;
 char	*Bnptr;
 /* dummies for using uucp .o routines */
-/*VARARGS*/
-/*ARGSUSED*/
 void
 assert(char *s1, char *s2, int i1, char *s3, int i2)
-{}
+{
+}
 
 void
-cleanup(){}
+cleanup(void)
+{
+}
 
 /*ARGSUSED*/
 void
 logent(char *s1, char *s2)
-{}		/* so we can load ulockf() */
+{
+} /* so we can load ulockf() */
 /*---------------------------------------------------------- */
-extern	int	lockf();
 
 /*
- *	lastname	- If the path name starts with "/dev/",
- *			  return the rest of the string.
- *			- Otherwise, return the last token of the path name
+ * lastname	- If the path name starts with "/dev/",
+ *		  return the rest of the string.
+ *		- Otherwise, return the last token of the path name
  */
-char *
-lastname(char *name)
+const char *
+lastname(const char *name)
 {
-	char	*sp, *p;
+	const char *sp = name, *p;
 
-	sp = name;
-	if (strncmp(sp, "/dev/", 5) == 0)
+	if (strncmp(sp, "/dev/", 5) == 0) {
 		sp += 5;
-	else
-		while ((p = (char *)strchr(sp,'/')) != (char *)NULL) {
+	} else {
+		while ((p = strchr(sp,'/')) != NULL) {
 			sp = ++p;
 		}
+	}
+
 	return (sp);
 }
 
 /*
- *	tm_lock(fd)	- set advisory lock on the device
+ * tm_lock(fd) - set advisory lock on the device
  */
 int
 tm_lock(int fd)
 {
-	extern	int	fd_mklock();
+	extern int fd_mklock();
 	return (fd_mklock(fd));
 }
 
 /*
- *	tm_checklock	- check if advisory lock is on 
+ * tm_checklock - check if advisory lock is on 
  */
 int
 tm_checklock(int fd)
 {
-	extern	int	fd_cklock();
+	extern int fd_cklock();
 	return (fd_cklock(fd));
 }
 
@@ -105,9 +105,9 @@ check_session(int fd)
 	pid_t	sid;
 
 	if (ioctl(fd, TIOCGSID, &sid) == -1)
-		return(0);
+		return (0);
 	else if (sid == 0)
-		return(0);
+		return (0);
 	else
-		return(1);
+		return (1);
 }

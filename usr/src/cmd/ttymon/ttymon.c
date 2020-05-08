@@ -42,56 +42,37 @@
 #include <grp.h>
 #include <unistd.h>
 #include <ulimit.h>
+#include <libdevinfo.h>
 
 #include "sac.h"
 #include "ttymon.h"
 #include "tmstruct.h"
 #include "tmextern.h"
 
-static	int	Initialized;
+static int Initialized;
 
-extern	int	Retry;
-extern	struct	pollfd	*Pollp;
-static	void	initialize();
-static	void	open_all();
-static	int	set_poll();
-static	int	check_spawnlimit();
-static	int	mod_ttydefs();
+static void initialize(void);
+static void open_all(void);
+static int set_poll(struct pollfd *);
+static int check_spawnlimit(struct pmtab *);
+static int mod_ttydefs(void);
+static void free_defs(void);
 
-void	open_device();
-void	set_softcar();
-
-extern	int	check_session();
-extern	void	sigalarm();
-extern	void	revokedevaccess(char *, uid_t, gid_t, mode_t);
-/* can't include libdevinfo.h */
-extern int di_devperm_logout(const char *);
 
 /*
- * 	ttymon	- a port monitor under SAC
- *		- monitor ports, set terminal modes, baud rate
- *		  and line discipline for the port
- *		- invoke service on port if connection request received
- *		- Usage: ttymon
- *			 ttymon -g [options]
- *			 Valid options are
- *			 -h
- *			 -d device
- *			 -l ttylabel
- *			 -t timeout
- *			 -m modules
- *			 -p prompt
- *
- *		- ttymon without args is invoked by SAC
- *		- ttymon -g is invoked by process that needs to
- *		  have login service on the fly
+ * ttymon:
+ *	- a port monitor under SAC
+ *	- monitor ports, set terminal modes, baud rate and line discipline for
+ *	  the port
+ *	- invoke service on port if connection request received
+ *	- "ttymon" without args is invoked by SAC
+ *	- "ttymon -g" is invoked by a process that needs to have login service
+ *	  on the fly, including the "console-login" SMF service methods
  */
-
 int
 main(int argc, char *argv[])
 {
-	int	nfds;
-	extern	char	*lastname();
+	int nfds;
 
 	/*
 	 * Only the superuser should execute this command.
@@ -120,7 +101,7 @@ main(int argc, char *argv[])
 
 	if ((argc > 1) || (strcmp(lastname(argv[0]), "getty") == 0)) {
 		ttymon_express(argc, argv);
-		return (1);	/*NOTREACHED*/
+		return (1);
 	}
 
 	initialize();
@@ -133,6 +114,7 @@ main(int argc, char *argv[])
 			else
 				(void) pause();
 		}
+
 		/*
 		 * READDB messages may arrive during poll or pause.
 		 * So the flag needs to be checked again.
@@ -148,24 +130,19 @@ main(int argc, char *argv[])
 	}
 }
 
-static	void
-initialize()
+static void
+initialize(void)
 {
-	struct	pmtab	*tp;
-	register struct passwd *pwdp;
-	register struct	group	*gp;
-	struct	rlimit rlimit;
-	extern	struct	rlimit	Rlimit;
-	extern	 uid_t	Uucp_uid;
-	extern	 gid_t	Tty_gid;
+	struct pmtab *tp;
+	struct passwd *pwdp;
+	struct group *gp;
+	struct rlimit rlimit;
 
-#ifdef 	DEBUG
-	extern	opendebug();
-#endif
 	Initialized = FALSE;
+
 	/*
-	 * get_environ() must be called first,
-	 * otherwise we don't know where the log file is
+	 * get_environ() must be called first, otherwise we don't know where
+	 * the log file is
 	 */
 	get_environ();
 	openttymonlog();
@@ -221,10 +198,9 @@ initialize()
 	Npollfd = Nentries + 10;
 	if (Npollfd > Maxfds)
 		Npollfd = Maxfds;
-	if ((Pollp = (struct pollfd *)
-	    malloc((unsigned)(Npollfd * sizeof (struct pollfd))))
-	    == (struct pollfd *)NULL)
+	if ((Pollp = calloc(Npollfd, sizeof (struct pollfd))) == NULL) {
 		fatal("malloc for Pollp failed");
+	}
 
 	(void) mod_ttydefs();	/* just to initialize Mtime */
 	if (check_version(TTYDEFS_VERS, TTYDEFS) != 0)
@@ -251,31 +227,31 @@ initialize()
 	Retry = TRUE;
 	while (Retry) {
 		Retry = FALSE;
-		for (tp = PMtab; tp; tp = tp->p_next) {
-			if ((tp->p_status > 0) && (tp->p_fd == 0) &&
-			    (tp->p_pid == 0) && !(tp->p_ttyflags & I_FLAG) &&
-			    (!((State == PM_DISABLED) &&
-			    ((tp->p_dmsg == NULL)||(*(tp->p_dmsg) == '\0'))))) {
+		for (tp = PMtab; tp != NULL; tp = tp->pmt_next) {
+			if ((tp->pmt_status > 0) &&
+			    (tp->pmt_fd == 0) &&
+			    (tp->pmt_pid == 0) &&
+			    !(tp->pmt_ttyflags & I_FLAG) &&
+			    !(State == PM_DISABLED && empty(tp->pmt_dmsg))) {
 				open_device(tp);
-				if (tp->p_fd > 0)
+				if (tp->pmt_fd > 0) {
 					got_carrier(tp);
+				}
 			}
 		}
 	}
 	Initialized = TRUE;
 }
 
-static	void	free_defs();
-
 /*
- *	open_all - open devices in pmtab if the entry is
- *	         - valid, fd = 0, and pid = 0
+ * open_all	- open devices in pmtab if the entry is
+ *		- valid, fd = 0, and pid = 0
  */
 static void
-open_all()
+open_all(void)
 {
-	struct	pmtab	*tp;
-	int	check_modtime;
+	struct pmtab *tp;
+	int check_modtime;
 	sigset_t cset;
 	sigset_t tset;
 
@@ -284,11 +260,11 @@ open_all()
 #endif
 	check_modtime = TRUE;
 
-	for (tp = PMtab; tp; tp = tp->p_next) {
-		if ((tp->p_status > 0) && (tp->p_fd == 0) &&
-		    (tp->p_pid == 0) &&
-		    !(tp->p_ttyflags & I_FLAG) && (!((State == PM_DISABLED) &&
-		    ((tp->p_dmsg == NULL)||(*(tp->p_dmsg) == '\0'))))) {
+	for (tp = PMtab; tp; tp = tp->pmt_next) {
+		if ((tp->pmt_status > 0) && (tp->pmt_fd == 0) &&
+		    (tp->pmt_pid == 0) &&
+		    !(tp->pmt_ttyflags & I_FLAG) && (!((State == PM_DISABLED) &&
+		    ((tp->pmt_dmsg == NULL)||(*(tp->pmt_dmsg) == '\0'))))) {
 			/*
 			 * if we have not check modification time and
 			 * /etc/ttydefs was modified, need to re-read it
@@ -307,14 +283,14 @@ open_all()
 				(void) sigprocmask(SIG_SETMASK, &cset, NULL);
 			}
 			open_device(tp);
-			if (tp->p_fd > 0)
+			if (tp->pmt_fd > 0)
 				got_carrier(tp);
-		} else if (((tp->p_status == LOCKED) ||
-		    (tp->p_status == SESSION) ||
-		    (tp->p_status == UNACCESS)) &&
-		    (tp->p_fd > 0) &&
+		} else if (((tp->pmt_status == LOCKED) ||
+		    (tp->pmt_status == SESSION) ||
+		    (tp->pmt_status == UNACCESS)) &&
+		    (tp->pmt_fd > 0) &&
 		    (!((State == PM_DISABLED) &&
-		    ((tp->p_dmsg == NULL)||(*(tp->p_dmsg) == '\0'))))) {
+		    ((tp->pmt_dmsg == NULL)||(*(tp->pmt_dmsg) == '\0'))))) {
 			if (check_modtime && mod_ttydefs()) {
 				check_modtime = FALSE;
 				(void) sigprocmask(SIG_SETMASK, NULL, &cset);
@@ -328,19 +304,17 @@ open_all()
 				read_ttydefs(NULL, FALSE);
 				(void) sigprocmask(SIG_SETMASK, &cset, NULL);
 			}
-			tp->p_status = VALID;
+			tp->pmt_status = VALID;
 			open_device(tp);
-			if (tp->p_fd > 0)
+			if (tp->pmt_fd > 0)
 				got_carrier(tp);
 		}
 	}
 }
 
 void
-set_softcar(pmptr)
-struct	pmtab	*pmptr;
+set_softcar(struct pmtab *pmptr)
 {
-
 	int fd, val = 0;
 
 #ifdef	DEBUG
@@ -350,85 +324,90 @@ struct	pmtab	*pmptr;
 	 * If soft carrier is not set one way or
 	 * the other, leave it alone.
 	 */
-	if (*pmptr->p_softcar == '\0')
+	if (*pmptr->pmt_softcar == '\0')
 		return;
 
-	if (*pmptr->p_softcar == 'y')
+	if (*pmptr->pmt_softcar == 'y')
 		val = 1;
 
-	if ((fd = open(pmptr->p_device, O_RDONLY|O_NONBLOCK|O_NOCTTY)) < 0) {
-		log("open (%s) failed: %s", pmptr->p_device, strerror(errno));
+	if ((fd = open(pmptr->pmt_device,
+	    O_RDONLY | O_NONBLOCK | O_NOCTTY)) < 0) {
+		log("open (%s) failed: %s", pmptr->pmt_device, strerror(errno));
 		return;
 	}
 
-	if (ioctl(fd, TIOCSSOFTCAR, &val) < 0)
-		log("set soft-carrier (%s) failed: %s", pmptr->p_device,
+	if (ioctl(fd, TIOCSSOFTCAR, &val) < 0) {
+		log("set soft-carrier (%s) failed: %s", pmptr->pmt_device,
 		    strerror(errno));
+	}
 
-	close(fd);
+	safe_close(fd);
 }
 
 
 /*
- *	open_device(pmptr)	- open the device
- *				- check device lock
- *				- change owner of device
- *				- push line disciplines
- *				- set termio
+ * open_device(pmptr)	- open the device
+ *			- check device lock
+ *			- change owner of device
+ *			- push line disciplines
+ *			- set termio
  */
-
 void
-open_device(pmptr)
-struct	pmtab	*pmptr;
+open_device(struct pmtab *pmptr)
 {
-	int	fd, tmpfd;
-	struct	sigaction	sigact;
+	int fd, tmpfd;
+	struct sigaction sigact;
 
 #ifdef	DEBUG
 	debug("in open_device");
 #endif
 
-	if (pmptr->p_status == GETTY) {
-		revokedevaccess(pmptr->p_device, 0, 0, 0);
+	if (pmptr->pmt_status == GETTY) {
+		revokedevaccess(pmptr->pmt_device, 0, 0, 0);
 
-		if ((fd = open(pmptr->p_device, O_RDWR)) == -1)
-			fatal("open (%s) failed: %s", pmptr->p_device,
+		if ((fd = open(pmptr->pmt_device, O_RDWR)) == -1) {
+			fatal("open (%s) failed: %s", pmptr->pmt_device,
 			    strerror(errno));
+		}
 
 	} else {
 		if (check_spawnlimit(pmptr) == -1) {
-			pmptr->p_status = NOTVALID;
+			pmptr->pmt_status = NOTVALID;
 			log("service <%s> is respawning too rapidly",
-			    pmptr->p_tag);
+			    pmptr->pmt_tag);
 			return;
 		}
-		if (pmptr->p_fd > 0) { /* file already open */
-			fd = pmptr->p_fd;
-			pmptr->p_fd = 0;
-		} else if ((fd = open(pmptr->p_device, O_RDWR|O_NONBLOCK))
-		    == -1) {
-			log("open (%s) failed: %s", pmptr->p_device,
+
+		if (pmptr->pmt_fd > 0) { /* file already open */
+			fd = pmptr->pmt_fd;
+			pmptr->pmt_fd = 0;
+		} else if ((fd = open(pmptr->pmt_device,
+		    O_RDWR | O_NONBLOCK)) == -1) {
+			log("open (%s) failed: %s", pmptr->pmt_device,
 			    strerror(errno));
 			if ((errno ==  ENODEV) || (errno == EBUSY)) {
-				pmptr->p_status = UNACCESS;
+				pmptr->pmt_status = UNACCESS;
 				Nlocked++;
 				if (Nlocked == 1) {
-				    sigact.sa_flags = 0;
-				    sigact.sa_handler = sigalarm;
-				    (void) sigemptyset(&sigact.sa_mask);
-				    (void) sigaction(SIGALRM, &sigact, NULL);
-				    (void) alarm(ALARMTIME);
+					sigact.sa_flags = 0;
+					sigact.sa_handler = sigalarm;
+					(void) sigemptyset(&sigact.sa_mask);
+					(void) sigaction(SIGALRM, &sigact,
+					    NULL);
+					(void) alarm(ALARMTIME);
 				}
-			} else
+			} else {
 				Retry = TRUE;
+			}
 			return;
 		}
+
 		/* set close-on-exec flag */
 		if (fcntl(fd, F_SETFD, 1) == -1)
 			fatal("F_SETFD fcntl failed: %s", strerror(errno));
 
 		if (tm_checklock(fd) != 0) {
-			pmptr->p_status = LOCKED;
+			pmptr->pmt_status = LOCKED;
 			(void) close(fd);
 			Nlocked++;
 			if (Nlocked == 1) {
@@ -440,10 +419,11 @@ struct	pmtab	*pmptr;
 			}
 			return;
 		}
+
 		if (check_session(fd) != 0) {
-			if ((Initialized) && (pmptr->p_inservice != SESSION)) {
+			if (Initialized && pmptr->pmt_inservice != SESSION) {
 				log("Warning -- active session exists on <%s>",
-				    pmptr->p_device);
+				    pmptr->pmt_device);
 			} else {
 				/*
 				 * this may happen if a service is running
@@ -451,8 +431,8 @@ struct	pmtab	*pmptr;
 				 * or another process is running on the
 				 * port.
 				 */
-				pmptr->p_status = SESSION;
-				pmptr->p_inservice = 0;
+				pmptr->pmt_status = SESSION;
+				pmptr->pmt_inservice = 0;
 				(void) close(fd);
 				Nlocked++;
 				if (Nlocked == 1) {
@@ -466,10 +446,10 @@ struct	pmtab	*pmptr;
 				return;
 			}
 		}
-		pmptr->p_inservice = 0;
+		pmptr->pmt_inservice = 0;
 	}
 
-	if (pmptr->p_ttyflags & H_FLAG) {
+	if (pmptr->pmt_ttyflags & H_FLAG) {
 		/* drop DTR */
 		(void) hang_up_line(fd);
 		/*
@@ -477,8 +457,9 @@ struct	pmtab	*pmptr;
 		 * We need to do another open to reinitialize streams
 		 * then we can close one fd
 		 */
-		if ((tmpfd = open(pmptr->p_device, O_RDWR|O_NONBLOCK)) == -1) {
-			log("open (%s) failed: %s", pmptr->p_device,
+		if ((tmpfd = open(pmptr->pmt_device,
+		    O_RDWR | O_NONBLOCK)) == -1) {
+			log("open (%s) failed: %s", pmptr->pmt_device,
 			    strerror(errno));
 			Retry = TRUE;
 			(void) close(fd);
@@ -488,21 +469,23 @@ struct	pmtab	*pmptr;
 	}
 
 #ifdef DEBUG
-	debug("open_device (%s), fd = %d", pmptr->p_device, fd);
+	debug("open_device (%s), fd = %d", pmptr->pmt_device, fd);
 #endif
 
-	/* Change ownership of the tty line to root/uucp and */
-	/* set protections to only allow root/uucp to read the line. */
-
-	if (pmptr->p_ttyflags & (B_FLAG|C_FLAG))
+	/*
+	 * Change ownership of the tty line to root/uucp and set protections to
+	 * only allow root/uucp to read the line.
+	 */
+	if (pmptr->pmt_ttyflags & (B_FLAG|C_FLAG)) {
 		(void) fchown(fd, Uucp_uid, Tty_gid);
-	else
+	} else {
 		(void) fchown(fd, ROOTUID, Tty_gid);
+	}
 	(void) fchmod(fd, 0620);
 
-	if ((pmptr->p_modules != NULL)&&(*(pmptr->p_modules) != '\0')) {
-		if (push_linedisc(fd, pmptr->p_modules, pmptr->p_device)
-		    == -1) {
+	if ((pmptr->pmt_modules != NULL)&&(*(pmptr->pmt_modules) != '\0')) {
+		if (push_linedisc(fd, pmptr->pmt_modules,
+		    pmptr->pmt_device) == -1) {
 			Retry = TRUE;
 			(void) close(fd);
 			return;
@@ -515,57 +498,55 @@ struct	pmtab	*pmptr;
 		return;
 	}
 
-	di_devperm_logout((const char *)pmptr->p_device);
-	pmptr->p_fd = fd;
+	(void) di_devperm_logout((const char *)pmptr->pmt_device);
+	pmptr->pmt_fd = fd;
 }
 
 /*
- *	set_poll(fdp)	- put all fd's in a pollfd array
+ * set_poll(fdp)	- put all fd's in a pollfd array
  *			- set poll event to POLLIN and POLLMSG
  *			- return number of fd to be polled
  */
 
-static	int
-set_poll(fdp)
-struct pollfd *fdp;
+static int
+set_poll(struct pollfd *fdp)
 {
-	struct	pmtab	*tp;
-	int 	nfd = 0;
+	int nfd = 0;
 
-	for (tp = PMtab; tp; tp = tp->p_next) {
-		if (tp->p_fd > 0)  {
-			fdp->fd = tp->p_fd;
+	for (struct pmtab *tp = PMtab; tp != NULL; tp = tp->pmt_next) {
+		if (tp->pmt_fd > 0)  {
+			fdp->fd = tp->pmt_fd;
 			fdp->events = POLLIN;
 			fdp++;
 			nfd++;
 		}
 	}
+
 	return (nfd);
 }
 
 /*
- *	check_spawnlimit	- return 0 if spawnlimit is not reached
- *				- otherwise return -1
+ * check_spawnlimit	- return 0 if spawnlimit is not reached
+ *			- otherwise return -1
  */
-static	int
-check_spawnlimit(pmptr)
-struct	pmtab	*pmptr;
+static int
+check_spawnlimit(struct pmtab *pmptr)
 {
 	time_t	now;
 
 	(void) time(&now);
-	if (pmptr->p_time == 0L)
-		pmptr->p_time = now;
-	if (pmptr->p_respawn >= SPAWN_LIMIT) {
-		if ((now - pmptr->p_time) < SPAWN_INTERVAL) {
-			pmptr->p_time = now;
-			pmptr->p_respawn = 0;
+	if (pmptr->pmt_time == 0L)
+		pmptr->pmt_time = now;
+	if (pmptr->pmt_respawn >= SPAWN_LIMIT) {
+		if ((now - pmptr->pmt_time) < SPAWN_INTERVAL) {
+			pmptr->pmt_time = now;
+			pmptr->pmt_respawn = 0;
 			return (-1);
 		}
-		pmptr->p_time = now;
-		pmptr->p_respawn = 0;
+		pmptr->pmt_time = now;
+		pmptr->pmt_respawn = 0;
 	}
-	pmptr->p_respawn++;
+	pmptr->pmt_respawn++;
 	return (0);
 }
 
@@ -574,11 +555,10 @@ struct	pmtab	*pmptr;
  *		- return TRUE if file modified
  *		- otherwise, return FALSE
  */
-static	int
-mod_ttydefs()
+static int
+mod_ttydefs(void)
 {
 	struct	stat	statbuf;
-	extern	long	Mtime;
 	if (stat(TTYDEFS, &statbuf) == -1) {
 		/* if stat failed, don't bother reread ttydefs */
 		return (FALSE);
@@ -591,10 +571,10 @@ mod_ttydefs()
 }
 
 /*
- *	free_defs - free the Gdef table
+ * free_defs - free the Gdef table
  */
-static	void
-free_defs()
+static void
+free_defs(void)
 {
 	int	i;
 	struct	Gdef	*tp;
@@ -621,17 +601,19 @@ free_defs()
  */
 
 struct Gdef *
-get_speed(char *ttylabel)
+get_speed(const char *ttylabel)
 {
-	register struct Gdef *sp;
-	extern   struct Gdef DEFAULT;
+	struct Gdef *sp;
 
-	if ((ttylabel != NULL) && (*ttylabel != '\0')) {
-		if ((sp = find_def(ttylabel)) == NULL) {
-			log("unable to find <%s> in \"%s\"", ttylabel, TTYDEFS);
-			sp = &DEFAULT; /* use default */
-		}
-	} else sp = &DEFAULT; /* use default */
+	if (empty(ttylabel)) {
+		return (&DEFAULT);
+	}
+
+	if ((sp = find_def(ttylabel)) == NULL) {
+		log("unable to find <%s> in \"%s\"", ttylabel, TTYDEFS);
+		sp = &DEFAULT; /* use default */
+	}
+
 	return (sp);
 }
 
@@ -644,7 +626,7 @@ get_speed(char *ttylabel)
  *			  to detect failure of ttymon
  */
 void
-setup_PCpipe()
+setup_PCpipe(void)
 {
 	int	flag = 0;
 

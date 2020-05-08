@@ -81,6 +81,8 @@ extern	const struct	mds	omodes[];
 extern	const struct	mds	hmodes[];
 extern	const struct	mds	clkmodes[];
 
+extern const char *not_supported[];
+
 #ifdef	__cplusplus
 }
 #endif

@@ -27,23 +27,15 @@
  */
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "uucp.h"
 
 #include <unistd.h>
-/* #include <sys/types.h> */
-/* #include <sys/stat.h> */
 
 static struct stat _st_buf;
 static char lockname[BUFSIZ];
 
-#ifdef	V7
-#define O_RDONLY	0
-#endif
-
-static void	stlock();
-static int	onelock();
+static void stlock();
+static int onelock();
 
 /*
  * make a lock file with given 'name'
@@ -57,101 +49,90 @@ static int	onelock();
  *	0	-> success
  *	FAIL	-> failure
  */
-
-GLOBAL int
-mklock(name)
-register char *name;
+int
+mklock(const char *name)
 {
-	static	char pid[SIZEOFPID+2] = { '\0' }; /* +2 for '\n' and NULL */
+	static char pid[SIZEOFPID+2] = { '\0' }; /* +2 for '\n' and NULL */
 	static char tempfile[MAXNAMESIZE];
-
-#ifdef V8
-	char *cp;
-#endif
 
 	if (pid[0] == '\0') {
 		(void) sprintf(pid, "%*ld\n", SIZEOFPID, (long) getpid());
-		(void) sprintf(tempfile, "%s/LTMP.%ld", X_LOCKDIR, (long) getpid());
+		(void) sprintf(tempfile, "%s/LTMP.%ld", X_LOCKDIR,
+		    (long) getpid());
 	}
 
-#ifdef V8	/* this wouldn't be a problem if we used lock directories */
-		/* some day the truncation of system names will bite us */
-	cp = rindex(name, '/');
-	if (cp++ != CNULL)
-	    if (strlen(cp) > MAXBASENAME)
-		*(cp+MAXBASENAME) = NULLCHAR;
-#endif /* V8 */
 	if (onelock(pid, tempfile, name) == -1) {
 		(void) unlink(tempfile);
-		if (cklock(name))
-			return(FAIL);
-		else {
-		    if (onelock(pid, tempfile, name)) {
-			(void) unlink(tempfile);
-			DEBUG(4,"ulockf failed in onelock()\n%s", "");
-			return(FAIL);
-		    }
+		if (cklock(name)) {
+			return (FAIL);
+		} else {
+			if (onelock(pid, tempfile, name)) {
+				(void) unlink(tempfile);
+				DEBUG(4, "ulockf failed in onelock()\n%s", "");
+				return (FAIL);
+			}
 		}
 	}
 
 	stlock(name);
-	return(0);
+	return (0);
 }
 
 /*
  * check to see if the lock file exists and is still active
- * - use kill(pid,0)
+ * - use kill(pid, 0)
  *
  * return:
- *	0	-> success (lock file removed - no longer active
+ *	0	-> success (lock file removed - no longer active)
  *	FAIL	-> lock file still active
  */
-GLOBAL int
-cklock(name)
-register char *name;
+int
+cklock(const char *name)
 {
 	register int ret;
 	pid_t lpid = -1;
-	char alpid[SIZEOFPID+2];	/* +2 for '\n' and NULL */
+	char alpid[SIZEOFPID + 2];	/* +2 for '\n' and NUL */
 	int fd;
 
 	fd = open(name, O_RDONLY);
 	DEBUG(4, "ulockf name %s\n", name);
 	if (fd == -1) {
-	    if (errno == ENOENT)  /* file does not exist -- OK */
-		return(0);
-	    DEBUG(4,"Lock File--can't read (errno %d) --remove it!\n", errno);
-	    goto unlk;
+		if (errno == ENOENT)  /* file does not exist -- OK */
+			return (0);
+		DEBUG(4, "Lock File--can't read (errno %d) --remove it!\n",
+		    errno);
+		goto unlk;
 	}
-	ret = read(fd, (char *) alpid, SIZEOFPID+1); /* +1 for '\n' */
+
+	ret = read(fd, (char *) alpid, SIZEOFPID + 1); /* +1 for '\n' */
 	(void) close(fd);
 	if (ret != (SIZEOFPID+1)) {
+		DEBUG(4, "Lock File--bad format--remove it!\n%s", "");
+		goto unlk;
+	}
 
-	    DEBUG(4, "Lock File--bad format--remove it!\n%s", "");
-	    goto unlk;
-	}
 	lpid = (pid_t) strtol(alpid, (char **) NULL, 10);
-	if ((ret=kill(lpid, 0)) == 0 || errno == EPERM) {
+	if ((ret = kill(lpid, 0)) == 0 || errno == EPERM) {
 	    DEBUG(4, "Lock File--process still active--not removed\n%s", "");
-	    return(FAIL);
-	}
-	else { /* process no longer active */
+	    return (FAIL);
+	} else { /* process no longer active */
 	    DEBUG(4, "kill pid (%ld), ", (long) lpid);
 	    DEBUG(4, "returned %d", ret);
 	    DEBUG(4, "--ok to remove lock file (%s)\n", name);
 	}
-unlk:
 
+unlk:
 	if (unlink(name) != 0) {
 		DEBUG(4,"ulockf failed in unlink()\n%s", "");
-		return(FAIL);
+		return (FAIL);
 	}
-	return(0);
+
+	return (0);
 }
 
 #define MAXLOCKS 10	/* maximum number of lock files */
 static char *Lockfile[MAXLOCKS];
-GLOBAL int Nlocks = 0;
+int Nlocks = 0;
 
 /*
  * put name in list of lock files
@@ -159,11 +140,9 @@ GLOBAL int Nlocks = 0;
  *	none
  */
 static void
-stlock(name)
-char *name;
+stlock(const char *name)
 {
 	register int i;
-	char *p;
 
 	for (i = 0; i < Nlocks; i++) {
 		if (Lockfile[i] == NULL)
@@ -172,11 +151,11 @@ char *name;
 	ASSERT(i < MAXLOCKS, "TOO MANY LOCKS", "", i);
 	if (i >= Nlocks)
 		i = Nlocks++;
-	p = (char*) calloc((unsigned) strlen(name) + 1, sizeof (char));
+
+	char *p = calloc(strlen(name) + 1, sizeof (char));
 	ASSERT(p != NULL, "CAN NOT ALLOCATE FOR", name, 0);
 	(void) strcpy(p, name);
 	Lockfile[i] = p;
-	return;
 }
 
 /*
@@ -185,34 +164,20 @@ char *name;
  * return:
  *	none
  */
-GLOBAL void
-rmlock(name)
-register char *name;
+void
+rmlock(const char *name)
 {
-	register int i;
-#ifdef V8
-	char *cp;
-
-	cp = rindex(name, '/');
-	if (cp++ != CNULL)
-	    if (strlen(cp) > MAXBASENAME)
-		*(cp+MAXBASENAME) = NULLCHAR;
-#endif /* V8 */
-
-
-	for (i = 0; i < Nlocks; i++) {
+	for (int i = 0; i < Nlocks; i++) {
 		if (Lockfile[i] == NULL)
 			continue;
+
 		if (name == NULL || EQUALS(name, Lockfile[i])) {
 			(void) unlink(Lockfile[i]);
 			free(Lockfile[i]);
 			Lockfile[i] = NULL;
 		}
 	}
-	return;
 }
-
-
 
 /*
  * remove a lock file
@@ -226,17 +191,14 @@ register char *name;
  * return:
  *	none
  */
-GLOBAL void
-delock(pre, s)
-char * pre;
-char *s;
+void
+delock(const char *pre, const char *s)
 {
 	char ln[MAXNAMESIZE];
 
 	(void) sprintf(ln, "%s.%s", pre, s);
 	BASENAME(ln, '/')[MAXBASENAME] = '\0';
 	rmlock(ln);
-	return;
 }
 
 
@@ -253,10 +215,8 @@ char *s;
  *	0	-> success
  *	FAIL	-> failure
  */
-GLOBAL int
-mlock(pre, name)
-char * pre;
-char *name;
+int
+mlock(const char *pre, const char *name)
 {
 	char lname[MAXNAMESIZE];
 
@@ -275,11 +235,11 @@ char *name;
 	 * to accomodate devices in directories other than /dev ... maybe in
 	 * the next release.
 	 */
-	if ( strchr(name, '/') != NULL )
-		return(0);
+	if (strchr(name, '/') != NULL)
+		return (0);
 	(void) sprintf(lname, "%s.%s", pre, BASENAME(name, '/'));
 	BASENAME(lname, '/')[MAXBASENAME] = '\0';
-	return(mklock(lname));
+	return (mklock(lname));
 }
 
 /*
@@ -293,46 +253,52 @@ char *name;
  *	0  - lock made successfully
  */
 static int
-onelock(pid,tempfile,name)
-char *pid;
-char *tempfile, *name;
+onelock(const char *pid, const char *tempfile, const char *name)
 {	
-	register int fd;
-	char	cb[100];
+	int fd;
+	char cb[100];
 
-	fd=creat(tempfile, (mode_t) 0444);
-	if(fd < 0){
+	fd = creat(tempfile, (mode_t)0444);
+	if (fd < 0){
 		(void) sprintf(cb, "%s %s %d",tempfile, name, errno);
 		logent("ULOCKC", cb);
-		if((errno == EMFILE) || (errno == ENFILE))
+		if (errno == EMFILE || errno == ENFILE) {
 			(void) unlink(tempfile);
-		return(-1);
+		}
+		return (-1);
 	}
+
 	/* +1 for '\n' */
-	if (write(fd, pid, SIZEOFPID+1) != (SIZEOFPID+1)) {
-		(void) sprintf(cb, "%s %s %d",tempfile, name, errno);
+	if (write(fd, pid, SIZEOFPID + 1) != (SIZEOFPID + 1)) {
+		(void) sprintf(cb, "%s %s %d", tempfile, name, errno);
 		logent("ULOCKW", cb);
 		(void) unlink(tempfile);
 		return (-1);
 	}
+
 	(void) chmod(tempfile, (mode_t) 0444);
 	(void) chown(tempfile, UUCPUID, UUCPGID);
 	(void) close(fd);
-	if(link(tempfile,name)<0){
+
+	if (link(tempfile, name) < 0) {
 		DEBUG(4, "%s: ", strerror(errno));
 		DEBUG(4, "link(%s, ", tempfile);
 		DEBUG(4, "%s)\n", name);
-		if(unlink(tempfile)< 0){
-			(void) sprintf(cb, "ULK err %s %d", tempfile,  errno);
+
+		if (unlink(tempfile) < 0){
+			(void) sprintf(cb, "ULK err %s %d", tempfile, errno);
 			logent("ULOCKLNK", cb);
 		}
-		return(-1);
+
+		return (-1);
 	}
-	if(unlink(tempfile)<0){
-		(void) sprintf(cb, "%s %d",tempfile,errno);
+
+	if (unlink(tempfile) < 0) {
+		(void) sprintf(cb, "%s %d", tempfile, errno);
 		logent("ULOCKF", cb);
 	}
-	return(0);
+
+	return (0);
 }
 
 /*
@@ -342,35 +308,37 @@ char *tempfile, *name;
  *	SUCCESS - this process now has the fd locked
  *	FAIL - this process was not able to lock the fd
  */
-
-GLOBAL int
-fd_mklock(fd)
-int fd;
+int
+fd_mklock(int fd)
 {
-    int tries = 0;
+	int tries = 0;
 
-    if ( fstat(fd, &_st_buf) != 0 )
-	return(FAIL);
-
-    (void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
-        (unsigned long) major(_st_buf.st_dev),
-	(unsigned long) major(_st_buf.st_rdev),
-	(unsigned long) minor(_st_buf.st_rdev));
-
-    if ( mklock(lockname) == FAIL )
-	return(FAIL);
-
-    while ( lockf(fd, F_TLOCK, 0L) != 0 ) {	
-	DEBUG(7, "fd_mklock: lockf returns %d\n", errno);
-	if ( (++tries >= MAX_LOCKTRY) || (errno != EAGAIN) ) {
-	    rmlock(lockname);
-	    logent("fd_mklock","lockf failed");
-	    return(FAIL);
+	if (fstat(fd, &_st_buf) != 0) {
+		return (FAIL);
 	}
-	(void)sleep(2);
-    }
-    DEBUG(7, "fd_mklock: ok\n%s", "");
-    return(SUCCESS);
+
+	(void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
+	    (unsigned long) major(_st_buf.st_dev),
+	    (unsigned long) major(_st_buf.st_rdev),
+	    (unsigned long) minor(_st_buf.st_rdev));
+
+	if (mklock(lockname) == FAIL)
+		return (FAIL);
+
+	while (lockf(fd, F_TLOCK, 0L) != 0) {
+		DEBUG(7, "fd_mklock: lockf returns %d\n", errno);
+
+		if ((++tries >= MAX_LOCKTRY) || errno != EAGAIN) {
+			rmlock(lockname);
+			logent("fd_mklock","lockf failed");
+			return (FAIL);
+		}
+
+		(void)sleep(2);
+	}
+
+	DEBUG(7, "fd_mklock: ok\n%s", "");
+	return (SUCCESS);
 }
 
 /*
@@ -380,23 +348,21 @@ int fd;
  *	SUCCESS - the name is not locked
  *	FAIL - the name is locked by another process
  */
-
-GLOBAL int
-fn_cklock(name)
-char *name;
+int
+fn_cklock(char *name)
 {
-    /* we temporarily use lockname to hold full path name */
-    (void) sprintf(lockname, "%s%s", (*name == '/' ? "" : "/dev/"), name);
+	/* we temporarily use lockname to hold full path name */
+	(void) sprintf(lockname, "%s%s", (*name == '/' ? "" : "/dev/"), name);
 
-    if ( stat(lockname, &_st_buf) != 0 )
-	return(FAIL);
+	if (stat(lockname, &_st_buf) != 0)
+		return (FAIL);
 
-    (void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
-        (unsigned long) major(_st_buf.st_dev),
-	(unsigned long) major(_st_buf.st_rdev),
-	(unsigned long) minor(_st_buf.st_rdev));
+	(void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
+	    (unsigned long) major(_st_buf.st_dev),
+	    (unsigned long) major(_st_buf.st_rdev),
+	    (unsigned long) minor(_st_buf.st_rdev));
 
-    return(cklock(lockname));
+	return (cklock(lockname));
 }
 
 /*
@@ -406,23 +372,21 @@ char *name;
  *	SUCCESS - the fd is not locked
  *	FAIL - the fd is locked by another process
  */
-
-GLOBAL int
-fd_cklock(fd)
-int fd;
+int
+fd_cklock(int fd)
 {
-    if ( fstat(fd, &_st_buf) != 0 )
-	return(FAIL);
+	if (fstat(fd, &_st_buf) != 0)
+		return (FAIL);
 
-    (void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
-        (unsigned long) major(_st_buf.st_dev),
-	(unsigned long) major(_st_buf.st_rdev),
-	(unsigned long) minor(_st_buf.st_rdev));
+	(void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
+	    (unsigned long) major(_st_buf.st_dev),
+	    (unsigned long) major(_st_buf.st_rdev),
+	    (unsigned long) minor(_st_buf.st_rdev));
 
-    if ( cklock(lockname) == FAIL )
-	return(FAIL);
-    else
-	return( lockf(fd, F_TEST, 0L) );
+	if (cklock(lockname) == FAIL)
+		return (FAIL);
+	else
+		return(lockf(fd, F_TEST, 0L));
 }
 
 /*
@@ -432,18 +396,16 @@ int fd;
  *	SUCCESS - both BNU lock file and advisory locks removed
  *	FAIL - 
  */
-
-GLOBAL void
-fd_rmlock(fd)
-int fd;
+void
+fd_rmlock(int fd)
 {
-    if ( fstat(fd, &_st_buf) == 0 ) {
-        (void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
-            (unsigned long) major(_st_buf.st_dev),
-	    (unsigned long) major(_st_buf.st_rdev),
-	    (unsigned long) minor(_st_buf.st_rdev));
-        rmlock(lockname);
-    }
-    (void) lockf(fd, F_ULOCK, 0L);
-    return;
+	if (fstat(fd, &_st_buf) == 0) {
+		(void) sprintf(lockname, "%s.%3.3lu.%3.3lu.%3.3lu", L_LOCK,
+		    (unsigned long) major(_st_buf.st_dev),
+		    (unsigned long) major(_st_buf.st_rdev),
+		    (unsigned long) minor(_st_buf.st_rdev));
+		rmlock(lockname);
+	}
+
+	(void) lockf(fd, F_ULOCK, 0L);
 }

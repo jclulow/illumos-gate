@@ -27,9 +27,6 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -38,73 +35,47 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <stdarg.h>
+#include <err.h>
 #include "tmstruct.h"
+#include "tmextern.h"
 #include "ttymon.h"
 
 /*
- *	ttyadm 	- format ttymon specific information and
- *		  print it to stdout
- *
- *	Usage: 	ttyadm [options] -d device -s service -l ttylabel
- *		ttyadm -V
- *			
- *		valid options are:
- *		-c
- *		-h
- *		-b
- *		-I
- *		-S y|n
- *		-T term
- *		-r count
- *		-t timeout
- *		-p prompt
- *		-m modules
- *		-i msg
+ * ttyadm - format ttymon specific information and print it to stdout.
  */
 
-static void usage();
-static	int	check_label();
-
-extern	int	check_device();
-extern	int	check_cmd();
-extern	int	vml();
+static void usage(void);
+static int check_label(const char *);
 
 int
 main(int argc, char *argv[])
 {
-	int c;			/* option letter */
-	int errflg = 0;		/* error indicator */
-
+	int c;
+	int errflg = 0;
 	struct pmtab *ptr;
 	char *timeout = "";
 	char *count = "";
 	char prompt[BUFSIZ];
 	char dmsg[BUFSIZ];
 	char ttyflags[BUFSIZ], *tf;
-
-	int  dflag = 0;		/* -d seen */
-	int  sflag = 0;		/* -s seen */
-	int  lflag = 0;		/* -l seen */
-	int  mflag = 0;		/* -m seen */
-
-	extern	void 	copystr();
-	extern	char	*optarg;
-	extern	int	optind;
-	extern	int	strcheck();
+	int dflag = 0;
+	int sflag = 0;
+	int lflag = 0;
+	int mflag = 0;
 
 	if (argc == 1)
 		usage();
-	if ((ptr = ALLOC_PMTAB) == PNULL) {
-		(void)fprintf(stderr, "calloc failed\n");
-		exit(1);
+	if ((ptr = calloc(1, sizeof (*ptr))) == NULL) {
+		errx(1, "failed to allocate memory");
 	}
-	ptr->p_modules = "";
-	ptr->p_dmsg = "";
-	ptr->p_termtype = "";
-	ptr->p_softcar = "";
-	ptr->p_prompt = "login\\: ";
+	ptr->pmt_modules = "";
+	ptr->pmt_dmsg = "";
+	ptr->pmt_termtype = "";
+	ptr->pmt_softcar = "";
+	ptr->pmt_prompt = "login\\: ";
 	ttyflags[0] = '\0';
 	tf = ttyflags;
+
 	while ((c = getopt(argc, argv, "IT:S:Vd:s:chbr:t:l:m:p:i:")) != -1) {
 		switch (c) {
 		case 'V':
@@ -114,7 +85,7 @@ main(int argc, char *argv[])
 			exit(0);
 			break;	/*NOTREACHED*/
 		case 'd':
-			ptr->p_device = optarg;
+			ptr->pmt_device = optarg;
 			dflag = 1;
 			break;
 		case 'c':
@@ -132,56 +103,56 @@ main(int argc, char *argv[])
 		case 'r':
 			tf = strcat(tf,"r");
 			count = optarg;
-			if (strcheck(optarg,NUM) != 0) {
-				(void)fprintf(stderr, 
-		"Invalid argument for \"-r\" -- positive number expected.\n");
+			if (strcheck(optarg, NUM) != 0) {
+				warnx("Invalid argument for \"-r\" -- "
+				    "positive number expected.\n");
 				usage();
 			}
 			break;
 		case 'T':
-			ptr->p_termtype = optarg;
+			ptr->pmt_termtype = optarg;
 			break;
 		case 'S':
 			switch (*optarg) {
 			case 'Y':
 			case 'y':
-				ptr->p_softcar = "y";
+				ptr->pmt_softcar = "y";
 				break;
 			case 'N':
 			case 'n':
-				ptr->p_softcar = "n";
+				ptr->pmt_softcar = "n";
 				break;
 			default:
 				usage();
 			}
 			break;
 		case 's':
-			ptr->p_server = optarg;
+			ptr->pmt_server = optarg;
 			sflag = 1;
 			break;
 		case 't':
 			timeout = optarg;
 			if (strcheck(optarg,NUM) != 0) {
-				(void)fprintf(stderr, 
-		"Invalid argument for \"-t\" -- positive number expected.\n");
+				warnx("Invalid argument for \"-t\" -- "
+				    "positive number expected.\n");
 				usage();
 			}
 			break;
 		case 'l':
-			ptr->p_ttylabel = optarg;
+			ptr->pmt_ttylabel = optarg;
 			lflag = 1;
 			break;
 		case 'm':
-			ptr->p_modules = optarg;
+			ptr->pmt_modules = optarg;
 			mflag = 1;
 			break;
 		case 'p':
-			ptr->p_prompt = prompt;
-			copystr(ptr->p_prompt,optarg);
+			ptr->pmt_prompt = prompt;
+			copystr(ptr->pmt_prompt,optarg);
 			break;
 		case 'i':
-			ptr->p_dmsg = dmsg;
-			copystr(ptr->p_dmsg,optarg);
+			ptr->pmt_dmsg = dmsg;
+			copystr(ptr->pmt_dmsg,optarg);
 			break;
 		case '?':
 			usage();
@@ -194,80 +165,85 @@ main(int argc, char *argv[])
 	if ((!dflag) || (!sflag) || (!lflag))
 		usage();
 
-	if (check_device(ptr->p_device) != 0)
+	if (check_device(ptr->pmt_device) != 0)
 		errflg++;
-	if (check_cmd(ptr->p_server) != 0)
+	if (check_cmd(ptr->pmt_server) != 0)
 		errflg++;
-	if (check_label(ptr->p_ttylabel) != 0)
+	if (check_label(ptr->pmt_ttylabel) != 0)
 		errflg++;
-	if (mflag && (vml(ptr->p_modules) != 0))
+	if (mflag && (vml(ptr->pmt_modules) != 0))
 		errflg++;
 	if (errflg)
 		exit(1);
-	(void)fprintf(stdout, "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:",
-			ptr->p_device, ttyflags, count, ptr->p_server,
-			timeout, ptr->p_ttylabel, ptr->p_modules,
-			ptr->p_prompt, ptr->p_dmsg, ptr->p_termtype,
-			ptr->p_softcar);
+
+	(void) fprintf(stdout, "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:",
+	    ptr->pmt_device, ttyflags, count, ptr->pmt_server,
+	    timeout, ptr->pmt_ttylabel, ptr->pmt_modules,
+	    ptr->pmt_prompt, ptr->pmt_dmsg, ptr->pmt_termtype,
+	    ptr->pmt_softcar);
+
 	return (0);
 }
 
 /*
  * usage - print out a usage message
  */
-
 static void
-usage()
+usage(void)
 {
-	(void)fprintf(stderr, "Usage:\tttyadm [ options ] -d device -s service -l ttylabel\n");
-	(void)fprintf(stderr, "\tttyadm -V\n");
-	(void)fprintf(stderr, "\n\tValid options are:\n");
-	(void)fprintf(stderr, "\t-c\n");
-	(void)fprintf(stderr, "\t-h\n");
-	(void)fprintf(stderr, "\t-b\n");
-	(void)fprintf(stderr, "\t-I\n");
-	(void)fprintf(stderr, "\t-S y|n\n");
-	(void)fprintf(stderr, "\t-T term\n");
-	(void)fprintf(stderr, "\t-r count\n");
-	(void)fprintf(stderr, "\t-t timeout\n");
-	(void)fprintf(stderr, "\t-p prompt\n");
-	(void)fprintf(stderr, "\t-m modules\n");
-	(void)fprintf(stderr, "\t-i msg\n");
+	(void) fprintf(stderr, "Usage:\tttyadm [ options ] -d device "
+	    "-s service -l ttylabel\n");
+	(void) fprintf(stderr, "\tttyadm -V\n");
+	(void) fprintf(stderr, "\n\tValid options are:\n");
+	(void) fprintf(stderr, "\t-c\n");
+	(void) fprintf(stderr, "\t-h\n");
+	(void) fprintf(stderr, "\t-b\n");
+	(void) fprintf(stderr, "\t-I\n");
+	(void) fprintf(stderr, "\t-S y|n\n");
+	(void) fprintf(stderr, "\t-T term\n");
+	(void) fprintf(stderr, "\t-r count\n");
+	(void) fprintf(stderr, "\t-t timeout\n");
+	(void) fprintf(stderr, "\t-p prompt\n");
+	(void) fprintf(stderr, "\t-m modules\n");
+	(void) fprintf(stderr, "\t-i msg\n");
+
 	exit(1);
 }
 
 /*
- *	check_label	- if ttylabel exists in /etc/ttydefs, return 0
- *			- otherwise, return -1
+ * check_label	- if ttylabel exists in /etc/ttydefs, return 0
+ *		- otherwise, return -1
  */
-
 static int
-check_label(ttylabel)
-char	*ttylabel;
+check_label(const char *ttylabel)
 {
 	FILE *fp;
 	extern	int	find_label();
 
-	if ((ttylabel == NULL) || (*ttylabel == '\0')) {
-		(void)fprintf(stderr, "error -- ttylabel is missing");
-		return(-1);
+	if (empty(ttylabel)) {
+		(void) fprintf(stderr, "error -- ttylabel is missing");
+		return (-1);
 	}
+
 	if ((fp = fopen(TTYDEFS, "r")) == NULL) {
-		(void)fprintf(stderr, "error -- \"%s\" does not exist, can't verify ttylabel <%s>\n", TTYDEFS, ttylabel);
-		return(-1);
+		(void)fprintf(stderr, "error -- \"%s\" does not exist, "
+		    "can't verify ttylabel <%s>\n", TTYDEFS, ttylabel);
+		return (-1);
 	}
-	if (find_label(fp,ttylabel)) {
-		(void)fclose(fp);
-		return(0);
+
+	if (find_label(fp, ttylabel)) {
+		(void) fclose(fp);
+		return (0);
 	}	
-	(void)fclose(fp);
-	(void)fprintf(stderr,"error -- can't find ttylabel <%s> in \"%s\"\n",
-		ttylabel, TTYDEFS);
-	return(-1);
+
+	(void) fclose(fp);
+	(void) fprintf(stderr,"error -- can't find ttylabel <%s> in \"%s\"\n",
+	    ttylabel, TTYDEFS);
+	return (-1);
 }
 
 /*
- *	log	- print a message to stderr
+ * log - print a message to stderr
  */
 void
 log(const char *msg, ...)

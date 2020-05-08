@@ -27,24 +27,18 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <ctype.h>
+#include <string.h>
+#include <pwd.h>
+#include <grp.h>
+#include <signal.h>
+#include "ttymon.h"
+#include "tmstruct.h"
+#include "tmextern.h"
 
-
-#include	<unistd.h>
-#include	<stdlib.h>
-#include	<sys/types.h>
-#include	<ctype.h>
-#include	<string.h>
-#include 	<pwd.h>
-#include 	<grp.h>
-#include	<signal.h>
-#include	"ttymon.h"
-#include	"tmstruct.h"
-#include	"tmextern.h"
-
-extern	char	*strsave();
-extern	void	set_softcar();
-extern	int	vml();
 void	purge();
 static	int	get_flags();
 static	int	get_ttyflags();
@@ -52,11 +46,9 @@ static	int	same_entry();
 static	int	check_pmtab();
 static	void	insert_pmtab();
 static	void	free_pmtab();
-static	char	*expand();
+static	char	*expand(const char *, const char *);
 
-int	check_identity();
-
-int	strcheck();
+static int check_identity();
 
 /*
  * read_pmtab() 
@@ -67,22 +59,18 @@ int	strcheck();
 void
 read_pmtab()
 {
-	register struct pmtab *gptr;
-	register char *ptr, *wptr;
+	struct pmtab *gptr;
+	char *ptr, *wptr;
 	FILE 	 *fp;
 	int 	 input, state, size, rawc, field, linenum;
 	char 	 oldc;
 	char 	 line[BUFSIZ];
 	char 	 wbuf[BUFSIZ];
-	static 	 char *states[] = {
-	      "","tag","flags","identity","reserved1","reserved2","reserved3",
-	      "device","ttyflags","count","service", "timeout","ttylabel",
-	      "modules","prompt","disable msg","terminal type","soft-carrier"
-	};
+	static 	 char *states[] = { P_STATE_LIST };
 
-# ifdef DEBUG
+#ifdef DEBUG
 	debug("in read_pmtab");
-# endif
+#endif
 
 	if ((fp = fopen(PMTABFILE,"r")) == NULL) {
 		fatal("open pmtab (%s) failed", PMTABFILE);
@@ -92,17 +80,17 @@ read_pmtab()
 	if (check_version(PMTAB_VERS, PMTABFILE) != 0)
 		fatal("check pmtab version failed");
 
-	for (gptr = PMtab; gptr; gptr = gptr->p_next) {
-		if ((gptr->p_status == SESSION) ||
-		    (gptr->p_status == LOCKED) ||
-		    (gptr->p_status == UNACCESS)) {
-			if (gptr->p_fd > 0) {
-				(void)close(gptr->p_fd);
-				gptr->p_fd = 0;
+	for (gptr = PMtab; gptr; gptr = gptr->pmt_next) {
+		if (gptr->pmt_status == SESSION ||
+		    gptr->pmt_status == LOCKED ||
+		    gptr->pmt_status == UNACCESS) {
+			if (gptr->pmt_fd > 0) {
+				safe_close(gptr->pmt_fd);
+				gptr->pmt_fd = 0;
 			}
-			gptr->p_inservice = gptr->p_status;
+			gptr->pmt_inservice = gptr->pmt_status;
 		}
-		gptr->p_status = NOTVALID;
+		gptr->pmt_status = NOTVALID;
 	}
 
 	wptr = wbuf;
@@ -111,10 +99,13 @@ read_pmtab()
 	do {
 		linenum++;
 		line[0] = '\0';
-		for (ptr= line,oldc = '\0'; ptr < &line[sizeof(line)-1] &&
-		 (rawc=getc(fp))!= '\n' && rawc != EOF; ptr++,oldc=(char)rawc){
-			if ((rawc == '#') && (oldc != '\\'))
+		for (ptr = line, oldc = '\0';
+		    (rawc = getc(fp)) != '\n' && rawc != EOF &&
+		    ptr < &line[sizeof (line) - 1];
+		    ptr++, oldc = (char)rawc) {
+			if (rawc == '#' && oldc != '\\') {
 				break;
+			}
 			*ptr = (char)rawc;
 		}
 		*ptr = '\0';
@@ -128,14 +119,17 @@ read_pmtab()
 		}
 
 		if (rawc == EOF) {
-			if (ptr == line) break;
-			else input = FINISHED;
+			if (ptr == line)
+				break;
+			else
+				input = FINISHED;
 		}
 
 		/* if empty line, skip */
-		for (ptr=line; *ptr != '\0' && isspace(*ptr); ptr++)
+		for (ptr = line; *ptr != '\0' && isspace(*ptr); ptr++)
 			;
-		if (*ptr == '\0') continue;
+		if (*ptr == '\0')
+			continue;
 
 #ifdef DEBUG
 		debug("**** Next Entry ****\n%s", line);
@@ -144,114 +138,147 @@ read_pmtab()
 
 		/* Now we have the complete line */
 
-		if ((gptr = ALLOC_PMTAB) == PNULL)
+		if ((gptr = calloc(1, sizeof (*gptr))) == NULL) {
 			fatal("memory allocation failed");
+		}
 
 		/* set hangup flag, this is the default */
-		gptr->p_ttyflags |= H_FLAG;
+		gptr->pmt_ttyflags |= H_FLAG;
 
 		/*
 		 * For compatibility reasons, we cannot rely on these
 		 * having values assigned from pmtab.
 		 */
-		gptr->p_termtype = "";
-		gptr->p_softcar = "";
+		gptr->pmt_termtype = "";
+		gptr->pmt_softcar = "";
 
-		for (state=P_TAG,ptr=line;state !=FAILURE && state !=SUCCESS;) {
-			switch(state) {
+		state = P_TAG;
+		field = state;
+		ptr = line;
+		while (state != FAILURE && state != SUCCESS) {
+			switch (state) {
 			case P_TAG:
-				gptr->p_tag = strsave(getword(ptr,&size,0));
+				gptr->pmt_tag = safe_strdup(getword(ptr,
+				    &size, 0));
 				break;
+
 			case P_FLAGS:
-				(void)strcpy(wptr, getword(ptr,&size,0));
-				if ((get_flags(wptr, &gptr->p_flags)) != 0) {
+				(void) strcpy(wptr, getword(ptr, &size, 0));
+				if (get_flags(wptr, &gptr->pmt_flags) != 0) {
 					field = state;
 					state = FAILURE;
 				}
 				break;
+
 			case P_IDENTITY:
-				gptr->p_identity=strsave(getword(ptr,&size,0));
+				gptr->pmt_identity = safe_strdup(getword(ptr,
+				    &size, 0));
 				break;
+
 			case P_RES1:
-				gptr->p_res1=strsave(getword(ptr,&size,0));
+				gptr->pmt_res1 = safe_strdup(getword(ptr, &size,
+				    0));
 				break;
+
 			case P_RES2:
-				gptr->p_res2=strsave(getword(ptr,&size,0));
+				gptr->pmt_res2 = safe_strdup(getword(ptr, &size,
+				    0));
 				break;
+
 			case P_RES3:
-				gptr->p_res3=strsave(getword(ptr,&size,0));
+				gptr->pmt_res3 = safe_strdup(getword(ptr, &size,
+				    0));
 				break;
+
 			case P_DEVICE:
-				gptr->p_device = strsave(getword(ptr,&size,0));
+				gptr->pmt_device = safe_strdup(getword(ptr, &size,
+				    0));
 				break;
+
 			case P_TTYFLAGS:
-				(void)strcpy(wptr, getword(ptr,&size,0));
-				if ((get_ttyflags(wptr,&gptr->p_ttyflags))!=0) {
+				(void) strcpy(wptr, getword(ptr, &size, 0));
+				if (get_ttyflags(wptr, &gptr->pmt_ttyflags) !=
+				    0) {
 					field = state;
 					state = FAILURE;
 				}
 				break;
+
 			case P_COUNT:
-				(void)strcpy(wptr, getword(ptr,&size,0));
+				(void) strcpy(wptr, getword(ptr, &size, 0));
 				if (strcheck(wptr, NUM) != 0) {
-					log("wait_read count must be a positive number"); 
+					log("wait_read count must be a "
+					    "positive number"); 
 					field = state;
 					state = FAILURE;
+				} else {
+				    gptr->pmt_count = atoi(wptr);
 				}
-				else
-				    gptr->p_count = atoi(wptr);
 				break;
+
 			case P_SERVER:
-				gptr->p_server = 
-				strsave(expand(getword(ptr,&size,1), 
-					gptr->p_device));
+				gptr->pmt_server = expand(getword(ptr, size, 1),
+				    gptr->pmt_device);
 				break;
+
 			case P_TIMEOUT:
-				(void)strcpy(wptr, getword(ptr,&size,0));
+				(void) strcpy(wptr, getword(ptr, &size, 0));
 				if (strcheck(wptr, NUM) != 0) {
-					log("timeout value must be a positive number"); 
+					log("timeout value must be a "
+					    "positive number"); 
 					field = state;
 					state = FAILURE;
+				} else {
+				    gptr->pmt_timeout = atoi(wptr);
 				}
-				else
-				    gptr->p_timeout = atoi(wptr);
 				break;
+
 			case P_TTYLABEL:
-				gptr->p_ttylabel=strsave(getword(ptr,&size,0));
+				gptr->pmt_ttylabel = safe_strdup(getword(ptr,
+				    &size, 0));
 				break;
+
 			case P_MODULES:
-				gptr->p_modules = strsave(getword(ptr,&size,0));
-				if (vml(gptr->p_modules) != 0) {
+				gptr->pmt_modules = safe_strdup(getword(ptr,
+				    &size, 0));
+				if (vml(gptr->pmt_modules) != 0) {
 					field = state;
 					state = FAILURE;
 				}
 				break;
+
 			case P_PROMPT:
-				gptr->p_prompt = strsave(getword(ptr,&size,TRUE));
+				gptr->pmt_prompt = safe_strdup(getword(ptr, &size,
+				    TRUE));
 				break;
+
 			case P_DMSG:
-				gptr->p_dmsg = strsave(getword(ptr,&size,TRUE));
+				gptr->pmt_dmsg = safe_strdup(getword(ptr, &size,
+				    TRUE));
 				break;
 
 			case P_TERMTYPE:
-				gptr->p_termtype = strsave(getword(ptr,&size,TRUE));
+				gptr->pmt_termtype = safe_strdup(getword(ptr,
+				    &size, TRUE));
 				break;
 
 			case P_SOFTCAR:
-				gptr->p_softcar = strsave(getword(ptr,&size,TRUE));
+				gptr->pmt_softcar = safe_strdup(getword(ptr,
+				    &size, TRUE));
 				break;
+			}
 
-			} /* end switch */
 			ptr += size;
 			if (state == FAILURE) 
 				break;
 			if (*ptr == ':') {
 				ptr++;	/* Skip the ':' */
-				state++ ;
+				state++;
 			} else if (*ptr != '\0') {
 				field = state;
 				state = FAILURE;
 			}
+
 			if (*ptr == '\0') {
 				/*
 				 * Maintain compatibility with older ttymon
@@ -265,23 +292,23 @@ read_pmtab()
 					state = FAILURE;
 				}
 			}
-		} /* end for loop */
+		}
 
 		if (state == SUCCESS) {
 			if (check_pmtab(gptr) == 0) {
-				if (Nentries < Maxfds) 
+				if (Nentries < Maxfds) {
 					insert_pmtab(gptr);
-				else {
+				} else {
 					log("can't add more entries to "
 					    "pmtab, Maxfds = %d", Maxfds);
 					free_pmtab(gptr);
-					(void)fclose(fp);
+					(void) fclose(fp);
 					return;
 				}
-			}
-			else {
+			} else {
 				log("Parsing failure for entry: \n%s", line);
-			log("-------------------------------------------");
+				log("--------------------------------------"
+				    "-----");
 				free_pmtab(gptr);
 			}
 		} else {
@@ -316,10 +343,10 @@ long *flags;		/* pointer to the flag to set	*/
 			break;
 		default:
 			log("Invalid flag -- %c", *p);
-			return(-1);
+			return (-1);
 		} 
 	}
-	return(0);
+	return (0);
 }
 
 /*
@@ -350,10 +377,10 @@ long 	*ttyflags;	/* pointer to the flag to be set*/
 			break;
 		default:
 			log("Invalid ttyflag -- %c", *p);
-			return(-1);
+			return (-1);
 		} 
 	}
-	return(0);
+	return (0);
 }
 
 # ifdef DEBUG
@@ -369,7 +396,7 @@ long flags;	/* binary representation of the flags */
 	static char buf[BUFSIZ];	/* formatted flags */
 
 	if (flags == 0)
-		return("-");
+		return ("-");
 	i = 0;
 	if (flags & U_FLAG) {
 		buf[i++] = 'u';
@@ -382,7 +409,7 @@ long flags;	/* binary representation of the flags */
 	if (flags)
 		log("Internal error in pflags");
 	buf[i] = '\0';
-	return(buf);
+	return (buf);
 }
 
 /*
@@ -397,7 +424,7 @@ long flags;	/* binary representation of ttyflags */
 	static char buf[BUFSIZ];	/* formatted flags */
 
 	if (flags == 0)
-		return("h");
+		return ("h");
 	i = 0;
 	if (flags & C_FLAG) {
 		buf[i++] = 'c';
@@ -420,9 +447,9 @@ long flags;	/* binary representation of ttyflags */
 		flags &= ~I_FLAG;
 	}
 	if (flags)
-		log("Internal error in p_ttyflags");
+		log("Internal error in pmt_ttyflags");
 	buf[i] = '\0';
-	return(buf);
+	return (buf);
 }
 
 void
@@ -433,32 +460,32 @@ dump_pmtab()
 	debug("in dump_pmtab");
 	log("********** dumping pmtab **********");
 	log(" ");
-	for (gptr=PMtab; gptr; gptr = gptr->p_next) {
+	for (gptr=PMtab; gptr; gptr = gptr->pmt_next) {
 		log("-------------------------------------------");
-		log("tag:\t\t%s", gptr->p_tag);
-		log("flags:\t\t%s",pflags(gptr->p_flags));
-		log("identity:\t%s", gptr->p_identity);
-		log("reserved1:\t%s", gptr->p_res1);
-		log("reserved2:\t%s", gptr->p_res2);
-		log("reserved3:\t%s", gptr->p_res3);
-		log("device:\t%s", gptr->p_device);
-		log("ttyflags:\t%s",pttyflags(gptr->p_ttyflags));
-		log("count:\t\t%d", gptr->p_count);
-		log("server:\t%s", gptr->p_server);
-		log("timeout:\t%d", gptr->p_timeout);
-		log("ttylabel:\t%s", gptr->p_ttylabel);
-		log("modules:\t%s", gptr->p_modules);
-		log("prompt:\t%s", gptr->p_prompt);
-		log("disable msg:\t%s", gptr->p_dmsg);
-		log("terminal type:\t%s", gptr->p_termtype);
-		log("soft-carrier:\t%s", gptr->p_softcar);
-		log("status:\t\t%d", gptr->p_status);
-		log("inservice:\t%d", gptr->p_inservice);
-		log("fd:\t\t%d", gptr->p_fd);
-		log("pid:\t\t%ld", gptr->p_pid);
-		log("uid:\t\t%ld", gptr->p_uid);
-		log("gid:\t\t%ld", gptr->p_gid);
-		log("dir:\t%s", gptr->p_dir);
+		log("tag:\t\t%s", gptr->pmt_tag);
+		log("flags:\t\t%s",pflags(gptr->pmt_flags));
+		log("identity:\t%s", gptr->pmt_identity);
+		log("reserved1:\t%s", gptr->pmt_res1);
+		log("reserved2:\t%s", gptr->pmt_res2);
+		log("reserved3:\t%s", gptr->pmt_res3);
+		log("device:\t%s", gptr->pmt_device);
+		log("ttyflags:\t%s",pttyflags(gptr->pmt_ttyflags));
+		log("count:\t\t%d", gptr->pmt_count);
+		log("server:\t%s", gptr->pmt_server);
+		log("timeout:\t%d", gptr->pmt_timeout);
+		log("ttylabel:\t%s", gptr->pmt_ttylabel);
+		log("modules:\t%s", gptr->pmt_modules);
+		log("prompt:\t%s", gptr->pmt_prompt);
+		log("disable msg:\t%s", gptr->pmt_dmsg);
+		log("terminal type:\t%s", gptr->pmt_termtype);
+		log("soft-carrier:\t%s", gptr->pmt_softcar);
+		log("status:\t\t%d", gptr->pmt_status);
+		log("inservice:\t%d", gptr->pmt_inservice);
+		log("fd:\t\t%d", gptr->pmt_fd);
+		log("pid:\t\t%ld", gptr->pmt_pid);
+		log("uid:\t\t%ld", gptr->pmt_uid);
+		log("gid:\t\t%ld", gptr->pmt_gid);
+		log("dir:\t%s", gptr->pmt_dir);
 		log(" ");
 	}
 	log("********** end dumping pmtab **********");
@@ -470,119 +497,110 @@ dump_pmtab()
  *			if the fields are different, copy e2 to e1
  * 			return 1 if same, return 0 if different
  */
-static	int
-same_entry(e1,e2)
-struct	pmtab	*e1,*e2;
+static int
+same_entry(struct pmtab *e1, struct pmtab *e2)
 {
 
-	if (strcmp(e1->p_identity, e2->p_identity) != 0)
-		return(0);
-	if (strcmp(e1->p_res1, e2->p_res1) != 0)
-		return(0);
-	if (strcmp(e1->p_res2, e2->p_res2) != 0)
-		return(0);
-	if (strcmp(e1->p_res3, e2->p_res3) != 0)
-		return(0);
-	if (strcmp(e1->p_device, e2->p_device) != 0)
-		return(0);
-	if (strcmp(e1->p_server, e2->p_server) != 0)
-		return(0);
-	if (strcmp(e1->p_ttylabel, e2->p_ttylabel) != 0)
-		return(0);
-	if (strcmp(e1->p_modules, e2->p_modules) != 0)
-		return(0);
-	if (strcmp(e1->p_prompt, e2->p_prompt) != 0)
-		return(0);
-	if (strcmp(e1->p_dmsg, e2->p_dmsg) != 0)
-		return(0);
-	if (strcmp(e1->p_termtype, e2->p_termtype) != 0)
-		return(0);
-	if (strcmp(e1->p_softcar, e2->p_softcar) != 0)
-		return(0);
-	if (e1->p_flags != e2->p_flags)
-		return(0);
+	if (strcmp(e1->pmt_identity, e2->pmt_identity) != 0)
+		return (0);
+	if (strcmp(e1->pmt_res1, e2->pmt_res1) != 0)
+		return (0);
+	if (strcmp(e1->pmt_res2, e2->pmt_res2) != 0)
+		return (0);
+	if (strcmp(e1->pmt_res3, e2->pmt_res3) != 0)
+		return (0);
+	if (strcmp(e1->pmt_device, e2->pmt_device) != 0)
+		return (0);
+	if (strcmp(e1->pmt_server, e2->pmt_server) != 0)
+		return (0);
+	if (strcmp(e1->pmt_ttylabel, e2->pmt_ttylabel) != 0)
+		return (0);
+	if (strcmp(e1->pmt_modules, e2->pmt_modules) != 0)
+		return (0);
+	if (strcmp(e1->pmt_prompt, e2->pmt_prompt) != 0)
+		return (0);
+	if (strcmp(e1->pmt_dmsg, e2->pmt_dmsg) != 0)
+		return (0);
+	if (strcmp(e1->pmt_termtype, e2->pmt_termtype) != 0)
+		return (0);
+	if (strcmp(e1->pmt_softcar, e2->pmt_softcar) != 0)
+		return (0);
+	if (e1->pmt_flags != e2->pmt_flags)
+		return (0);
 	/*
 	 * compare lowest 4 bits only, 
 	 * because A_FLAG is not part of original ttyflags
 	 */
-	if ((e1->p_ttyflags & ~A_FLAG) != (e2->p_ttyflags & ~A_FLAG))
-		return(0);
-	if (e1->p_count != e2->p_count)
-		return(0);
-	if (e1->p_timeout != e2->p_timeout)
-		return(0);
-	if (e1->p_uid != e2->p_uid)
-		return(0);
-	if (e1->p_gid != e2->p_gid)
-		return(0);
-	if (strcmp(e1->p_dir, e2->p_dir) != 0)
-		return(0);
-	return(1);
+	if ((e1->pmt_ttyflags & ~A_FLAG) != (e2->pmt_ttyflags & ~A_FLAG))
+		return (0);
+	if (e1->pmt_count != e2->pmt_count)
+		return (0);
+	if (e1->pmt_timeout != e2->pmt_timeout)
+		return (0);
+	if (e1->pmt_uid != e2->pmt_uid)
+		return (0);
+	if (e1->pmt_gid != e2->pmt_gid)
+		return (0);
+	if (strcmp(e1->pmt_dir, e2->pmt_dir) != 0)
+		return (0);
+	return (1);
 }
 
 
 /*
  * insert_pmtab - insert a pmtab entry into the linked list
  */
-
-static	void
-insert_pmtab(sp)
-register struct pmtab *sp;	/* ptr to entry to be inserted */
+static void
+insert_pmtab(struct pmtab *sp)
 {
-	register struct pmtab *tsp, *savtsp;	/* scratch pointers */
-	int ret;				/* strcmp return value */
+	struct pmtab *tsp, *savtsp;	/* scratch pointers */
 
-# ifdef DEBUG
+#ifdef DEBUG
 	debug("in insert_pmtab");
-# endif
+#endif
 	savtsp = tsp = PMtab;
 
-/*
- * find the correct place to insert this element
- */
-
-	while (tsp) {
-		ret = strcmp(sp->p_tag, tsp->p_tag);
+	/*
+	 * find the correct place to insert this element
+	 */
+	while (tsp != NULL) {
+		int ret = strcmp(sp->pmt_tag, tsp->pmt_tag);
 		if (ret > 0) {
 			/* keep on looking */
 			savtsp = tsp;
-			tsp = tsp->p_next;
+			tsp = tsp->pmt_next;
 			continue;
-		}
-		else if (ret == 0) {
-			if (tsp->p_status) {
+		} else if (ret == 0) {
+			if (tsp->pmt_status) {
 				/* this is a duplicate entry, ignore it */
 				log("Ignoring duplicate entry for <%s>",
-				    tsp->p_tag);
-			}
-			else {
-				if (same_entry(tsp,sp)) {  /* same entry */
-					tsp->p_status = VALID;
-				}
-				else {	/* entry changed */
-					if ((sp->p_flags & X_FLAG) && 
-						((sp->p_dmsg == NULL) ||
-						(*(sp->p_dmsg) == '\0'))) {
+				    tsp->pmt_tag);
+			} else {
+				if (same_entry(tsp,sp)) { /* same entry */
+					tsp->pmt_status = VALID;
+				} else { /* entry changed */
+					if ((sp->pmt_flags & X_FLAG) && 
+					    ((sp->pmt_dmsg == NULL) ||
+					    (*(sp->pmt_dmsg) == '\0'))) {
 						/* disabled entry */
-						tsp->p_status = NOTVALID;
-					}
-					else {
-# ifdef DEBUG
-					debug("replacing <%s>", sp->p_tag);
-# endif
+						tsp->pmt_status = NOTVALID;
+					} else {
+#ifdef DEBUG
+						debug("replacing <%s>",
+						    sp->pmt_tag);
+#endif
 						/* replace old entry */
-						sp->p_next = tsp->p_next;
+						sp->pmt_next = tsp->pmt_next;
 						if (tsp == PMtab) {
-						   PMtab = sp;
+							PMtab = sp;
+						} else {
+							savtsp->pmt_next = sp;
 						}
-						else {
-						   savtsp->p_next = sp;
-						}
-						sp->p_status = CHANGED;
-						sp->p_fd = tsp->p_fd;
-						sp->p_pid = tsp->p_pid;
-					        sp->p_inservice =
-							tsp->p_inservice;
+						sp->pmt_status = CHANGED;
+						sp->pmt_fd = tsp->pmt_fd;
+						sp->pmt_pid = tsp->pmt_pid;
+					        sp->pmt_inservice =
+						    tsp->pmt_inservice;
 						sp = tsp;
 					}
 				}
@@ -590,11 +608,10 @@ register struct pmtab *sp;	/* ptr to entry to be inserted */
 			}
 			free_pmtab(sp);
 			return;
-		}
-		else {
-			if ((sp->p_flags & X_FLAG) && 
-				((sp->p_dmsg == NULL) ||
-				(*(sp->p_dmsg) == '\0'))) { /* disabled entry */
+		} else {
+			if ((sp->pmt_flags & X_FLAG) && 
+			    ((sp->pmt_dmsg == NULL) ||
+			    (*(sp->pmt_dmsg) == '\0'))) { /* disabled entry */
 				free_pmtab(sp);
 				return;
 			}
@@ -604,95 +621,90 @@ register struct pmtab *sp;	/* ptr to entry to be inserted */
 			 * we do it when this service is added to
 			 * the enabled list.
 			 */
-			if (*sp->p_softcar != '\0')
+			if (*sp->pmt_softcar != '\0')
 				set_softcar(sp);
 
 			/* insert it here */
 			if (tsp == PMtab) {
-				sp->p_next = PMtab;
+				sp->pmt_next = PMtab;
 				PMtab = sp;
+			} else {
+				sp->pmt_next = savtsp->pmt_next;
+				savtsp->pmt_next = sp;
 			}
-			else {
-				sp->p_next = savtsp->p_next;
-				savtsp->p_next = sp;
-			}
-# ifdef DEBUG
-			debug("adding <%s>", sp->p_tag);
-# endif
+#ifdef DEBUG
+			debug("adding <%s>", sp->pmt_tag);
+#endif
 			Nentries++;
 			/* this entry is "current" */
-			sp->p_status = VALID;
+			sp->pmt_status = VALID;
 			return;
 		}
 	}
 
-/*
- * either an empty list or should put element at end of list
- */
+	/*
+	 * either an empty list or should put element at end of list
+	 */
 
-	if ((sp->p_flags & X_FLAG) && 
-		((sp->p_dmsg == NULL) ||
-		(*(sp->p_dmsg) == '\0'))) { /* disabled entry */
+	if ((sp->pmt_flags & X_FLAG) && 
+	    ((sp->pmt_dmsg == NULL) ||
+	    (*(sp->pmt_dmsg) == '\0'))) { /* disabled entry */
 		free_pmtab(sp);		 /* do not poll this entry */
 		return;
 	}
+
 	/*
-	 * Set the state of soft-carrier.
-	 * Since this is a one-time only operation,
-	 * we do it when this service is added to
-	 * the enabled list.
+	 * Set the state of soft-carrier.  Since this is a one-time only
+	 * operation, we do it when this service is added to the enabled list.
 	 */
-	if (*sp->p_softcar != '\0')
+	if (*sp->pmt_softcar != '\0')
 		set_softcar(sp);
-	sp->p_next = NULL;
+	sp->pmt_next = NULL;
 	if (PMtab == NULL)
 		PMtab = sp;
 	else
-		savtsp->p_next = sp;
+		savtsp->pmt_next = sp;
 # ifdef DEBUG
-	debug("adding <%s>", sp->p_tag);
+	debug("adding <%s>", sp->pmt_tag);
 # endif
 	++Nentries;
 	/* this entry is "current" */
-	sp->p_status = VALID;
+	sp->pmt_status = VALID;
 }
 
 
 /*
  * purge - purge linked list of "old" entries
  */
-
-
 void
-purge()
+purge(void)
 {
-	register struct pmtab *sp;		/* working pointer */
-	register struct pmtab *savesp, *tsp;	/* scratch pointers */
+	struct pmtab *sp;		/* working pointer */
+	struct pmtab *savesp, *tsp;	/* scratch pointers */
 
 # ifdef DEBUG
 	debug("in purge");
 # endif
 	sp = savesp = PMtab;
-	while (sp) {
-		if (sp->p_status) {
+	while (sp != NULL) {
+		if (sp->pmt_status) {
 # ifdef DEBUG
-			debug("p_status not 0");
+			debug("pmt_status not 0");
 # endif
 			savesp = sp;
-			sp = sp->p_next;
-		}
-		else {
+			sp = sp->pmt_next;
+		} else {
 			tsp = sp;
 			if (tsp == PMtab) {
-				PMtab = sp->p_next;
+				PMtab = sp->pmt_next;
 				savesp = PMtab;
+			} else {
+				savesp->pmt_next = sp->pmt_next;
 			}
-			else
-				savesp->p_next = sp->p_next;
 # ifdef DEBUG
-			debug("purging <%s>", sp->p_tag);
+			debug("purging <%s>", sp->pmt_tag);
 # endif
-			sp = sp->p_next;
+			sp = sp->pmt_next;
 			free_pmtab(tsp);
 		}
 	}
@@ -701,28 +713,27 @@ purge()
 /*
  *	free_pmtab	- free one pmtab entry
  */
-static	void
-free_pmtab(p)
-struct	pmtab	*p;
+static void
+free_pmtab(struct pmtab *p)
 {
 #ifdef	DEBUG
 	debug("in free_pmtab");
 #endif
-	free(p->p_tag);
-	free(p->p_identity);
-	free(p->p_res1);
-	free(p->p_res2);
-	free(p->p_res3);
-	free(p->p_device);
-	free(p->p_server);
-	free(p->p_ttylabel);
-	free(p->p_modules);
-	free(p->p_prompt);
-	free(p->p_dmsg);
-	free(p->p_termtype);
-	free(p->p_softcar);
-	if (p->p_dir)
-		free(p->p_dir);
+	free(p->pmt_tag);
+	free(p->pmt_identity);
+	free(p->pmt_res1);
+	free(p->pmt_res2);
+	free(p->pmt_res3);
+	free(p->pmt_device);
+	free(p->pmt_server);
+	free(p->pmt_ttylabel);
+	free(p->pmt_modules);
+	free(p->pmt_prompt);
+	free(p->pmt_dmsg);
+	free(p->pmt_termtype);
+	free(p->pmt_softcar);
+	if (p->pmt_dir)
+		free(p->pmt_dir);
 	free(p);
 }
 
@@ -731,46 +742,40 @@ struct	pmtab	*p;
  *		    - return 0 if everything is ok
  *		    - return -1 if something is wrong
  */
-
-static	int
-check_pmtab(p)
-struct	pmtab	*p;
+static int
+check_pmtab(struct pmtab *p)
 {
 	if (p == NULL) {
 		log("pmtab ptr is NULL");
-		return(-1);
+		return (-1);
 	}
 
 	/* check service tag */
-	if ((p->p_tag == NULL) || (*(p->p_tag) == '\0')) {
+	if (empty(p->pmt_tag)) {
 		log("port/service tag is missing");
-		return(-1);
+		return (-1);
 	}
-	if (strlen(p->p_tag) > (size_t)(MAXID - 1)) {
-		log("port/service tag <%s> is longer than %d", p->p_tag,
+	if (strlen(p->pmt_tag) > (size_t)(MAXID - 1)) {
+		log("port/service tag <%s> is longer than %d", p->pmt_tag,
 		    MAXID-1);
-		return(-1);
+		return (-1);
 	}
-	if (strcheck(p->p_tag, ALNUM) != 0) {
-		log("port/service tag <%s> is not alphanumeric", p->p_tag);
-		return(-1);
+	if (strcheck(p->pmt_tag, ALNUM) != 0) {
+		log("port/service tag <%s> is not alphanumeric", p->pmt_tag);
+		return (-1);
 	}
 	if (check_identity(p) != 0) {
-		return(-1);
+		return (-1);
 	}
 
-	if (check_device(p->p_device) != 0)
-		return(-1);
+	if (check_device(p->pmt_device) != 0)
+		return (-1);
 
-	if (check_cmd(p->p_server) != 0)
-		return(-1);
-	return(0);
+	if (check_cmd(p->pmt_server) != 0)
+		return (-1);
+
+	return (0);
 }
-
-extern  struct 	passwd *getpwnam();
-extern  void 	endpwent();
-extern  struct 	group *getgrgid();
-extern  void 	endgrent();
 
 /*
  *	check_identity - check to see if the identity is a valid user
@@ -778,34 +783,32 @@ extern  void 	endgrent();
  *		       - and if its group id is a valid one
  *		  	- return 0 if everything is ok. Otherwise, return -1
  */
-
-int
-check_identity(p)
-struct	pmtab	*p;
+static int
+check_identity(struct pmtab *p)
 {
 	register struct passwd *pwdp;
 
-	if ((p->p_identity == NULL) || (*(p->p_identity) == '\0')) {
+	if (empty(p->pmt_identity)) {
 		log("identity field is missing");
-		return(-1);
+		return (-1);
 	}
-	if ((pwdp = getpwnam(p->p_identity)) == NULL) {
-		log("missing or bad passwd entry for <%s>", p->p_identity);
+	if ((pwdp = getpwnam(p->pmt_identity)) == NULL) {
+		log("missing or bad passwd entry for <%s>", p->pmt_identity);
 		endpwent();
-		return(-1);
+		return (-1);
 	}
 	if (getgrgid(pwdp->pw_gid) == NULL) {
 		log("no group entry for %ld", pwdp->pw_gid);
 		endgrent();
 		endpwent();
-		return(-1);
+		return (-1);
 	}
-	p->p_uid = pwdp->pw_uid;
-	p->p_gid = pwdp->pw_gid;
-	p->p_dir = strsave(pwdp->pw_dir);
+	p->pmt_uid = pwdp->pw_uid;
+	p->pmt_gid = pwdp->pw_gid;
+	p->pmt_dir = safe_strdup(pwdp->pw_dir);
 	endgrent();
 	endpwent();
-	return(0);
+	return (0);
 }
 
 /*
@@ -813,24 +816,22 @@ struct	pmtab	*p;
  *				- any other characters are untouched.
  *				- return the expanded string
  */
-static char	*
-expand(cmdp,devp)
-char	*cmdp;		/* ptr to cmd string	*/
-char	*devp;		/* ptr to device name	*/
+static char *
+expand(const char *cmdp, const char *devp)
 {
-	register char	*cp, *dp, *np;
-	static char	buf[BUFSIZ];
-	cp = cmdp;
-	np = buf;
-	dp = devp;
-	while (*cp) {
+	const char *cp = cmdp, *dp = devp;
+	char buf[BUFSIZ];
+	char *np = buf;
+
+	while (*cp != '\0') {
 		if (*cp != '%') {
 			*np++ = *cp++;
 			continue;
 		}
+
 		switch (*++cp) {
 		case 'd':
-			while (*dp) {
+			while (*dp != '\0') {
 				*np++ = *dp++;
 			}
 			cp++;
@@ -844,6 +845,6 @@ char	*devp;		/* ptr to device name	*/
 		}
 	}
 	*np = '\0';
-	return(buf);
-}
 
+	return (safe_strdup(buf));
+}

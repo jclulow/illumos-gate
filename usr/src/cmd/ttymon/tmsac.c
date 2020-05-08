@@ -27,9 +27,6 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
@@ -37,6 +34,8 @@
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/debug.h>
+
 #include "ttymon.h"	
 #include "tmextern.h"	
 #include "sac.h" 
@@ -51,7 +50,6 @@
 void
 openpid()
 {
-	extern	int Lckfd;
 	char lockbuf[16];	/* large enough for a PID string */
 
 	(void)close(0);
@@ -84,8 +82,6 @@ openpid()
 void
 openpipes()
 {
-	extern	int Pfd, Sfd;
-
 	Sfd = open(SACPIPE, O_WRONLY);
 	if (Sfd < 0)
 		fatal("open sacpipe failed: %s", strerror(errno));
@@ -101,93 +97,63 @@ openpipes()
 }
 
 /*
- * remove_env(env) - remove an environment variable from the environment
- */
-static	void
-remove_env(env)
-char	*env;
-{
-	extern	char	**environ;
-	char	**p;
-	char	**rp = NULL;
-
-	p = environ;
-	if (p == NULL)
-		return;
-	while (*p) {
-		if (strncmp(*p, env,strlen(env)) == 0)
-			rp = p;
-		p++;
-	}
-	if (rp) {
-		*rp = *--p;
-		*p = NULL;
-	}
-}
-
-/*
  * get_environ() -- get env variables PMTAG, ISTATE
  *		 -- set global variables Tag, State
  */
-
 void
 get_environ()
 {
-	extern 	char State, *Istate, *Tag;
-
 	if ((Tag = getenv("PMTAG")) == NULL)
 		fatal("PMTAG is missing"); 
 
 	if ((Istate = getenv("ISTATE")) == NULL) 
 		fatal("ISTATE is missing");
 
-	State = (!strcmp(Istate, "enabled")) ? PM_ENABLED : PM_DISABLED;
+	State = (strcmp(Istate, "enabled") == 0) ? PM_ENABLED : PM_DISABLED;
 
 	/*
-	 * remove the environment variables so they will not
-	 * be passed to the children
+	 * remove the environment variables so they will not be passed to the
+	 * children
 	 */
-	remove_env("ISTATE");
-	remove_env("PMTAG");
+	VERIFY0(unsetenv("ISTATE"));
+	VERIFY0(unsetenv("PMTAG"));
 }
 
 /*
- * sacpoll	- the event handler when sac event is posted
+ * sacpoll - the event handler when sac event is posted
  */
 void
 sacpoll()
 {
-	int 	ret;
-	char	oldState;
-	struct 	sacmsg sacmsg;
-	struct 	pmmsg pmmsg;
-	sigset_t	cset;
-	sigset_t	tset;
+	int ret;
+	char oldState;
+	struct sacmsg sacmsg;
+	struct pmmsg pmmsg;
+	sigset_t cset;
+	sigset_t tset;
 
 #ifdef	DEBUG
 	debug("in sacpoll");
 #endif
 
 	/* we don't want to be interrupted by sigchild now */
-	(void)sigprocmask(SIG_SETMASK, NULL, &cset);
+	(void) sigprocmask(SIG_SETMASK, NULL, &cset);
 	tset = cset;
-	(void)sigaddset(&tset, SIGCLD);
-	(void)sigprocmask(SIG_SETMASK, &tset, NULL);
+	(void) sigaddset(&tset, SIGCLD);
+	(void) sigprocmask(SIG_SETMASK, &tset, NULL);
 
 	/*
-	 *	read sac messages, one at a time until no message
-	 *	is left on the pipe.
-	 *	the pipe is open with O_NONBLOCK, read will return -1
-	 *	and errno = EAGAIN if nothing is on the pipe
+	 * Read sac messages, one at a time until no message is left on the
+	 * pipe.  The pipe is open with O_NONBLOCK, read will return -1 with
+	 * errno = EAGAIN if nothing is on the pipe.
 	 */
 	for (;;) {
-
-		ret = read(Pfd, &sacmsg, sizeof(sacmsg));
+		ret = read(Pfd, &sacmsg, sizeof (sacmsg));
 		if (ret < 0) {
 			switch(errno) {
 			case EAGAIN:
 				/* no more data on the pipe */
-				(void)sigprocmask(SIG_SETMASK, &cset, NULL);
+				(void) sigprocmask(SIG_SETMASK, &cset, NULL);
 				return;
 			case EINTR:
 				break;
@@ -196,13 +162,11 @@ sacpoll()
 				    strerror(errno));
 				break;  /*NOTREACHED*/
 			}
-		}
-		else if (ret == 0) {
+		} else if (ret == 0) {
 			/* no more data on the pipe */
 			(void)sigprocmask(SIG_SETMASK, &cset, NULL);
 			return;
-		}
-		else {
+		} else {
 			pmmsg.pm_size = 0;
 			(void) strcpy(pmmsg.pm_tag, Tag);
 			pmmsg.pm_maxclass = TM_MAXCLASS;
@@ -240,10 +204,11 @@ sacpoll()
 				log("Got unknown message %d", sacmsg.sc_type);
 				pmmsg.pm_type = PM_UNKNOWN;
 				break;
-			} /* end switch */
+			}
 			pmmsg.pm_state = State;
 
-			while (write(Sfd, &pmmsg, sizeof(pmmsg)) != sizeof(pmmsg)) {
+			while (write(Sfd, &pmmsg, sizeof (pmmsg)) !=
+			    sizeof (pmmsg)) {
 				if (errno == EINTR)
 					continue;
 				log("sanity response to SAC failed: %s",
@@ -251,5 +216,5 @@ sacpoll()
 				break;
 			}
 		}
-	} /* end for loop */
+	}
 }

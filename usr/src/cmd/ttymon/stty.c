@@ -41,6 +41,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <errno.h>
 #ifdef EUC
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -55,14 +56,8 @@
 #include <getwidth.h>
 #endif /* EUC */
 #include "stty.h"
-
-extern const char *not_supported[];
-
-extern char *getenv();
-extern void exit();
-extern void perror();
-extern int get_ttymode();
-extern int set_ttymode();
+#include "tmstruct.h"
+#include "tmextern.h"
 
 static char *STTY = "stty: ";
 static int pitt = 0;
@@ -107,7 +102,14 @@ main(int argc, char *argv[])
 #ifdef EUC
 	lc = setlocale(LC_CTYPE, (const char *)NULL);
 	if (lc) {
-		sprintf(tmps, _LDTERM_DAT_PATH, lc);
+		int r;
+
+		if ((r = sprintf(tmps, _LDTERM_DAT_PATH, lc)) < 0 ||
+		    r >= sizeof (tmps)) {
+			(void) fprintf(stderr, gettext(
+			    "cannot construct ldterm.dat path\n"));
+			exit(2);
+		}
 
 		fd = open(tmps, O_RDONLY, 0);
 		if (fd != -1) {
@@ -155,20 +157,41 @@ main(int argc, char *argv[])
 		exit(2);
 	}
 	owinsize = winsize;
+
 	if (argc == 1) {
 		prmodes();
 		exit(0);
 	}
-	if ((argc == 2) && (argv[1][0] == '-') && (argv[1][2] == '\0'))
-	switch (argv[1][1]) {
+
+	if ((argc == 2) && (argv[1][0] == '-') && (argv[1][2] == '\0')) {
+		switch (argv[1][1]) {
+			case 'a':
+				pramodes();
+				return (0);
+			case 'g':
+				prencode();
+				return (0);
+			case '-':
+				prmodes(); /* stty -- */
+				return (0);
+			default:
+				(void) fprintf(stderr, gettext(
+				    "usage: stty [-a| -g]\n"));
+				(void) fprintf(stderr, gettext(
+				    "       stty [modes]\n"));
+				return (2);
+		}
+	}
+
+	if ((argc == 3) && (argv[1][0] == '-') && (argv[1][2] == '\0') &&
+	    (argv[2][0] == '-') && (argv[2][1] == '-') &&
+	    (argv[2][2] == '\0')) {
+		switch (argv[1][1]) {
 		case 'a':
 			pramodes();
 			return (0);
 		case 'g':
 			prencode();
-			return (0);
-		case '-':
-			prmodes(); /* stty -- */
 			return (0);
 		default:
 			(void) fprintf(stderr, gettext(
@@ -176,35 +199,21 @@ main(int argc, char *argv[])
 			(void) fprintf(stderr, gettext(
 			    "       stty [modes]\n"));
 			return (2);
+		}
 	}
 
-	if ((argc == 3) && (argv[1][0] == '-') && (argv[1][2] == '\0') &&
-	    (argv[2][0] == '-') && (argv[2][1] == '-') && (argv[2][2] == '\0'))
-	switch (argv[1][1]) {
-	case 'a':
-		pramodes();
-		return (0);
-	case 'g':
-		prencode();
-		return (0);
-	default:
-		(void) fprintf(stderr, gettext(
-		    "usage: stty [-a| -g]\n"));
-		(void) fprintf(stderr, gettext(
-		    "       stty [modes]\n"));
-		return (2);
-	}
 	if ((argc >= 3) && (argv[1][0] == '-') && (argv[1][1] == '-') &&
 	    (argv[1][2] == '\0')) {
 		/* ignore -- */
 		--argc;
 		++argv;
 	}
-	if (s_arg = sttyparse(argc, argv, term, &ocb, &cb, &termiox, &winsize
+
+	if ((s_arg = sttyparse(argc, argv, term, &ocb, &cb, &termiox, &winsize
 #ifdef EUC
 	    /* */, &wp, &kwp, &cswp, &kcswp
 #endif /* EUC */
-	    /* */)) {
+	    /* */)) != NULL) {
 		char *s = s_arg;
 		if (*s == '-') s++;
 		for (i = 0; not_supported[i]; i++) {
@@ -399,11 +408,12 @@ prmodes(void)				/* print modes, no options, argc is 1 */
 				(void) printf("onocr ");
 			if (m&ONLRET)
 				(void) printf("onlret ");
-			if (m&OFILL)
+			if (m&OFILL) {
 				if (m&OFDEL)
 					(void) printf("del-fill ");
 				else
 					(void) printf("nul-fill ");
+			}
 			delay((m&CRDLY)/CR1, "cr");
 			delay((m&NLDLY)/NL1, "nl");
 			delay((m&TABDLY)/TAB1, "tab");
@@ -701,8 +711,8 @@ pit(unsigned char what, char *itsname, char *sep)
 
 	pitt++;
 	(void) printf("%s", itsname);
-	if ((term & TERMIOS) && what == _POSIX_VDISABLE ||
-	    !(term & TERMIOS) && what == 0200) {
+	if (((term & TERMIOS) && what == _POSIX_VDISABLE) ||
+	    (!(term & TERMIOS) && what == 0200)) {
 		(void) printf(" = <undef>%s", sep);
 		return;
 	}
@@ -784,7 +794,7 @@ prencode(void)		/* another stty cmd, used for -g option */
 		if (*kcswp.locale_name == '\0') {
 			(void) printf("00");
 		} else {
-			for (i = 0; kcswp.locale_name[i] && i < MAXNAMELEN; i++)
+			for (i = 0; i < MAXNAMELEN && kcswp.locale_name[i]; i++)
 				(void) printf("%02x", kcswp.locale_name[i]);
 		}
 		for (i = 0; i < LDTERM_CS_MAX_CODESETS; i++)

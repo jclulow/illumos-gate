@@ -363,7 +363,7 @@ gct(char *cp, int term)
 /* get modes of tty device and fill in applicable structures */
 int
 get_ttymode(int fd, struct termio *termio, struct termios *termios,
-	struct stio *stermio, struct termiox *termiox, struct winsize *winsize
+    struct stio *stermio, struct termiox *termiox, struct winsize *winsize
 #ifdef EUC
 	/* */, struct eucioc *kwp, ldterm_cs_data_user_t *kcswp
 #endif /* EUC */

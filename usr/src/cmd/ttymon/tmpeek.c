@@ -28,8 +28,6 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -46,23 +44,20 @@
 #define BRK	1
 #define DEL	2
 
-struct	strbuf *do_peek();
-static	int	process();
-extern	void	sigint();
+static int process();
 
-static	int	interrupt;
+static int interrupt;
 
 /*
- *	poll_data	- it polls the device, waiting for data
- *			- return BADSPEED it <brk> is received
- *			- return the result of process if data is received
- *			- write a newline if <del> is received
- *			- exit if hangup is received
+ * poll_data	- it polls the device, waiting for data
+ *		- return BADSPEED it <brk> is received
+ *		- return the result of process if data is received
+ *		- write a newline if <del> is received
+ *		- exit if hangup is received
  */
 int
-poll_data()
+poll_data(void)
 {
-	int j;
 	struct strbuf *ptr;
 	struct pollfd fds[1];
 	struct sigaction sigact;
@@ -70,28 +65,35 @@ poll_data()
 #ifdef	DEBUG
 	debug("in poll_data");
 #endif
+
 	if (peek_ptr != NULL) {
-		for(j=0; j<peek_ptr->len; j++) peek_ptr->buf[j] &= 0x7F;
-		return(process(0,peek_ptr));
+		for (int j = 0; j < peek_ptr->len; j++) {
+			peek_ptr->buf[j] &= 0x7F;
+		}
+
+		return (process(0, peek_ptr));
 	}
+
 	fds[0].fd = 0;
 	fds[0].events = POLLIN;
 	sigact.sa_flags = 0;
 	sigact.sa_handler = sigint;
-	(void)sigemptyset(&sigact.sa_mask);
-	(void)sigaddset(&sigact.sa_mask, SIGINT);
-	(void)sigaction(SIGINT, &sigact, NULL);
+	(void) sigemptyset(&sigact.sa_mask);
+	(void) sigaddset(&sigact.sa_mask, SIGINT);
+	(void) sigaction(SIGINT, &sigact, NULL);
+
 	for (;;) {
+		int j;
+
 		interrupt = 0;
-		if ((j = poll(fds,1,-1)) == -1) {
+		if ((j = poll(fds, 1, -1)) == -1) {
 			if (interrupt == BRK) {
-				return(BADSPEED);
+				return (BADSPEED);
 			}
 			if (interrupt == DEL) { /* XXX revisit kmd */
-				return(BADSPEED);
+				return (BADSPEED);
 			}
-		}
-		else if (j > 0) {
+		} else if (j > 0) {
 			if (fds[0].revents & POLLHUP) {
 				log( "POLLHUP received, about to exit");
 				exit(1);
@@ -99,7 +101,7 @@ poll_data()
 			if (fds[0].revents & POLLIN) {
 				ptr = do_peek(fds[0].fd, 255);
 				if (ptr != NULL) {
-					return(process(fds[0].fd,ptr));
+					return(process(fds[0].fd, ptr));
 				}
 			}
 		}
@@ -107,7 +109,7 @@ poll_data()
 }
 
 /*
- *	process	- process the data 
+ * process	- process the data 
  *		- return GOODNAME if it is a non-empty line 
  *		- return NONAME if a <CR> is received
  *		- return BADNAME if zero byte is detected
@@ -115,16 +117,14 @@ poll_data()
  *		  of the stream 
  */
 static int
-process(
-	int	fd,		/* fd to read data from if necessary 	*/
-	struct strbuf *ptr)	/* ptr that holds data in ptr->buf 	*/
+process(int fd, struct strbuf *ptr)
 {
 	unsigned i;
-	char	junk[BUFSIZ];
+	char junk[BUFSIZ];
 
 	for (i = 0; i < ptr->len; i++) {
 		if (ptr->buf[i] == '\0') {
-			(void) read(fd, junk, i+1);
+			(void) read(fd, junk, i + 1);
 			return (BADSPEED);
 		} else if ((ptr->buf[i] == '\n') || (ptr->buf[i] == '\r')) {
 			if (i == 0) {
@@ -133,13 +133,13 @@ process(
 			} else
 				return (GOODNAME);
 		}
-	}	/* end for loop */
-	/* end of input is encountered */
+	}
+
 #ifdef	DEBUG
 	debug("in process: EOF encountered");
 #endif
+
 	exit(1);
-	/*NOTREACHED*/
 }
 
 /*
@@ -149,10 +149,8 @@ process(
  *		- return a ptr to the buf that contains the data
  *		- return NULL if nothing to peek at
  */
-struct	strbuf	*
-do_peek(fd,n)
-int	fd;	/* fd to do the ioctl on */
-int	n;	/* maxlen of data to peek at */
+struct strbuf *
+do_peek(int fd, int maxlen)
 {
 	int	 ret;
 	static 	 struct strpeek peek;
@@ -168,7 +166,7 @@ int	n;	/* maxlen of data to peek at */
 	/* need to ask for ctl info to avoid bug in I_PEEK code */
 	peekp->ctlbuf.maxlen = 1;
 	peekp->ctlbuf.buf = buf;
-	peekp->databuf.maxlen = n;
+	peekp->databuf.maxlen = maxlen;
 	peekp->databuf.buf = buf;
 	ret = ioctl(fd, I_PEEK, &peek);
 	if (ret == -1) {
@@ -176,33 +174,32 @@ int	n;	/* maxlen of data to peek at */
 		exit(1);
 	}
 	if (ret == 0) {
-		return( (struct strbuf *)NULL );
+		return (NULL);
 	}
-	return(&(peekp->databuf));
+	return (&(peekp->databuf));
 }
 
 /*
- *	sigint	- this is called when SIGINT is caught
+ * sigint - this is called when SIGINT is caught
  */
 void
-sigint()
+sigint(void)
 {
 	struct strbuf *ptr;
-	char   junk[2];
+	char junk[2];
 
 #ifdef	DEBUG
 	debug("in sigint");
 #endif
+
 	ptr = do_peek(0, 1);
-	if (ptr == NULL) {	/* somebody type <del> */
+	if (ptr == NULL) {	/* somebody typed <del> */
 		interrupt = DEL;
-	}
-	else {
+	} else {
 		if (ptr->buf[0] == '\0') {
-			/* somebody type <brk> or frame error */
-			(void)read(0,junk,1);
+			/* somebody typed <brk> or there was a frame error */
+			(void) read(0, junk, 1);
 			interrupt = BRK;
 		}
 	}
 }
-

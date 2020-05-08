@@ -23,23 +23,18 @@
 /*	  All Rights Reserved  	*/
 
 
-#ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.1	*/
-
-#include        <stdio.h>
-#include	<ctype.h>
+#include <stdio.h>
+#include <ctype.h>
 
 /*
- *	getword	- extract one token from the string
+ * getword	- extract one token from the string
  *		- token delimiter is white space if getall is FALSE
  *		- token delimiter is ':' or '\0' if getall is TRUE
  */
 char *
-getword(ptr, size, getall)
-register char *ptr;	/* pointer to the string to be scanned     */
-int 	 *size;		/* *size = number of characters scanned	   */
-int 	 getall;	/* if TRUE, get all char until ':' or '\0' */
+getword(char *ptr, int *size, int getall)
 {
-	register char *optr,c;
+	char *optr,c;
 	char quoted();
 	static char word[BUFSIZ];
 	int qsize;
@@ -55,8 +50,9 @@ int 	 getall;	/* if TRUE, get all char until ':' or '\0' */
 
 	/* Put all characters from here to next white space or ':' or '\0' */
 	/* into the word, up to the size of the word. */
-	for (optr= word,*optr='\0'; 
-		*ptr != '\0' && *ptr != ':'; ptr++,(*size)++) {
+	for (optr = word, *optr = '\0'; 
+	    *ptr != '\0' && *ptr != ':';
+	    ptr++, (*size)++) {
 		if (!getall) {
 			if (isspace(*ptr))
 				break;
@@ -67,10 +63,14 @@ int 	 getall;	/* if TRUE, get all char until ':' or '\0' */
 			c = quoted(ptr,&qsize);
 			(*size) += qsize;
 			ptr += qsize;
-		} else c = *ptr;
+		} else {
+			c = *ptr;
+		}
 
 		/* If there is room, add this character to the word. */
-		if (optr < &word[BUFSIZ] ) *optr++ = c;
+		if (optr < &word[BUFSIZ]) {
+			*optr++ = c;
+		}
 	}
 
 	/* skip trailing blanks if any*/
@@ -81,22 +81,22 @@ int 	 getall;	/* if TRUE, get all char until ':' or '\0' */
 
 	/* Make sure the line is null terminated. */
 	*optr++ = '\0';
-	return(word);
+	return (word);
 }
 
-/*	"quoted" takes a quoted character, starting at the quote	*/
-/*	character, and returns a single character plus the size of	*/
-/*	the quote string.  "quoted" recognizes the following as		*/
-/*	special, \n,\r,\v,\t,\b,\f as well as the \nnn notation.	*/
+/*
+ * "quoted" takes a quoted character, starting at the quote character, and
+ * returns a single character plus the size of the quote string.  "quoted"
+ * recognizes the following as special: \n, \r, \v, \t, \b, \f, and the \nnn
+ * notation.
+ */
 char 
-quoted(ptr,qsize)
-char *ptr;
-int *qsize;
+quoted(const char *ptr, int *qsize)
 {
-	register char c,*rptr;
-	register int i;
+	char c;
+	const char *rptr = ptr;
+	int i;
 
-	rptr = ptr;
 	switch(*++rptr) {
 	case 'n':
 		c = '\n';
@@ -120,30 +120,39 @@ int *qsize;
 		c = ':';
 		break;
 	default:
-
-/* If this is a numeric string, take up to three characters of */
-/* it as the value of the quoted character. */
+		/*
+		 * If this is a numeric string, take up to three characters of
+		 * it as the value of the quoted character.
+		 */
 		if (*rptr >= '0' && *rptr <= '7') {
-			for (i=0,c=0; i < 3;i++) {
-				c = c*8 + (*rptr - '0');
-				if (*++rptr < '0' || *rptr > '7') break;
+			for (i = 0, c = 0; i < 3; i++) {
+				c = c * 8 + (*rptr - '0');
+				if (*++rptr < '0' || *rptr > '7')
+					break;
 			}
 			rptr--;
 
-/* If the character following the '\\' is a NULL, back up the */
-/* ptr so that the NULL won't be missed.  The sequence */
-/* backslash null is essentually illegal. */
+		/*
+		 * If the character following the '\\' is a NULL, back up the
+		 * ptr so that the NULL won't be missed.  The sequence
+		 * backslash null is essentially illegal.
+		 */
 		} else if (*rptr == '\0') {
 			c = '\0';
 			rptr--;
 
-		/* In all other cases the quoting does nothing. */
-		} else c = *rptr;
+		/*
+		 * In all other cases the quoting does nothing.
+		 */
+		} else {
+			c = *rptr;
+		}
 		break;
 	}
 
-	/* Compute the size of the quoted character. */
+	/*
+	 * Compute the size of the quoted character.
+	 */
 	(*qsize) = rptr - ptr; 
-	return(c);
+	return (c);
 }
-

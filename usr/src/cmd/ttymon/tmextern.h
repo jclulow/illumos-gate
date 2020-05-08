@@ -29,13 +29,43 @@
 #ifndef	_TMEXTERN_H
 #define	_TMEXTERN_H
 
+#include <stdbool.h>
+#include <termios.h>
+#include <termio.h>
+#include <sys/termiox.h>
+#include <sys/stermio.h>
+
 #include "tmstruct.h"
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-	extern	void	setup_PCpipe();
+extern void setup_PCpipe();
+extern void set_softcar(struct pmtab *);
+extern int find_label(FILE *, const char *);
+extern struct Gdef *get_speed(const char *);
+extern void open_device(struct pmtab *);
+
+extern int get_ttymode(int, struct termio *, struct termios *,
+    struct stio *, struct termiox *, struct winsize *
+#ifdef EUC
+    , struct eucioc *, ldterm_cs_data_user_t *
+#endif /* EUC */
+    );
+extern int set_ttymode(int, int, struct termio *, struct termios *,
+    struct stio *, struct termiox *, struct winsize *, struct winsize *
+#ifdef EUC
+    , struct eucioc *, ldterm_cs_data_user_t *, int
+#endif /* EUC */
+    );
+char *sttyparse(int, char **, int, struct termio *, struct termios *,
+    struct termiox *, struct winsize *
+#ifdef EUC
+    , eucwidth_t *, struct eucioc *, ldterm_cs_data_user_t *,
+    ldterm_cs_data_user_t *
+#endif /* EUC */
+    );
 
 /* tmautobaud.c	*/
 	extern	int	auto_termio();
@@ -44,9 +74,12 @@ extern "C" {
 /* tmchild.c 	*/
 	extern	void	write_prompt();
 	extern 	void 	timedout();
+	extern void tmchild(struct pmtab *);
+	extern void sigpoll(void);
 
 /* tmexpress.c 	*/
 	extern	void	ttymon_express();
+	extern void revokedevaccess(char *, uid_t, gid_t, mode_t);
 
 /* tmhandler.c 	*/
 	extern	void	do_poll();
@@ -55,15 +88,21 @@ extern "C" {
 	extern 	void	state_change();
 	extern 	void	re_read();
 	extern 	void	got_carrier();
+	extern void sigpoll_catch(void);
+	extern void sigalarm(int);
 
 /* tmlock.c 	*/
 	extern	int	tm_checklock();
 	extern	int	tm_lock();
+	extern const char *lastname(const char *);
+	extern int check_session(int);
 
 /* tmlog.c 	*/
 	extern 	void 	log(const char *, ...);
 	extern 	void 	fatal(const char *, ...);
 	extern	void	openttymonlog(void);
+	extern void opendebug(int);
+
 
 /* tmparse.c 	*/
 	extern	char	*getword();
@@ -71,6 +110,8 @@ extern "C" {
 
 /* tmpeek.c 	*/
 	extern	int	poll_data();
+	struct strbuf *do_peek(int, int);
+	extern void sigint(void);
 
 /* tmpmtab.c 	*/
 	extern	void	read_pmtab();
@@ -96,34 +137,41 @@ extern "C" {
 /* tmttydefs.c 	*/
 	extern	void	read_ttydefs();
 	extern 	struct 	Gdef *find_def();
-	extern  char 	*getword();
 	extern	void	mkargv();
+	extern int check_flags(const char *);
 
 /* tmutmp.c 	*/
 	extern 	int 	account();
 	extern 	void 	cleanut();
+	extern void getty_account(const char *);
 
 /* tmutil.c 	*/
 	extern	int	check_device();
 	extern	int	check_cmd();
 	extern	void	cons_printf(const char *, ...);
+	extern void safe_close(int);
+	extern int strcheck(const char *, int);
+	extern char *safe_strdup(const char *);
+	extern int vml(const char *);
+	extern void copystr(char *, const char *);
+	extern bool empty(const char *);
 
-/* misc sys call or lib function call */
-	extern	int	check_version();
-	extern	int	fchown();
-	extern	int	fchmod();
+/*
+ * As questionable as this may seem, this routine is provided in
+ * libnsl:
+ */
+extern int check_version();
 
-#ifdef	SYS_NAME
-	extern 	void sys_name();
-#endif
-
+extern 	void sys_name();
 
 /* tmglobal.c 	*/
 	extern	struct	pmtab	*PMtab;
 	extern	int	Nentries;
 
 	extern	int	Npollfd;
+	extern struct pollfd *Pollp;
 
+	extern struct Gdef DEFAULT;
 	extern	struct 	Gdef Gdef[];
 	extern	int	Ndefs;
 	extern	long	Mtime;
@@ -170,6 +218,11 @@ extern "C" {
 
 	extern	int	Logmaxsz;
 	extern	int	Splflag;
+	extern int Retry;
+
+	extern struct rlimit Rlimit;
+	extern uid_t Uucp_uid;
+	extern gid_t Tty_gid;
 
 #ifdef	__cplusplus
 }

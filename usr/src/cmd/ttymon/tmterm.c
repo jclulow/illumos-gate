@@ -47,43 +47,32 @@
 #include "tmstruct.h" 
 #include "tmextern.h" 
 
-extern	void	mkargv();
 
 /*
- *	set_termio	- set termio on device 
- *		fd	- fd for the device
- *		options - stty termio options 
- *		aspeed  - autobaud speed 
- *		clear	- if TRUE, current flags will be set to some defaults
- *			  before applying the options 
- *		    	- if FALSE, current flags will not be cleared
- *		mode	- terminal mode, CANON, RAW
+ * set_termio	- set termio on device 
+ *	fd	- fd for the device
+ *	options - stty termio options 
+ *	aspeed  - autobaud speed 
+ *	clear	- if TRUE, current flags will be set to some defaults
+ *		  before applying the options 
+ *	    	- if FALSE, current flags will not be cleared
+ *	mode	- terminal mode, CANON, RAW
  */
-
-
-
 int
-set_termio(fd,options,aspeed,clear,mode)
-int	fd;
-char	*options;
-char	*aspeed;
-int	clear;
-long	mode;
+set_termio(int fd, char *options, char *aspeed, int clear, long mode)
 {
-	struct 	 termio termio;
-	struct 	 termios termios;
-	struct 	 stio stermio;
-	struct 	 termiox termiox;
-	struct 	 winsize winsize;
-	struct 	 winsize owinsize;
-	int	 term;
-	int	 cnt = 1;
-	char	 *uarg;	
-	char	 *argvp[MAXARGS];	/* stty args */
-	static   char	 *binstty = "/usr/bin/stty";
-	static	 char	buf[BUFSIZ];
-	extern 	 int get_ttymode(), set_ttymode();
-	extern	 char	*sttyparse();
+	struct termio termio;
+	struct termios termios;
+	struct stio stermio;
+	struct termiox termiox;
+	struct winsize winsize;
+	struct winsize owinsize;
+	int term;
+	int cnt = 1;
+	char *uarg; 
+	char *argvp[MAXARGS]; /* stty args */
+	static char *binstty = "/usr/bin/stty";
+	static char buf[BUFSIZ];
 
 #ifdef	DEBUG
 	debug("in set_termio");
@@ -135,50 +124,17 @@ long	mode;
 	return(0);
 }
 
-#ifdef	NOT_USE
 /*
- *	turnon_canon	- turn on canonical processing
- *			- return 0 if succeeds, -1 if fails
- */
-turnon_canon(fd)
-int	fd;
-{
-	struct termio termio;
-
-#ifdef	DEBUG
-	debug("in turnon_canon");
-#endif
-	if (ioctl(fd, TCGETA, &termio) != 0) {
-		log("turnon_canon: TCGETA failed, fd = %d: %s", fd,
-		    strerror(errno));
-		return(-1);
-	}
-	termio.c_lflag |= (ISIG|ICANON|ECHO|ECHOE|ECHOK); 
-	termio.c_cc[VEOF] = CEOF;
-	termio.c_cc[VEOL] = CNUL;
-	if (ioctl(fd, TCSETA, &termio) != 0) {
-		log("turnon_canon: TCSETA failed, fd = %d: %s", fd,
-		    strerror(errno));
-		return(-1);
-	}
-	return(0);
-}
-#endif
-
-/*
- *	flush_input	- flush the input queue
+ * flush_input - flush the input queue
  */
 void
-flush_input(fd)
-int	fd;
+flush_input(int fd)
 {
 	if (ioctl(fd, I_FLUSH, FLUSHR) == -1)
 		log("flush_input failed, fd = %d: %s", fd, strerror(errno));
 
 	if (ioctl(fd, TCSBRK, 1) == -1)
 		log("drain of ouput failed, fd = %d: %s", fd, strerror(errno));
-
-	return;
 }
 
 /*
@@ -186,13 +142,10 @@ int	fd;
  *			- then push modules specified by "modules"
  */
 int
-push_linedisc(
-	int	fd,	/* fd to push modules on */
-	char	*modules, /* ptr to a list of comma separated module names */
-	char	*device) /* device name for printing msg */
+push_linedisc(int fd, const char *modules, const char *device)
 {
-	char	*p, *tp;
-	char	buf[BUFSIZ];
+	char *p, *tp;
+	char buf[BUFSIZ];
 
 #ifdef	DEBUG
 	debug("in push_linedisc");
@@ -201,25 +154,26 @@ push_linedisc(
 	 * copy modules into buf so we won't mess up the original buffer
 	 * because strtok will chop the string
 	 */
-	p = strcpy(buf,modules);
+	p = strcpy(buf, modules);
 
 	while(ioctl(fd, I_POP, 0) >= 0)  /* pop everything */ 
 		;
-	for (p=(char *)strtok(p,","); p!=(char *)NULL; 
-		p=(char *)strtok(NULL,",")) {
+	for (p = strtok(p, ","); p != NULL; p = strtok(NULL, ",")) {
 		for (tp = p + strlen(p) - 1; tp >= p && isspace(*tp); --tp)
 			*tp = '\0';
+
 		if (ioctl(fd, I_PUSH, p) == -1) {
 			log("push (%s) on %s failed: %s", p, device,
 			    strerror(errno));
-			return(-1);
-		}  
+			return (-1);
+		}
 	}
-	return(0);
+
+	return (0);
 }
 
 /*
- *	hang_up_line	- set speed to B0. This will drop DTR
+ * hang_up_line - set speed to B0. This will drop DTR
  */
 int
 hang_up_line(int fd)
@@ -230,27 +184,28 @@ hang_up_line(int fd)
 #ifdef	DEBUG
 	debug("in hang_up_line");
 #endif
-	if (ioctl(fd,TCGETS,&termios) < 0) {
-	    if (ioctl(fd,TCGETA,&termio) < 0) {
-		log("hang_up_line: TCGETA failed: %s", strerror(errno));
-		return(-1);
-	    }
-	    termio.c_cflag &= ~CBAUD;
-	    termio.c_cflag |= B0;
+	if (ioctl(fd, TCGETS, &termios) < 0) {
+		if (ioctl(fd, TCGETA, &termio) < 0) {
+			log("hang_up_line: TCGETA failed: %s", strerror(errno));
+			return (-1);
+		}
+		termio.c_cflag &= ~CBAUD;
+		termio.c_cflag |= B0;
 
-	    if (ioctl(fd,TCSETA,&termio) < 0) {
-		log("hang_up_line: TCSETA failed: %s", strerror(errno));
-		return(-1);
-	    }
+		if (ioctl(fd, TCSETA, &termio) < 0) {
+			log("hang_up_line: TCSETA failed: %s", strerror(errno));
+			return (-1);
+		}
 	} else {
-	    cfsetospeed(&termios, B0);
+		(void) cfsetospeed(&termios, B0);
 
-	    if (ioctl(fd,TCSETS,&termios) < 0) {
-		log("hang_up_line: TCSETS failed: %s", strerror(errno));
-		return(-1);
-	    }
+		if (ioctl(fd, TCSETS, &termios) < 0) {
+			log("hang_up_line: TCSETS failed: %s", strerror(errno));
+			return (-1);
+		}
 	}
-	return(0);
+
+	return (0);
 }
 
 /*
@@ -258,35 +213,35 @@ hang_up_line(int fd)
  *			- return 0 if successful, -1 if failed.
  */
 int
-initial_termio(fd,pmptr)
-int	fd;
-struct	pmtab	*pmptr;
+initial_termio(int fd, struct pmtab *pmptr)
 {
-	int	ret;
-	struct	Gdef *speedef;
-	struct	Gdef *get_speed();
-	extern	int  auto_termio();
+	int ret;
+	struct Gdef *speedef;
 
-	speedef = get_speed(pmptr->p_ttylabel);
+	speedef = get_speed(pmptr->pmt_ttylabel);
+
 	if (speedef->g_autobaud & A_FLAG) {
-		pmptr->p_ttyflags |= A_FLAG;
+		pmptr->pmt_ttyflags |= A_FLAG;
 		if (auto_termio(fd) == -1) {
-			(void)close(fd);
-			return(-1);
+			(void) close(fd);
+			return (-1);
 		}
-	}
-	else {
-		if (pmptr->p_ttyflags & R_FLAG)
+	} else {
+		if (pmptr->pmt_ttyflags & R_FLAG) {
 			ret = set_termio(fd,speedef->g_iflags,
-				(char *)NULL, TRUE, (long)RAW);
-		else 
+			    NULL, TRUE, (long)RAW);
+		} else {
 			ret = set_termio(fd,speedef->g_iflags,
-				(char *)NULL, TRUE, (long)CANON);
+			    NULL, TRUE, (long)CANON);
+		}
+
 		if (ret == -1) {
-			log("initial termio on (%s) failed", pmptr->p_device);
-			(void)close(fd);
-			return(-1);
+			log("initial termio on (%s) failed",
+			    pmptr->pmt_device);
+			(void) close(fd);
+			return (-1);
 		}
 	}
-	return(0);
+
+	return (0);
 }

@@ -41,8 +41,8 @@
 
 /*
  *	flags to indicate the field of /etc/ttydefs
- *	Note: order is important because it corresponds to 
- *	      the order of fields in the file
+ *	NOTE: The sequence of definitions here must match the list below
+ *		in T_STATE_LIST.
  */
 #define		T_TTYLABEL	1
 #define		T_IFLAGS	2
@@ -51,9 +51,22 @@
 #define		T_NEXTLABEL	5
 
 /*
+ * 	Printable names for the T_* states defined above.  An empty string is
+ * 	defined for the unused zero value.  These are used to set up an array
+ * 	in "read_ttydefs()".
+ */
+#define		T_STATE_LIST		\
+		"",			\
+		"tty label",		\
+		"Initial flags",	\
+		"Final flags",		\
+		"Autobaud",		\
+		"Next label"
+
+/*
  *	flags to indicate the field of pmtab
- *	Note: order is important because it corresponds to 
- *	      the order of fields in the file
+ *	NOTE: The sequence of definitions here must match the list below
+ *		in P_STATE_LIST.
  */
 #define		P_TAG		1
 #define		P_FLAGS		2
@@ -72,6 +85,31 @@
 #define		P_DMSG		15
 #define		P_TERMTYPE	16
 #define		P_SOFTCAR	17
+
+/*
+ * 	Printable names for the P_* states defined above.  An empty string is
+ * 	defined for the unused zero value.  These are used to set up an array
+ * 	in "read_pmtab()".
+ */
+#define		P_STATE_LIST		\
+		"",			\
+		"tag",			\
+		"flags",		\
+		"identity",		\
+		"reserved1",		\
+		"reserved2",		\
+		"reserved3",		\
+		"device",		\
+		"ttyflags",		\
+		"count",		\
+		"service",		\
+		"timeout",		\
+		"ttylabel",		\
+		"modules",		\
+		"prompt",		\
+		"disable msg",		\
+		"terminal type",	\
+		"soft-carrier"
 
 /*
  *	termio mode
@@ -119,9 +157,7 @@
 					/* debug file for ttymon express*/
 #endif
 
-#ifdef	SYS_NAME
 #define	ISSUEFILE	"/etc/issue"		/*file to print before prompt */
-#endif
 
 #define	PMTAB_VERS	1		/* pmtab version number		*/
 #define	TTYDEFS_VERS	1		/* /etc/ttydefs version number	*/

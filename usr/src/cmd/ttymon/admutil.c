@@ -28,42 +28,44 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-# include <stdio.h>
-# include <unistd.h>
-# include <stdlib.h>
-# include <string.h>
-# include <sys/types.h>
-# include <ctype.h>
-# include <sys/stat.h>
-# include "tmstruct.h"
-# include "ttymon.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include "tmstruct.h"
+#include "ttymon.h"
 
 /*
- *	find_label - return 1 if ttylabel already exists
- *		   - return 0 otherwise
+ * If the file contains an entry with name "ttylabel", return the line number
+ * in the file on which the entry appears.  Otherwise, return 0.
  */
 int
-find_label(FILE *fp, char *ttylabel)
+find_label(FILE *fp, const char *ttylabel)
 {
-	char *p;		/* working pointer */
-	int line = 0;		/* line number we found entry on */
-	static char buf[BUFSIZ];/* scratch buffer */
+	int line = 0;
+	char buf[BUFSIZ];
 
-	while (fgets(buf, BUFSIZ, fp)) {
+	while (fgets(buf, sizeof (buf), fp) != NULL) {
+		char *p = buf;
+
 		line++;
-		p = buf;
+
 		while (isspace(*p))
 			p++;
+
 		if ((p = strtok(p, " :")) != NULL) {
-			if (!(strcmp(p, ttylabel)))
-				return(line);
+			if (strcmp(p, ttylabel) == 0)
+				return (line);
 		}
 	}
+
 	if (!feof(fp)) {
-		(void)fprintf(stderr, "error reading \"%s\"\n", TTYDEFS);
-		return(0);
+		(void) fprintf(stderr, "error reading \"%s\"\n", TTYDEFS);
+		return (0);
 	}
-	return(0);
+
+	return (0);
 }

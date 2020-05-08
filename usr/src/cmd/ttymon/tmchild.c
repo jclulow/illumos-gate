@@ -31,6 +31,7 @@
 #include	<fcntl.h>
 #include	<errno.h>
 #include	<sys/types.h>
+#include	<sys/stat.h>
 #include	<termio.h>
 #include	<string.h>
 #include	<signal.h>
@@ -42,18 +43,13 @@
 #include	"ttymon.h"
 #include	"tmstruct.h"
 #include	"tmextern.h"
-#ifdef	SYS_NAME
 #include	<sys/utsname.h>
-#endif
 
 static void openline();
 static void invoke_service();
 static char	*do_autobaud();
 static	struct	Gdef	*next_speed();
 static int check_hup();
-
-extern	struct	Gdef	*get_speed();
-extern struct strbuf *peek_ptr, *do_peek();
 
 /*
  * tmchild	- process that handles peeking data, determine baud rate
@@ -72,7 +68,7 @@ struct	pmtab	*pmtab;
 	debug("in tmchild");
 #endif
 	peek_ptr = NULL;
-	if (pmtab->p_status != GETTY) {
+	if (pmtab->pmt_status != GETTY) {
 		child_sigcatch();
 		(void) close(PCpipe[0]); /* close parent end of the pipe */
 		if (ioctl(PCpipe[1], I_SETSIG, S_HANGUP) == -1) {
@@ -90,10 +86,10 @@ struct	pmtab	*pmtab;
 			exit(1);
 		}
 
-		if (pmtab->p_ttyflags & (C_FLAG|B_FLAG)) {
-			if (pmtab->p_fd > 0) {
-				(void) close(pmtab->p_fd);
-				pmtab->p_fd = 0;
+		if (pmtab->pmt_ttyflags & (C_FLAG|B_FLAG)) {
+			if (pmtab->pmt_fd > 0) {
+				(void) close(pmtab->pmt_fd);
+				pmtab->pmt_fd = 0;
 			}
 		}
 
@@ -103,21 +99,22 @@ struct	pmtab	*pmtab;
 		 */
 		(void) setsid();
 	}
-	speedef = get_speed(pmtab->p_ttylabel);
+	speedef = get_speed(pmtab->pmt_ttylabel);
 	openline(pmtab, speedef);
-	if (pmtab->p_ttyflags & (C_FLAG|B_FLAG)) {
-	    if (pmtab->p_fd >= 0) {
-		if ((pmtab->p_modules != NULL)&&(*(pmtab->p_modules) != '\0')) {
-		    if (push_linedisc(pmtab->p_fd, pmtab->p_modules, pmtab->p_device) == -1) {
-			(void) close(pmtab->p_fd);
-			return;
-		    }
+	if (pmtab->pmt_ttyflags & (C_FLAG | B_FLAG)) {
+		if (pmtab->pmt_fd >= 0) {
+			if (!empty(pmtab->pmt_modules)) {
+				if (push_linedisc(pmtab->pmt_fd,
+				    pmtab->pmt_modules, pmtab->pmt_device) == -1) {
+					safe_close(pmtab->pmt_fd);
+					return;
+				}
+			}
 		}
-	    }
 	}
-	if ((pmtab->p_ttyflags & C_FLAG) &&
+	if ((pmtab->pmt_ttyflags & C_FLAG) &&
 	    (State != PM_DISABLED) &&
-	    (!(pmtab->p_flags & X_FLAG))) {
+	    (!(pmtab->pmt_flags & X_FLAG))) {
 		/*
 		 * if "c" flag is set, and the port is not disabled
 		 * invoke service immediately
@@ -127,7 +124,7 @@ struct	pmtab	*pmtab;
 			exit(1);
 		}
 		invoke_service(pmtab);
-		exit(1);	/*NOTREACHED*/
+		exit(1);
 	}
 	if (speedef->g_autobaud & A_FLAG) {
 		auto_speed = do_autobaud(pmtab, speedef);
@@ -136,38 +133,36 @@ struct	pmtab	*pmtab;
 		log("set final termio failed");
 		exit(1);
 	}
-	if ((pmtab->p_ttyflags & (R_FLAG|A_FLAG)) ||
-	    (pmtab->p_status == GETTY) || (pmtab->p_timeout > 0)) {
+	if ((pmtab->pmt_ttyflags & (R_FLAG|A_FLAG)) ||
+	    (pmtab->pmt_status == GETTY) || (pmtab->pmt_timeout > 0)) {
 		write_prompt(1, pmtab, TRUE, TRUE);
-		if (pmtab->p_timeout) {
+		if (pmtab->pmt_timeout) {
 			sigact.sa_flags = 0;
 			sigact.sa_handler = timedout;
 			(void) sigemptyset(&sigact.sa_mask);
 			(void) sigaction(SIGALRM, &sigact, NULL);
-			(void) alarm((unsigned)pmtab->p_timeout);
+			(void) alarm((unsigned)pmtab->pmt_timeout);
 		}
+	} else if ((pmtab->pmt_ttyflags & (B_FLAG))) {
+		write_prompt(pmtab->pmt_fd, pmtab, TRUE, TRUE);
 	}
-	else if ((pmtab->p_ttyflags & (B_FLAG)))
-			write_prompt(pmtab->p_fd, pmtab, TRUE, TRUE);
-
 
 	/* Loop until user is successful in invoking service. */
 	for (;;) {
-
 		/* Peek the user's typed response and respond appropriately. */
 		switch (poll_data()) {
 		case GOODNAME:
 #ifdef	DEBUG
 			debug("got GOODNAME");
 #endif
-			if (pmtab->p_timeout) {
+			if (pmtab->pmt_timeout) {
 				(void) alarm((unsigned)0);
 				sigact.sa_flags = 0;
 				sigact.sa_handler = SIG_DFL;
 				(void) sigemptyset(&sigact.sa_mask);
 				(void) sigaction(SIGALRM, &sigact, NULL);
 			}
-			if ((State == PM_DISABLED)||(pmtab->p_flags & X_FLAG)){
+			if (State == PM_DISABLED || (pmtab->pmt_flags & X_FLAG)) {
 				write_prompt(1, pmtab, TRUE, FALSE);
 				break;
 			}
@@ -177,7 +172,8 @@ struct	pmtab	*pmtab;
 				exit(1);
 			}
 			invoke_service(pmtab);
-			exit(1);	/*NOTREACHED*/
+			exit(1);
+			break;
 
 		case BADSPEED:
 			/* wrong speed! try next speed in the list. */
@@ -218,20 +214,18 @@ struct	pmtab	*pmtab;
 		}  /* end switch */
 
 		peek_ptr = NULL;
-		if (pmtab->p_timeout) {
+		if (pmtab->pmt_timeout) {
 			sigact.sa_flags = 0;
 			sigact.sa_handler = timedout;
 			(void) sigemptyset(&sigact.sa_mask);
 			(void) sigaction(SIGALRM, &sigact, NULL);
-			(void) alarm((unsigned)pmtab->p_timeout);
+			(void) alarm((unsigned)pmtab->pmt_timeout);
 		}
 	} /* end for loop */
 }
 
 static void
-openline(pmtab, speedef)
-struct	pmtab 	*pmtab;
-struct Gdef *speedef;
+openline(struct pmtab *pmtab, struct Gdef *speedef)
 {
 	char	 buffer[5];
 	int	 rtn = 0;
@@ -240,11 +234,11 @@ struct Gdef *speedef;
 #ifdef	DEBUG
 	debug("in openline");
 #endif
-	if (pmtab->p_status != GETTY) {
+	if (pmtab->pmt_status != GETTY) {
 		(void) close(0);
 		/* open should return fd 0, if not, then close it */
-		if ((pmtab->p_fd = open(pmtab->p_device, O_RDWR)) != 0) {
-			log("open \"%s\" failed: %s", pmtab->p_device,
+		if ((pmtab->pmt_fd = open(pmtab->pmt_device, O_RDWR)) != 0) {
+			log("open \"%s\" failed: %s", pmtab->pmt_device,
 			    strerror(errno));
 			exit(1);
 		}
@@ -254,15 +248,17 @@ struct Gdef *speedef;
 	(void) dup(0);
 	(void) dup(0);
 
-	if (pmtab->p_ttyflags & R_FLAG) { /* wait_read is needed */
-		if (pmtab->p_count) {
-			if (peek_ptr != NULL)
-				if ((peek_ptr->buf[0]&0x7F) == '\n' ||
-				    (peek_ptr->buf[0]&0x7F) == '\r')
-					pmtab->p_count--;
+	if (pmtab->pmt_ttyflags & R_FLAG) { /* wait_read is needed */
+		if (pmtab->pmt_count) {
+			if (peek_ptr != NULL) {
+				if ((peek_ptr->buf[0] & 0x7F) == '\n' ||
+				    (peek_ptr->buf[0] & 0x7F) == '\r') {
+					pmtab->pmt_count--;
+				}
+			}
 
 			/*
-			 * - wait for "p_count" lines
+			 * - wait for "pmt_count" lines
 			 * - datakit switch does not
 			 *   know you are a host or a terminal
 			 * - so it send you several lines of msg
@@ -271,30 +267,30 @@ struct Gdef *speedef;
 			 * - if it is not, '\n' will not look like '\n'
 			 * and we will wait forever here
 			 */
-			if (set_termio(0, speedef->g_fflags, NULL, TRUE, CANON) == -1) {
+			if (set_termio(0, speedef->g_fflags, NULL, TRUE,
+			    CANON) == -1) {
 				log("set final termio failed");
 				exit(1);
 			}
-			for (line_count = 0; line_count < pmtab->p_count; ) {
-				if (read(0, buffer, 1) < 0
-				    || *buffer == '\0'
-				    || *buffer == '\004') {
+			for (line_count = 0; line_count < pmtab->pmt_count; ) {
+				if (read(0, buffer, 1) < 0 ||
+				    *buffer == '\0' || *buffer == '\004') {
 					(void) close(0);
 					exit(0);
 				}
 				if (*buffer == '\n')
 					line_count++;
 			}
-		}
-		else { /* wait for 1 char */
+		} else { /* wait for 1 char */
 			if (peek_ptr == NULL) {
 				if (set_termio(0, NULL, NULL,TRUE,RAW) == -1) {
 					log("set termio RAW failed");
 					exit(1);
 				}
 				rtn = read(0, buffer, 1);
-			} else
+			} else {
 				*buffer = (peek_ptr->buf[0]&0x7F);
+			}
 
 			/*
 			 * NOTE: Cu on a direct line when ~. is encountered will
@@ -306,14 +302,16 @@ struct Gdef *speedef;
 			}
 		}
 		peek_ptr = NULL;
-		if (!(pmtab->p_ttyflags & A_FLAG)) { /* autobaud not enabled */
-			if (set_termio(0, speedef->g_fflags, NULL, TRUE, CANON) == -1) {
+		if (!(pmtab->pmt_ttyflags & A_FLAG)) { /* autobaud not enabled */
+			if (set_termio(0, speedef->g_fflags, NULL, TRUE,
+			    CANON) == -1) {
 				log("set final termio failed");
 				exit(1);
 			}
 		}
 	}
-	if (pmtab->p_ttyflags & B_FLAG) { /* port is bi-directional */
+
+	if (pmtab->pmt_ttyflags & B_FLAG) { /* port is bi-directional */
 		/* set advisory lock on the line */
 		if (tm_lock(0) != 0) {
 			/*
@@ -336,12 +334,8 @@ struct Gdef *speedef;
  *			- if clear is set, write a new line
  */
 void
-write_prompt(fd, pmtab, flush, clear)
-int	fd;
-struct	pmtab	*pmtab;
-int	flush, clear;
+write_prompt(int fd, struct pmtab *pmtab, int flush, int clear)
 {
-
 #ifdef DEBUG
 	debug("in write_prompt");
 #endif
@@ -350,15 +344,13 @@ int	flush, clear;
 	if (clear) {
 		(void) write(fd, "\r\n", 2);
 	}
-#ifdef SYS_NAME
 	sys_name(fd);
-#endif
 	/* Print prompt/disable message. */
-	if ((State == PM_DISABLED) || (pmtab->p_flags & X_FLAG))
-		(void)write(fd, pmtab->p_dmsg, (unsigned)strlen(pmtab->p_dmsg));
-	else
-		(void) write(fd, pmtab->p_prompt,
-			(unsigned)strlen(pmtab->p_prompt));
+	if ((State == PM_DISABLED) || (pmtab->pmt_flags & X_FLAG)) {
+		(void) write(fd, pmtab->pmt_dmsg, strlen(pmtab->pmt_dmsg));
+	} else {
+		(void) write(fd, pmtab->pmt_prompt, strlen(pmtab->pmt_prompt));
+	}
 }
 
 /*
@@ -370,26 +362,15 @@ timedout()
 	exit(1);
 }
 
-#ifdef SYS_NAME
 /*
  * void sys_name() - generate a msg with system id
  *		   - print out /etc/issue file if it exists
  */
 void
-sys_name(fd)
-int	fd;
+sys_name(int fd)
 {
-	char	*ptr, buffer[BUFSIZ];
-	FILE	*fp;
-
-#if 0	/* 1111333 - don't print node name, we already do this elsewhere */
-	struct	utsname utsname;
-
-	if (uname(&utsname) != FAILURE) {
-		(void) sprintf(buffer, "%.9s\r\n", utsname.nodename);
-		(void) write(fd, buffer, strlen(buffer));
-	}
-#endif
+	char *ptr, buffer[BUFSIZ];
+	FILE *fp;
 
 	if ((fp = fopen(ISSUEFILE, "r")) != NULL) {
 		while ((ptr = fgets(buffer, sizeof (buffer), fp)) != NULL) {
@@ -398,7 +379,6 @@ int	fd;
 		(void) fclose(fp);
 	}
 }
-#endif
 
 
 /*
@@ -409,41 +389,41 @@ int	fd;
  *			  it will loop back to do autobaud again
  *			- otherwise, it will set new termio and return
  */
-static	char	*
-do_autobaud(pmtab, speedef)
-struct	pmtab	*pmtab;
-struct	Gdef	*speedef;
+static char *
+do_autobaud(struct pmtab *pmtab, struct Gdef *speedef)
 {
-	int	done = FALSE;
-	char	*auto_speed;
+	bool done = false;
+	char *auto_speed;
+
 #ifdef	DEBUG
 	debug("in do_autobaud");
 #endif
+
 	while (!done) {
-		if ((auto_speed = autobaud(0, pmtab->p_timeout)) == NULL) {
+		if ((auto_speed = autobaud(0, pmtab->pmt_timeout)) == NULL) {
 			speedef = next_speed(speedef);
 			if (speedef->g_autobaud & A_FLAG) {
 				continue;
-			}
-			else {
+			} else {
 				if (set_termio(0, speedef->g_iflags, NULL,
-						TRUE, CANON) != 0) {
+				    TRUE, CANON) != 0) {
 					exit(1);
 				}
-				done = TRUE;
+				done = true;
 			}
-		}
-		else {
+		} else {
 			if (set_termio(0, speedef->g_fflags, auto_speed,
-					TRUE, CANON) != 0) {
+			    TRUE, CANON) != 0) {
 				exit(1);
 			}
-			done = TRUE;
+			done = true;
 		}
 	}
+
 #ifdef	DEBUG
 	debug("autobaud done");
 #endif
+
 	return (auto_speed);
 }
 
@@ -478,13 +458,11 @@ struct	Gdef *speedef;
 /*
  * inform_parent()	- inform ttymon that tmchild is going to exec service
  */
-static	void
-inform_parent(fd)
-int	fd;
+static void
+inform_parent(int fd)
 {
-	pid_t	pid;
+	pid_t pid = getpid();
 
-	pid = getpid();
 	(void) write(fd, &pid, sizeof (pid));
 }
 
@@ -495,14 +473,12 @@ static	char	 tbuf[BUFSIZ];	/* static buf for TERM		*/
 /*
  * void invoke_service	- invoke the service
  */
-
-static	void
-invoke_service(pmtab)
-struct	pmtab	*pmtab;
+static void
+invoke_service(struct pmtab *pmtab)
 {
 	char	 *argvp[MAXARGS];		/* service cmd args */
 	int	 cnt = 0;			/* arg counter */
-	int	 i, fd;
+	int	 i;
 	struct	 sigaction	sigact;
 	extern	 struct	rlimit	Rlimit;
 
@@ -512,24 +488,24 @@ struct	pmtab	*pmtab;
 
 	if (tcgetsid(0) != getsid(getpid())) {
 		cons_printf("Warning -- ttymon cannot allocate controlling "
-		    "tty on \"%s\",\n", pmtab->p_device);
+		    "tty on \"%s\",\n", pmtab->pmt_device);
 		cons_printf("\tThere may be another session active on this "
 		    "port.\n");
 
-		if (strcmp("/dev/console", pmtab->p_device) != 0) {
+		if (strcmp("/dev/console", pmtab->pmt_device) != 0) {
 			/*
 			 * if not on console, write to stderr to warn the user
 			 * also.
 			 */
 			(void) fprintf(stderr, "Warning -- ttymon cannot "
 			    "allocate controlling tty on \"%s\",\n",
-			    pmtab->p_device);
+			    pmtab->pmt_device);
 			(void) fprintf(stderr, "\tthere may be another session "
 			    "active on this port.\n");
 		}
 	}
 
-	if (pmtab->p_status != GETTY) {
+	if (pmtab->pmt_status != GETTY) {
 		inform_parent(PCpipe[1]);
 		sigact.sa_flags = 0;
 		sigact.sa_handler = SIG_DFL;
@@ -537,25 +513,25 @@ struct	pmtab	*pmtab;
 		(void) sigaction(SIGPOLL, &sigact, NULL);
 	}
 
-	if (pmtab->p_flags & U_FLAG) {
-		if (account(pmtab->p_device) != 0) {
+	if (pmtab->pmt_flags & U_FLAG) {
+		if (account(pmtab->pmt_device) != 0) {
 			log("invoke_service: account failed");
 			exit(1);
 		}
 	}
 
 	/* parse command line */
-	mkargv(pmtab->p_server, &argvp[0], &cnt, MAXARGS-1);
+	mkargv(pmtab->pmt_server, &argvp[0], &cnt, MAXARGS-1);
 
-	if (!(pmtab->p_ttyflags & C_FLAG)) {
-		(void) sprintf(pbuf, "TTYPROMPT=%s", pmtab->p_prompt);
+	if (!(pmtab->pmt_ttyflags & C_FLAG)) {
+		(void) sprintf(pbuf, "TTYPROMPT=%s", pmtab->pmt_prompt);
 		if (putenv(pbuf)) {
 			log("cannot expand service <%s> environment", argvp[0]);
 			exit(1);
 		}
 	}
-	if (pmtab->p_status != GETTY) {
-		(void) sprintf(hbuf, "HOME=%s", pmtab->p_dir);
+	if (pmtab->pmt_status != GETTY) {
+		(void) sprintf(hbuf, "HOME=%s", pmtab->pmt_dir);
 		if (putenv(hbuf)) {
 			log("cannot expand service <%s> environment", argvp[0]);
 			exit(1);
@@ -563,43 +539,43 @@ struct	pmtab	*pmtab;
 #ifdef	DEBUG
 		debug("about to run config script");
 #endif
-		if ((i = doconfig(0, pmtab->p_tag, 0)) != 0) {
+		if ((i = doconfig(0, pmtab->pmt_tag, 0)) != 0) {
 			if (i < 0) {
 				log("doconfig failed, system error");
 			}
 			else {
 				log("doconfig failed on line %d of script %s",
-				    i, pmtab->p_tag);
+				    i, pmtab->pmt_tag);
 			}
 			exit(1);
 		}
 	}
 
-	if (setgid(pmtab->p_gid)) {
-		log("cannot set group id to %ld: %s", pmtab->p_gid,
+	if (setgid(pmtab->pmt_gid)) {
+		log("cannot set group id to %ld: %s", pmtab->pmt_gid,
 		    strerror(errno));
 		exit(1);
 	}
 
-	if (setuid(pmtab->p_uid)) {
-		log("cannot set user id to %ld: %s", pmtab->p_uid,
+	if (setuid(pmtab->pmt_uid)) {
+		log("cannot set user id to %ld: %s", pmtab->pmt_uid,
 		    strerror(errno));
 		exit(1);
 	}
 
-	if (chdir(pmtab->p_dir)) {
-		log("cannot chdir to %s: %s", pmtab->p_dir, strerror(errno));
+	if (chdir(pmtab->pmt_dir)) {
+		log("cannot chdir to %s: %s", pmtab->pmt_dir, strerror(errno));
 		exit(1);
 	}
 
-	if (pmtab->p_uid != ROOTUID) {
+	if (pmtab->pmt_uid != ROOTUID) {
 		/* change ownership and mode of device */
-		(void) fchown(0, pmtab->p_uid, Tty_gid);
+		(void) fchown(0, pmtab->pmt_uid, Tty_gid);
 		(void) fchmod(0, 0620);
 	}
 
 
-	if (pmtab->p_status != GETTY) {
+	if (pmtab->pmt_status != GETTY) {
 		sigact.sa_flags = 0;
 		sigact.sa_handler = SIG_DFL;
 		(void) sigemptyset(&sigact.sa_mask);
@@ -609,11 +585,11 @@ struct	pmtab	*pmtab;
 			exit(1);
 		}
 		/* invoke the service */
-		log("Starting service (%s) on %s", argvp[0], pmtab->p_device);
+		log("Starting service (%s) on %s", argvp[0], pmtab->pmt_device);
 	}
 
-	if (pmtab->p_termtype != (char *)NULL) {
-		(void) sprintf(tbuf, "TERM=%s", pmtab->p_termtype);
+	if (pmtab->pmt_termtype != (char *)NULL) {
+		(void) sprintf(tbuf, "TERM=%s", pmtab->pmt_termtype);
 		if (putenv(tbuf)) {
 			log("cannot expand service <%s> environment", argvp[0]);
 			exit(1);

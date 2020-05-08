@@ -26,26 +26,30 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-#include	<stdio.h>
-#include	<stdlib.h>
-#include	<unistd.h>
-#include	<fcntl.h>
-#include	<errno.h>
-#include	<ctype.h>
-#include	<string.h>
-#include	<signal.h>
-#include	<sys/stat.h>
-#include	<utmpx.h>
-#include	<pwd.h>
-#include	<dirent.h>
-#include	<sys/param.h>
-#include	<sys/acl.h>
-#include	<sys/stat.h>
-#include	<sys/types.h>
-#include	<sys/console.h>
-#include	"ttymon.h"
-#include	"tmextern.h"
-#include	"tmstruct.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <ctype.h>
+#include <string.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <utmpx.h>
+#include <pwd.h>
+#include <dirent.h>
+#include <sys/param.h>
+#include <sys/acl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/console.h>
+#include <libdevinfo.h>
+
+#include "ttymon.h"
+#include "tmextern.h"
+#include "tmstruct.h"
+
 
 static	char	devbuf[BUFSIZ];
 static	char	*devname;
@@ -56,12 +60,7 @@ static	void	getty_options();
 static	void	usage();
 static	char	*find_ttyname();
 
-extern	void	tmchild();
-extern	int	vml();
-
 void		revokedevaccess(char *, uid_t, gid_t, mode_t);
-/* cannot include libdevinfo.h */
-extern int di_devperm_logout(const char *);
 
 /*
  * ttymon_express - This is call when ttymon is invoked with args
@@ -76,12 +75,10 @@ ttymon_express(int argc, char **argv)
 {
 	struct	pmtab	*pmtab;
 	struct	sigaction	sigact;
-	extern	int	Retry;
 	extern	void	open_device();
 	extern	void	read_ttydefs();
 	extern	int	checkut_line();
 #ifdef	DEBUG
-	extern	FILE	*Debugfp;
 	extern	void	opendebug();
 #endif
 
@@ -94,7 +91,7 @@ ttymon_express(int argc, char **argv)
 	(void) sigemptyset(&sigact.sa_mask);
 	(void) sigaction(SIGINT, &sigact, NULL);
 
-	if ((pmtab = ALLOC_PMTAB) == PNULL) {
+	if ((pmtab = calloc(1, sizeof (*pmtab))) == NULL) {
 		log("ttymon_express: ALLOC_PMTAB failed");
 		exit(1);
 	}
@@ -106,17 +103,19 @@ ttymon_express(int argc, char **argv)
 
 	read_ttydefs(NULL, FALSE);
 
-	if ((pmtab->p_device != NULL) && (*(pmtab->p_device) != '\0'))
-		while (checkut_line(pmtab->p_device))
-			sleep(15);
+	if (!empty(pmtab->pmt_device)) {
+		while (checkut_line(pmtab->pmt_device)) {
+			(void) sleep(1);
+		}
+	}
 
-	if ((pmtab->p_device == NULL) || (*(pmtab->p_device) == '\0')) {
+	if (empty(pmtab->pmt_device)) {
 		devname = find_ttyname(0);
-		if ((devname == NULL) || (*devname == '\0')) {
+		if (empty(devname)) {
 			log("ttyname cannot find the device on fd 0");
 			exit(1);
 		}
-		pmtab->p_device = devname;
+		pmtab->pmt_device = devname;
 #ifdef	DEBUG
 		debug("ttymon_express: devname = %s", devname);
 #endif
@@ -127,21 +126,21 @@ ttymon_express(int argc, char **argv)
 		 */
 		(void) setsid();
 		(void) close(0);
-		revokedevaccess(pmtab->p_device, 0, 0, 0);
-		if (open(pmtab->p_device, O_RDWR) < 0) {
-			log("open %s failed: %s", pmtab->p_device,
+		revokedevaccess(pmtab->pmt_device, 0, 0, 0);
+		if (open(pmtab->pmt_device, O_RDWR) < 0) {
+			log("open %s failed: %s", pmtab->pmt_device,
 			    strerror(errno));
 			exit(1);
 		}
-		if ((pmtab->p_modules != NULL) &&
-		    (*(pmtab->p_modules) != '\0')) {
-			if (push_linedisc(0, pmtab->p_modules,
-			    pmtab->p_device) == -1)
+		if (!empty(pmtab->pmt_modules)) {
+			if (push_linedisc(0, pmtab->pmt_modules,
+			    pmtab->pmt_device) == -1) {
 				exit(1);
+			}
 		}
 		if (initial_termio(0, pmtab) == -1)
 			exit(1);
-		di_devperm_logout((const char *)pmtab->p_device);
+		(void) di_devperm_logout((const char *)pmtab->pmt_device);
 	} else {
 		(void) setsid();
 		(void) close(0);
@@ -160,39 +159,36 @@ ttymon_express(int argc, char **argv)
 static	int
 parse_args(int argc, char **argv, struct pmtab *pmtab)
 {
-	static	char	p_server[] = "/usr/bin/login";
-	extern	char	*lastname();
-	extern	void	getty_account();
-	static	char	termbuf[MAX_TERM_TYPE_LEN];
-	static	struct	cons_getterm cnterm = {sizeof (termbuf), termbuf};
+	static char termbuf[MAX_TERM_TYPE_LEN];
+	static struct cons_getterm cnterm = { sizeof (termbuf), termbuf };
 
 	/* initialize fields to some default first */
-	pmtab->p_tag = "";
-	pmtab->p_flags = 0;
-	pmtab->p_identity = "root";
-	pmtab->p_res1 = "reserved";
-	pmtab->p_res2 = "reserved";
-	pmtab->p_res3 = "reserved";
-	pmtab->p_uid = 0;
-	pmtab->p_gid = 0;
-	pmtab->p_dir = "/";
-	pmtab->p_ttyflags = 0;
-	pmtab->p_count = 0;
-	pmtab->p_server = p_server;
-	pmtab->p_timeout = 0;
-	pmtab->p_modules = "";
-	pmtab->p_prompt = "login: ";
-	pmtab->p_dmsg = "";
-	pmtab->p_termtype = "";
-	pmtab->p_device = "";
-	pmtab->p_status = GETTY;
+	pmtab->pmt_tag = "";
+	pmtab->pmt_flags = 0;
+	pmtab->pmt_identity = "root";
+	pmtab->pmt_res1 = "reserved";
+	pmtab->pmt_res2 = "reserved";
+	pmtab->pmt_res3 = "reserved";
+	pmtab->pmt_uid = 0;
+	pmtab->pmt_gid = 0;
+	pmtab->pmt_dir = "/";
+	pmtab->pmt_ttyflags = 0;
+	pmtab->pmt_count = 0;
+	pmtab->pmt_server = "/usr/bin/login";
+	pmtab->pmt_timeout = 0;
+	pmtab->pmt_modules = "";
+	pmtab->pmt_prompt = "login: ";
+	pmtab->pmt_dmsg = "";
+	pmtab->pmt_termtype = "";
+	pmtab->pmt_device = "";
+	pmtab->pmt_status = GETTY;
 	if (strcmp(lastname(argv[0]), "getty") == 0) {
-		pmtab->p_ttylabel = "300";
+		pmtab->pmt_ttylabel = "300";
 		getty_options(argc, argv, pmtab);
 	} else {
 		int	cn_fd;
 
-		pmtab->p_ttylabel = "9600";
+		pmtab->pmt_ttylabel = "9600";
 		ttymon_options(argc, argv, pmtab);
 
 		/*
@@ -204,22 +200,23 @@ parse_args(int argc, char **argv, struct pmtab *pmtab)
 		 * to the console device to query the TERM type.
 		 *
 		 * If any of the tests, system calls, or ioctls fail
-		 * then pmtab->p_termtype retains its default value
+		 * then pmtab->pmt_termtype retains its default value
 		 * of "".  otherwise it is set to a term type value
 		 * that was returned.
 		 */
-		if ((strlen(pmtab->p_termtype) == 0) &&
-		    (strcmp(pmtab->p_device, "/dev/console") == 0) &&
+		if ((strlen(pmtab->pmt_termtype) == 0) &&
+		    (strcmp(pmtab->pmt_device, "/dev/console") == 0) &&
 		    ((cn_fd = open("/dev/console", O_RDONLY)) != -1)) {
 
 			if (ioctl(cn_fd, CONS_GETTERM, &cnterm) != -1)
-				pmtab->p_termtype = cnterm.cn_term_type;
+				pmtab->pmt_termtype = cnterm.cn_term_type;
 			(void) close(cn_fd);
 		}
 	}
 
-	if ((pmtab->p_device != NULL) && (*(pmtab->p_device) != '\0'))
-		getty_account(pmtab->p_device); /* utmp accounting */
+	if (!empty(pmtab->pmt_device)) {
+		getty_account(pmtab->pmt_device); /* utmp accounting */
+	}
 	return (0);
 }
 
@@ -227,21 +224,14 @@ parse_args(int argc, char **argv, struct pmtab *pmtab)
 /*
  * 	ttymon_options - scan and check args for ttymon express
  */
-
-static	void
+static void
 ttymon_options(int argc, char **argv, struct pmtab *pmtab)
 {
-	int 	c;			/* option letter */
-	char 	*timeout;
-	int  	gflag = 0;		/* -g seen */
-	int	size = 0;
-	char	tbuf[BUFSIZ];
-
-	extern	char	*optarg;
-	extern	int	optind;
-	extern	void	copystr();
-	extern	char	*strsave();
-	extern	char	*getword();
+	int c;
+	char *timeout;
+	int gflag = 0;
+	int size = 0;
+	char tbuf[BUFSIZ];
 
 	while ((c = getopt(argc, argv, "T:gd:ht:p:m:l:")) != -1) {
 		switch (c) {
@@ -249,21 +239,14 @@ ttymon_options(int argc, char **argv, struct pmtab *pmtab)
 			gflag = 1;
 			break;
 		case 'd':
-			pmtab->p_device = optarg;
+			pmtab->pmt_device = optarg;
 			break;
 		case 'h':
-			pmtab->p_ttyflags &= ~H_FLAG;
+			pmtab->pmt_ttyflags &= ~H_FLAG;
 			break;
-
 		case 'T':
-			pmtab->p_termtype = optarg;
+			pmtab->pmt_termtype = optarg;
 			break;
-/*
- *		case 'b':
- *			pmtab->p_ttyflags |= B_FLAG;
- *			pmtab->p_ttyflags |= R_FLAG;
- *			break;
- */
 		case 't':
 			timeout = optarg;
 			while (*optarg) {
@@ -273,19 +256,20 @@ ttymon_options(int argc, char **argv, struct pmtab *pmtab)
 					usage();
 				}
 			}
-			pmtab->p_timeout = atoi(timeout);
+			pmtab->pmt_timeout = atoi(timeout);
 			break;
 		case 'p':
 			copystr(tbuf, optarg);
-			pmtab->p_prompt = strsave(getword(tbuf, &size, TRUE));
+			pmtab->pmt_prompt = safe_strdup(getword(tbuf, &size,
+			    TRUE));
 			break;
 		case 'm':
-			pmtab->p_modules = optarg;
-			if (vml(pmtab->p_modules) != 0)
+			pmtab->pmt_modules = optarg;
+			if (vml(pmtab->pmt_modules) != 0)
 				usage();
 			break;
 		case 'l':
-			pmtab->p_ttylabel = optarg;
+			pmtab->pmt_ttylabel = optarg;
 			break;
 		case '?':
 			usage();
@@ -302,11 +286,10 @@ ttymon_options(int argc, char **argv, struct pmtab *pmtab)
 /*
  * usage - print out a usage message
  */
-
-static 	void
-usage()
+static void
+usage(void)
 {
-	char	*umsg = "Usage: ttymon\n  ttymon -g [-h] [-d device] "
+	char *umsg = "Usage: ttymon\n  ttymon -g [-h] [-d device] "
 	    "[-l ttylabel] [-t timeout] [-p prompt] [-m modules]\n";
 
 	if (isatty(STDERR_FILENO))
@@ -321,47 +304,47 @@ usage()
  *			- it scan getty cmd args
  *			- modification is made to stuff args in pmtab
  */
-static	void
-getty_options(argc, argv, pmtab)
-int argc;
-char **argv;
-struct	pmtab	*pmtab;
+static void
+getty_options(int argc, char *argv[], struct pmtab *pmtab)
 {
-	char	*ptr;
+	char *ptr;
 
 	/*
 	 * the pre-4.0 getty's hang_up_line() is a no-op.
 	 * For compatibility, H_FLAG cannot be set for this "getty".
 	 */
-	pmtab->p_ttyflags &= ~(H_FLAG);
+	pmtab->pmt_ttyflags &= ~(H_FLAG);
 
 	while (--argc && **++argv == '-') {
-		for (ptr = *argv + 1; *ptr; ptr++)
-		switch (*ptr) {
-		case 'h':
-			break;
-		case 't':
-			if (isdigit(*++ptr)) {
-				(void) sscanf(ptr, "%d", &(pmtab->p_timeout));
-				while (isdigit(*++ptr));
-				ptr--;
-			} else if (--argc) {
-				if (isdigit(*(ptr = *++argv)))
+		for (ptr = *argv + 1; *ptr; ptr++) {
+			switch (*ptr) {
+			case 'h':
+				break;
+			case 't':
+				if (isdigit(*++ptr)) {
 					(void) sscanf(ptr, "%d",
-					    &(pmtab->p_timeout));
-				else {
-					log("getty: timeout argument <%s> "
-					    "invalid", *argv);
-					exit(1);
+					    &(pmtab->pmt_timeout));
+					while (isdigit(*++ptr));
+					ptr--;
+				} else if (--argc) {
+					if (isdigit(*(ptr = *++argv)))
+						(void) sscanf(ptr, "%d",
+						    &(pmtab->pmt_timeout));
+					else {
+						log("getty: timeout "
+						    "argument <%s> "
+						    "invalid", *argv);
+						exit(1);
+					}
 				}
+				break;
+			case 'c':
+				log("Use \"sttydefs -l\" to check "
+				    "/etc/ttydefs.");
+				exit(0);
+			default:
+				break;
 			}
-			break;
-
-		case 'c':
-			log("Use \"sttydefs -l\" to check /etc/ttydefs.");
-			exit(0);
-		default:
-			break;
 		}
 	}
 
@@ -371,15 +354,15 @@ struct	pmtab	*pmtab;
 	} else {
 		(void) strcat(devbuf, "/dev/");
 		(void) strcat(devbuf, *argv);
-		pmtab->p_device = devbuf;
+		pmtab->pmt_device = devbuf;
 	}
 
 	if (--argc > 0) {
-		pmtab->p_ttylabel = *++argv;
+		pmtab->pmt_ttylabel = *++argv;
 	}
 
 	/*
-	 * every thing after this will be ignored
+	 * everything after this will be ignored
 	 * i.e. termtype and linedisc are ignored
 	 */
 }
@@ -392,9 +375,8 @@ struct	pmtab	*pmtab;
  *			- number of fd and devname from utmpx match.
  *			- If utmpx search fails, ttyname(fd) will be called.
  */
-static	char	*
-find_ttyname(fd)
-int	fd;
+static char *
+find_ttyname(int fd)
 {
 	pid_t ownpid;
 	struct utmpx *u;
@@ -409,27 +391,27 @@ int	fd;
 				if (*(u->ut_line) != '/') {
 					(void) strcpy(buf, "/dev/");
 					(void) strncat(buf, u->ut_line,
-						sizeof (u->ut_line));
+					    sizeof (u->ut_line));
 				} else {
 					(void) strncat(buf, u->ut_line,
 					    sizeof (u->ut_line));
 				}
-			}
-			else
+			} else {
 				u = NULL;
+			}
 			break;
 		}
 	}
 	endutxent();
 	if ((u != NULL) &&
-		(fstat(fd, &statf) == 0) &&
-		(stat(buf, &statu) == 0) &&
-		(statf.st_dev == statu.st_dev) &&
-		(statf.st_rdev == statu.st_rdev)) {
+	    (fstat(fd, &statf) == 0) &&
+	    (stat(buf, &statu) == 0) &&
+	    (statf.st_dev == statu.st_dev) &&
+	    (statf.st_rdev == statu.st_rdev)) {
 #ifdef	DEBUG
-			debug("ttymon_express: find device name from utmpx.");
+		debug("ttymon_express: find device name from utmpx.");
 #endif
-			return (buf);
+		return (buf);
 	} else {
 #ifdef	DEBUG
 		debug("ttymon_express: calling ttyname to find device name.");
@@ -456,6 +438,5 @@ revokedevaccess(char *dev, uid_t uid, gid_t gid, mode_t mode)
 	} while (fdetach(dev) == 0);
 
 	/* Remove ACLs */
-
 	(void) acl_strip(dev, uid, gid, mode);
 }

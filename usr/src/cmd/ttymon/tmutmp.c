@@ -36,7 +36,6 @@
  * contributors.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include	<unistd.h>
 #include	<stdlib.h>
@@ -52,16 +51,11 @@
 #include	"sac.h"
 #include	"tmextern.h"
 
-extern	char	*lastname();
-
 /*
  * account - create a utmpx record for service
- *
  */
-
 int
-account(line)
-char	*line;
+account(const char *line)
 {
 	struct utmpx utmpx;			/* prototype utmpx entry */
 	struct utmpx *up = &utmpx;		/* and a pointer to it */
@@ -90,7 +84,7 @@ char	*line;
  * checkut_line	- check if a login is active on the requested device
  */
 int
-checkut_line(char *line)
+checkut_line(const char *line)
 {
 	struct utmpx *u;
 	char buf[33], ttyn[33];
@@ -104,7 +98,8 @@ checkut_line(char *line)
 	while ((u = getutxent()) != NULL) {
 		if (u->ut_pid == ownpid) {
 			if (u->ut_type == USER_PROCESS) {
-				strncpy(ttyn, u->ut_line, sizeof (u->ut_line));
+				(void) strncpy(ttyn, u->ut_line,
+				    sizeof (u->ut_line));
 				ttyn[sizeof (u->ut_line)] = '\0';
 				if (strcmp(buf, ttyn) == 0) {
 					rvalue = 1;
@@ -118,40 +113,36 @@ checkut_line(char *line)
 	return (rvalue);
 }
 
-
 void
-cleanut(pid, status)
-	pid_t	pid;
-	int	status;
+cleanut(pid_t pid, int status)
 {
 	pam_handle_t *pamh;
 	struct utmpx *up;
-	struct utmpx ut;
 	char user[33], ttyn[33], rhost[258];
 
 	setutxent();
-	while (up = getutxent()) {
+	while ((up = getutxent()) != NULL) {
 		if (up->ut_pid == pid) {
 			if (up->ut_type == DEAD_PROCESS) {
 				/* Cleaned up elsewhere. */
 				break;
 			}
 
-			strncpy(user, up->ut_user, sizeof (up->ut_user));
+			(void) strncpy(user, up->ut_user, sizeof (up->ut_user));
 			user[sizeof (up->ut_user)] = '\0';
-			strncpy(ttyn, up->ut_line, sizeof (up->ut_line));
+			(void) strncpy(ttyn, up->ut_line, sizeof (up->ut_line));
 			ttyn[sizeof (up->ut_line)] = '\0';
-			strncpy(rhost, up->ut_host, sizeof (up->ut_host));
+			(void) strncpy(rhost, up->ut_host,
+			    sizeof (up->ut_host));
 			rhost[sizeof (up->ut_host)] = '\0';
 
-			if (pam_start("ttymon", user, NULL, &pamh)
-							== PAM_SUCCESS) {
+			if (pam_start("ttymon", user, NULL, &pamh) ==
+			    PAM_SUCCESS) {
 				(void) pam_set_item(pamh, PAM_TTY, ttyn);
 				(void) pam_set_item(pamh, PAM_RHOST, rhost);
 				(void) pam_close_session(pamh, 0);
 				(void) pam_end(pamh, PAM_SUCCESS);
 			}
-
 
 			up->ut_type = DEAD_PROCESS;
 			up->ut_exit.e_termination = WTERMSIG(status);
@@ -160,9 +151,8 @@ cleanut(pid, status)
 
 			if (modutx(up) == NULL) {
 				/*
-				 * Since modutx failed we'll
-				 * write out the new entry
-				 * ourselves.
+				 * Since modutx failed we'll write out the new
+				 * entry ourselves.
 				 */
 				(void) pututxline(up);
 				updwtmpx("wtmpx", up);
@@ -180,8 +170,7 @@ cleanut(pid, status)
  *			- and change it to LOGIN_PROCESS
  */
 void
-getty_account(line)
-char *line;
+getty_account(const char *line)
 {
 	pid_t ownpid;
 	struct utmpx *u;
@@ -190,12 +179,11 @@ char *line;
 
 	setutxent();
 	while ((u = getutxent()) != NULL) {
-
 		if (u->ut_type == INIT_PROCESS && u->ut_pid == ownpid) {
 			(void) strncpy(u->ut_line, lastname(line),
-				sizeof (u->ut_line));
+			    sizeof (u->ut_line));
 			(void) strncpy(u->ut_user, "LOGIN",
-					sizeof (u->ut_user));
+			    sizeof (u->ut_user));
 			u->ut_type = LOGIN_PROCESS;
 
 			/* Write out the updated entry. */
