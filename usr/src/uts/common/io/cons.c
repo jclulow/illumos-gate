@@ -447,6 +447,35 @@ static int
 cnprivateioc(dev_t dev, int cmd, intptr_t arg, int flag, struct cred *cred,
 	int *rvalp)
 {
+	if (cmd == CONS_GETDEV) {
+		/*
+		 * The user has requested the device number of the redirection
+		 * client.
+		 */
+		STRUCT_DECL(cons_getdev, cnd);
+		STRUCT_INIT(cnd, flag);
+
+		bzero(STRUCT_BUF(cnd), STRUCT_SIZE(cnd));
+
+		if ((flag & DATAMODEL_MASK) == DATAMODEL_ILP32) {
+			dev32_t rconsdev32;
+
+			if (cmpldev(&rconsdev32, rconsdev) != 1) {
+				return (EOVERFLOW);
+			}
+
+			STRUCT_FSET(cnd, cnd_rconsdev, rconsdev32);
+		} else {
+			STRUCT_FSET(cnd, cnd_rconsdev, rconsdev);
+		}
+
+		if (ddi_copyout(STRUCT_BUF(cnd), (void *)arg,
+		    STRUCT_SIZE(cnd), flag) != 0) {
+			return (EFAULT);
+		}
+
+		return (0);
+	}
 
 	/* currently we only support one ioctl */
 	if (cmd != CONS_GETTERM)
