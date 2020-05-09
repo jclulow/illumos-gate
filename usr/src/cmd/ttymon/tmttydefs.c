@@ -128,8 +128,7 @@ check_ttydefs(const char *label)
 		return (true);
 	}
 
-	for (struct Gdef *g = avl_first(&g_defs); g != NULL;
-	    g = AVL_NEXT(&g_defs, g)) {
+	for (struct Gdef *g = g_defs_head; g != NULL; g = g->g_next) {
 		print_ttydef(g);
 	}
 
@@ -170,9 +169,9 @@ g_defs_compare(const void *l, const void *r)
 	const struct Gdef *rg = r;
 	int c;
 
-	if ((c = strcmp(lg->g_id, rg->g_id)) < 1) {
+	if ((c = strcmp(lg->g_id, rg->g_id)) < 0) {
 		return (-1);
-	} else if (c > 1) {
+	} else if (c > 0) {
 		return (1);
 	} else {
 		return (0);
@@ -321,9 +320,7 @@ read_ttydefs(void)
 const struct Gdef *
 find_def(const char *ttylabel)
 {
-	if (!g_defs_init) {
-		return (NULL);
-	}
+	VERIFY(g_defs_init);
 
 	struct Gdef g = { .g_id = (char *)ttylabel };
 
@@ -383,23 +380,25 @@ insert_def(struct Gdef *g)
 {
 	avl_index_t where;
 
-	printf("CHECK %s\n", g->g_id);
-	print_ttydef(g);
-
 	if (avl_find(&g_defs, g, &where) != NULL) {
 		log("Warning -- duplicate entry <%s>, ignored", g->g_id);
 		free_def(g);
 		return;
 	}
 
-	printf("INSERT %s\n", g->g_id);
 	avl_insert(&g_defs, g, where);
 
 	/*
 	 * Maintain a linked list of the order in which lines appeared in the
 	 * file for printing during the check phase.
 	 */
+	if (g_defs_head == NULL) {
+		VERIFY3P(g_defs_tail, ==, NULL);
+		g_defs_head = g;
+	}
 	if (g_defs_tail != NULL) {
+		VERIFY3P(g_defs_head, !=, NULL);
+		VERIFY3P(g_defs_tail->g_next, ==, NULL);
 		g_defs_tail->g_next = g;
 	}
 	g_defs_tail = g;

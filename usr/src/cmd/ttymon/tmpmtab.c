@@ -326,9 +326,9 @@ g_pmtab_compare(const void *l, const void *r)
 	const struct pmtab *rpmt = r;
 	int c;
 
-	if ((c = strcmp(lpmt->pmt_tag, rpmt->pmt_tag)) < 1) {
+	if ((c = strcmp(lpmt->pmt_tag, rpmt->pmt_tag)) < 0) {
 		return (-1);
-	} else if (c > 1) {
+	} else if (c > 0) {
 		return (1);
 	} else {
 		return (0);
