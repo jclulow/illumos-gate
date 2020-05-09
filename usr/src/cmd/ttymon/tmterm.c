@@ -68,18 +68,14 @@ set_termio(int fd, char *options, char *aspeed, int clear, long mode)
 	struct winsize winsize;
 	struct winsize owinsize;
 	int term;
-	int cnt = 1;
 	char *uarg; 
-	char *argvp[MAXARGS]; /* stty args */
-	static char *binstty = "/usr/bin/stty";
-	static char buf[BUFSIZ];
 
 #ifdef	DEBUG
 	debug("in set_termio");
 #endif
 
 	if ((term = get_ttymode(fd, &termio, &termios, &stermio, 
-				&termiox, &winsize)) < 0) {
+	    &termiox, &winsize)) < 0) {
 		log("set_termio: get_ttymode failed: %s", strerror(errno));
 		return(-1);
 	}
@@ -98,30 +94,52 @@ set_termio(int fd, char *options, char *aspeed, int clear, long mode)
 
 	}
 
-	if (options != NULL && *options != '\0') {
-		/* just a place holder to make it look like invoking stty */
-		argvp[0] = binstty;
-		(void)strcpy(buf,options);
-		mkargv(buf,&argvp[1],&cnt,MAXARGS-1);
-		if (aspeed != NULL && *aspeed != '\0') {
-			argvp[cnt++] = aspeed;
+	if (!empty(options)) {
+		int r = -1;
+		strlist_t *args = NULL;
+
+		/*
+		 * Create a fake argument list for stty:
+		 */
+		if (strlist_alloc(&args, 8) != 0 ||
+		    strlist_set(args, 0, "/usr/bin/stty") != 0) {
+			log("could not allocate argument memory: %s",
+			    strerror(errno));
+			goto done;
 		}
-		argvp[cnt] = (char *)0;
-		if ((uarg = sttyparse(cnt, argvp, term, &termio, &termios, 
-				&termiox, &winsize)) != NULL) {
+		mkargv(options, args);
+
+		if (!empty(aspeed)) {
+			if (strlist_set_tail(args, aspeed) != 0) {
+				log("could not allocate argument memory: %s",
+				    strerror(errno));
+				goto done;
+			}
+		}
+
+		if ((uarg = sttyparse(strlist_contig_count(args),
+		    strlist_array(args), term, &termio, &termios, 
+		    &termiox, &winsize)) != NULL) {
 			log("sttyparse unknown mode: %s", uarg);
-			return(-1);
+			goto done;
+		}
+
+		r = 0;
+
+done:
+		strlist_free(args);
+		if (r != 0) {
+			return (r);
 		}
 	}
-
 
 	if (set_ttymode(fd, term, &termio, &termios, &stermio, 
-			&termiox, &winsize, &owinsize) != 0) {
+	    &termiox, &winsize, &owinsize) != 0) {
 		log("set_termio: set_ttymode failed", strerror(errno));
-		return(-1);
+		return (-1);
 	}
 
-	return(0);
+	return (0);
 }
 
 /*
@@ -216,9 +234,7 @@ int
 initial_termio(int fd, struct pmtab *pmptr)
 {
 	int ret;
-	struct Gdef *speedef;
-
-	speedef = get_speed(pmptr->pmt_ttylabel);
+	const struct Gdef *speedef = get_speed(pmptr->pmt_ttylabel);
 
 	if (speedef->g_autobaud & A_FLAG) {
 		pmptr->pmt_ttyflags |= A_FLAG;

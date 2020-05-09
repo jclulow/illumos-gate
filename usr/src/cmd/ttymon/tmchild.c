@@ -45,11 +45,11 @@
 #include	"tmextern.h"
 #include	<sys/utsname.h>
 
-static void openline();
-static void invoke_service();
-static char	*do_autobaud();
-static	struct	Gdef	*next_speed();
-static int check_hup();
+static void openline(struct pmtab *, const struct Gdef *);
+static void invoke_service(struct pmtab *);
+static char *do_autobaud(struct pmtab *, const struct Gdef *);
+static const struct Gdef *next_speed(const struct Gdef *);
+static int check_hup(int);
 
 /*
  * tmchild	- process that handles peeking data, determine baud rate
@@ -60,7 +60,7 @@ void
 tmchild(pmtab)
 struct	pmtab	*pmtab;
 {
-	register struct Gdef *speedef;
+	const struct Gdef *speedef;
 	char	*auto_speed = "";
 	struct	sigaction sigact;
 
@@ -162,7 +162,8 @@ struct	pmtab	*pmtab;
 				(void) sigemptyset(&sigact.sa_mask);
 				(void) sigaction(SIGALRM, &sigact, NULL);
 			}
-			if (State == PM_DISABLED || (pmtab->pmt_flags & X_FLAG)) {
+			if (State == PM_DISABLED ||
+			    (pmtab->pmt_flags & X_FLAG)) {
 				write_prompt(1, pmtab, TRUE, FALSE);
 				break;
 			}
@@ -225,7 +226,7 @@ struct	pmtab	*pmtab;
 }
 
 static void
-openline(struct pmtab *pmtab, struct Gdef *speedef)
+openline(struct pmtab *pmtab, const struct Gdef *speedef)
 {
 	char	 buffer[5];
 	int	 rtn = 0;
@@ -346,7 +347,7 @@ write_prompt(int fd, struct pmtab *pmtab, int flush, int clear)
 	}
 	sys_name(fd);
 	/* Print prompt/disable message. */
-	if ((State == PM_DISABLED) || (pmtab->pmt_flags & X_FLAG)) {
+	if (State == PM_DISABLED || (pmtab->pmt_flags & X_FLAG)) {
 		(void) write(fd, pmtab->pmt_dmsg, strlen(pmtab->pmt_dmsg));
 	} else {
 		(void) write(fd, pmtab->pmt_prompt, strlen(pmtab->pmt_prompt));
@@ -390,7 +391,7 @@ sys_name(int fd)
  *			- otherwise, it will set new termio and return
  */
 static char *
-do_autobaud(struct pmtab *pmtab, struct Gdef *speedef)
+do_autobaud(struct pmtab *pmtab, const struct Gdef *speedef)
 {
 	bool done = false;
 	char *auto_speed;
@@ -433,25 +434,28 @@ do_autobaud(struct pmtab *pmtab, struct Gdef *speedef)
  *	  is not valid, go back to the old ttylabel.
  */
 
-static	struct	Gdef *
-next_speed(speedef)
-struct	Gdef *speedef;
+static const struct Gdef *
+next_speed(const struct Gdef *speedef)
 {
-	struct	Gdef *sp;
+	const struct Gdef *sp;
 
-	if (strcmp(speedef->g_nextid, speedef->g_id) == 0)
+	if (strcmp(speedef->g_nextid, speedef->g_id) == 0) {
+		/*
+		 * This entry loops back on itself.
+		 */
 		return (speedef);
+	}
+
 	if ((sp = find_def(speedef->g_nextid)) == NULL) {
 		log("%s's next speed-label (%s) is bad.", speedef->g_id,
 		    speedef->g_nextid);
 
-		/* go back to the original entry. */
-		if ((sp = find_def(speedef->g_id)) == NULL) {
-			/* if failed, complain and quit. */
-			log("unable to find (%s) again", speedef->g_id);
-			exit(1);
-		}
+		/*
+		 * Return the original entry.
+		 */
+		return (speedef);
 	}
+
 	return (sp);
 }
 
@@ -466,21 +470,15 @@ inform_parent(int fd)
 	(void) write(fd, &pid, sizeof (pid));
 }
 
-static	char	 pbuf[BUFSIZ];	/* static buf for TTYPROMPT 	*/
-static	char	 hbuf[BUFSIZ];	/* static buf for HOME 		*/
-static	char	 tbuf[BUFSIZ];	/* static buf for TERM		*/
-
 /*
  * void invoke_service	- invoke the service
  */
 static void
 invoke_service(struct pmtab *pmtab)
 {
-	char	 *argvp[MAXARGS];		/* service cmd args */
-	int	 cnt = 0;			/* arg counter */
-	int	 i;
-	struct	 sigaction	sigact;
-	extern	 struct	rlimit	Rlimit;
+	strlist_t *args = NULL;
+	int i;
+	struct sigaction sigact;
 
 #ifdef 	DEBUG
 	debug("in invoke_service");
@@ -521,19 +519,23 @@ invoke_service(struct pmtab *pmtab)
 	}
 
 	/* parse command line */
-	mkargv(pmtab->pmt_server, &argvp[0], &cnt, MAXARGS-1);
+	if (strlist_alloc(&args, 8) != 0) {
+		log("could not allocate argument memory");
+		exit(1);
+	}
+	mkargv(pmtab->pmt_server, args);
 
 	if (!(pmtab->pmt_ttyflags & C_FLAG)) {
-		(void) sprintf(pbuf, "TTYPROMPT=%s", pmtab->pmt_prompt);
-		if (putenv(pbuf)) {
-			log("cannot expand service <%s> environment", argvp[0]);
+		if (setenv("TTYPROMPT", pmtab->pmt_prompt, 1) != 0) {
+			log("cannot expand service <%s> environment",
+			    strlist_get(args, 0));
 			exit(1);
 		}
 	}
 	if (pmtab->pmt_status != GETTY) {
-		(void) sprintf(hbuf, "HOME=%s", pmtab->pmt_dir);
-		if (putenv(hbuf)) {
-			log("cannot expand service <%s> environment", argvp[0]);
+		if (setenv("HOME", pmtab->pmt_dir, 1) != 0) {
+			log("cannot expand service <%s> environment",
+			    strlist_get(args, 0));
 			exit(1);
 		}
 #ifdef	DEBUG
@@ -585,13 +587,14 @@ invoke_service(struct pmtab *pmtab)
 			exit(1);
 		}
 		/* invoke the service */
-		log("Starting service (%s) on %s", argvp[0], pmtab->pmt_device);
+		log("Starting service (%s) on %s", strlist_get(args, 0),
+		    pmtab->pmt_device);
 	}
 
 	if (pmtab->pmt_termtype != (char *)NULL) {
-		(void) sprintf(tbuf, "TERM=%s", pmtab->pmt_termtype);
-		if (putenv(tbuf)) {
-			log("cannot expand service <%s> environment", argvp[0]);
+		if (setenv("TERM", pmtab->pmt_termtype, 1) != 0) {
+			log("cannot expand service <%s> environment",
+			    strlist_get(args, 0));
 			exit(1);
 		}
 	}
@@ -607,7 +610,7 @@ invoke_service(struct pmtab *pmtab)
 	(void) sigaction(SIGUSR2, &Sigusr2, NULL);
 #endif
 	(void) sigprocmask(SIG_SETMASK, &Origmask, NULL);
-	(void) execve(argvp[0], argvp, environ);
+	(void) execve(strlist_get(args, 0), strlist_array(args), environ);
 
 	/* exec returns only on failure! */
 	log("tmchild: exec service failed: %s", strerror(errno));
@@ -615,19 +618,18 @@ invoke_service(struct pmtab *pmtab)
 }
 
 /*
- *	check_hup(fd)	- do a poll on fd to check if it is in hangup state
+ * check_hup(fd)	- do a poll on fd to check if it is in hangup state
  *			- return 1 if hangup, otherwise return 0
  */
-
-static	int
-check_hup(fd)
-int	fd;
+static int
+check_hup(int fd)
 {
-	int	ret;
-	struct	pollfd	pfd[1];
+	int ret;
+	struct pollfd pfd[1];
 
 	pfd[0].fd = fd;
 	pfd[0].events = POLLHUP;
+
 	for (;;) {
 		ret = poll(pfd, 1, 0);
 		if (ret < 0) {
@@ -635,8 +637,7 @@ int	fd;
 				continue;
 			log("check_hup: poll failed: %s", strerror(errno));
 			exit(1);
-		}
-		else if (ret > 0) {
+		} else if (ret > 0) {
 			if (pfd[0].revents & POLLHUP) {
 				return (1);
 			}

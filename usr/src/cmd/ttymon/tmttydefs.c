@@ -27,228 +27,289 @@
 /*	  All Rights Reserved  	*/
 
 
-#include	<unistd.h>
-#include	<stdlib.h>
-#include	<stdio.h>
-#include	<ctype.h>
-#include	<string.h>
-#include	<sys/types.h>
-#include	<sys/stat.h>
-#include	<termio.h>
-#include 	<sys/stermio.h>
-#include 	<sys/termiox.h>
-#include	"ttymon.h"
-#include	"tmstruct.h"
-#include	"tmextern.h"
-#include	"stty.h"
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <ctype.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <termio.h>
+#include <sys/stermio.h>
+#include <sys/termiox.h>
+#include <sys/avl.h>
+#include <sys/debug.h>
+#include <sys/ilstr.h>
+#include <strlist.h>
+#include "ttymon.h"
+#include "tmstruct.h"
+#include "tmextern.h"
+#include "stty.h"
+
+static bool g_defs_init = false;
+static avl_tree_t g_defs;
+static time_t g_ttydefs_mtime = 0;
+static struct Gdef *g_defs_head = NULL;
+static struct Gdef *g_defs_tail = NULL;
 
 static void insert_def(struct Gdef *);
+static struct Gdef *alloc_def(void);
+static void free_def(struct Gdef *);
+
+typedef enum {
+	T_TTYLABEL = 1,
+	T_IFLAGS,
+	T_FFLAGS,
+	T_AUTOBAUD,
+	T_NEXTLABEL,
+} ttydefs_field_t;
+
+const char *
+ttydefs_field_name(ttydefs_field_t f)
+{
+	switch (f) {
+	case T_TTYLABEL:
+		return ("tty label");
+	case T_IFLAGS:
+		return ("initial flags");
+	case T_FFLAGS:
+		return ("final flags");
+	case T_AUTOBAUD:
+		return ("autobaud");
+	case T_NEXTLABEL:
+		return ("next label");
+	}
+
+	abort();
+}
+
+void
+print_ttydef(const struct Gdef *g)
+{
+	size_t len = strlen(g->g_line);
+
+	char *ruler = malloc(len + 1);
+	memset(ruler, '-', len);
+	ruler[len] = '\0';
+
+	log("\n%s", ruler);
+	log("%s", g->g_line);
+	log("%s\n", ruler);
+
+	free(ruler);
+
+	log("ttylabel:\t%s", g->g_id);
+	log("initial flags:\t%s", g->g_iflags);
+	log("final flags:\t%s", g->g_fflags);
+	if (g->g_autobaud & A_FLAG) {
+		log("autobaud:\tyes");
+	} else {
+		log("autobaud:\tno");
+	}
+	log("nextlabel:\t%s", g->g_nextid);
+}
+
+bool
+check_ttydefs(const char *label)
+{
+	VERIFY(g_defs_init);
+
+	if (label != NULL) {
+		const struct Gdef *g;
+
+		if ((g = find_def(label)) == NULL) {
+			return (false);
+		}
+
+		print_ttydef(g);
+		return (true);
+	}
+
+	for (struct Gdef *g = avl_first(&g_defs); g != NULL;
+	    g = AVL_NEXT(&g_defs, g)) {
+		print_ttydef(g);
+	}
+
+	return (true);
+}
 
 /*
- * read_ttydefs	- read in the /etc/ttydefs and store in Gdef array
- *		- if id is not NULL, only get entry with that id
- *		- if check is TRUE, print out the entries
+ * Returns true if we should re-read /etc/ttydefs, and false if not.
  */
-void
-read_ttydefs(char *id, int check)
+bool
+mod_ttydefs(void)
 {
-	FILE *fp;
-	static struct Gdef def;
-	struct Gdef *gptr;
-	static char line[BUFSIZ];
-	static char dbuf[BUFSIZ];
-	int len;
-	int input,state,size,rawc,field;
-	char oldc;
-	static char d_id[MAXID + 1], d_nextid[MAXID + 1],
-	    d_autobaud[MAXID + 1], d_if[BUFSIZ], d_ff[BUFSIZ];
-	static char *states[] = { T_STATE_LIST };
-
-	if ((fp = fopen(TTYDEFS, "r")) == NULL) {
-		log("can't open \"%s\".\n", TTYDEFS);
-		return;
+	if (g_ttydefs_mtime == 0) {
+		/*
+		 * We have not yet read the file at all.
+		 */
+		return (true);
 	}
 
-	if (check) {
-		for (len = 0; len < (size_t)(BUFSIZ - 1); len++)
-			dbuf[len] = '-';
-		dbuf[len] = '\0';
+	struct stat st;
+	if (stat(TTYDEFS, &st) != 0) {
+		/*
+		 * We could not see the file, so we probably cannot re-read it.
+		 */
+		return (false);
 	}
 
-	/* Start searching for the line with the proper "id". */
-	input = ACTIVE;
-	do {
-		char *ptr;
+	/*
+	 * Re-read it if it has changed since we read it last:
+	 */
+	return (st.st_mtime != g_ttydefs_mtime);
+}
 
-		line[0] = '\0';
-		for (ptr = line, oldc = '\0';
-		    (rawc = getc(fp)) != '\n' && rawc != EOF &&
-		    ptr < &line[sizeof (line) - 1];
-		    ptr++ ,oldc = (char)rawc) {
-			if (rawc == '#' && oldc != '\\') {
+static int
+g_defs_compare(const void *l, const void *r)
+{
+	const struct Gdef *lg = l;
+	const struct Gdef *rg = r;
+	int c;
+
+	if ((c = strcmp(lg->g_id, rg->g_id)) < 1) {
+		return (-1);
+	} else if (c > 1) {
+		return (1);
+	} else {
+		return (0);
+	}
+}
+
+static void
+ttydefs_line(uint_t lnum, const char *line)
+{
+	struct Gdef *g = alloc_def();
+
+	/*
+	 * We read one colon-separated field at a time.
+	 */
+	bool failed = false;
+	ttydefs_field_t f = T_TTYLABEL;
+	const char *ptr = line;
+	char *t;
+	while (!failed) {
+		size_t size;
+
+		switch (f) {
+		case T_TTYLABEL:
+			g->g_id = getword(ptr, &size, false);
+			if (size < 1) {
+				failed = true;
+			}
+			break;
+
+		case T_IFLAGS:
+			g->g_iflags = getword(ptr, &size, true);
+			if (check_flags(g->g_iflags) != 0) {
+				failed = true;
+			}
+			break;
+
+		case T_FFLAGS:
+			g->g_fflags = getword(ptr, &size, true);
+			if (check_flags(g->g_fflags) != 0) {
+				failed = true;
+			}
+			break;
+
+		case T_AUTOBAUD:
+			t = getword(ptr, &size, false);
+			if (strcmp(t, "A") == 0) {
+				g->g_autobaud |= A_FLAG;
+			} else if (strcmp(t, "") != 0) {
+				failed = true;
+			}
+			free(t);
+			break;
+
+		case T_NEXTLABEL:
+			g->g_nextid = getword(ptr, &size, false);
+			break;
+
+		default:
+			abort();
+		}
+
+		if (failed) {
+			break;
+		}
+
+		ptr += size;
+
+		if (f == T_NEXTLABEL) {
+			if (*ptr == '\0') {
+				/*
+				 * Processing is complete.
+				 */
+				break;
+			} else {
+				/*
+				 * This was meant to be the last field.
+				 */
+				failed = true;
 				break;
 			}
-			*ptr = (char)rawc;
-		}
-		*ptr = '\0';
 
-		/* skip rest of the line */
-		if (rawc != EOF && rawc != '\n') {
-			if (check && rawc != '#') 
-				log("Entry too long.");
-			while ((rawc = getc(fp)) != EOF && rawc != '\n') 
-				;
-		}
-
-		if (rawc == EOF) {
-			if (ptr == line)
-				break;
-			else
-				input = FINISHED;
-		}
-
-		/* if empty line, skip */
-		for (ptr = line; *ptr != '\0' && isspace(*ptr); ptr++)
-			;
-		if (*ptr == '\0') continue;
-
-		/* Now we have the complete line */
-
-		/* Initialize "def" and "gptr". */
-		gptr = &def;
-		(void) memset(gptr, 0, sizeof (struct Gdef));
-
-		ptr = line;
-		state = T_TTYLABEL;
-		field = state;
-		(void) strncpy(d_id, getword(ptr, &size, 0), MAXID);
-		gptr->g_id = d_id;
-		ptr += size;
-		if (*ptr != ':') {
-			field = state;
-			state = FAILURE;
-		} else {
-			ptr++;	/* Skip the ':' */
-			state++;
-		}
-
-		/* If "id" != NULL, and it does not match, go to next entry */
-		if (id != NULL && strcmp(id,gptr->g_id) != 0)
+		} else if (*ptr == ':') {
+			/*
+			 * Skip the colon and advance to the next field.  Note
+			 * that this works because the enum variants are
+			 * arranged in ascending order.
+			 */
+			ptr++;
+			f++;
 			continue;
 
-		if (check) {
-			len = strlen(line);
-			dbuf[len] = '\0';
-			log("\n%s", dbuf);
-			log("%s", line);
-			log("%s\n", dbuf);
-			dbuf[len] = '-';
-		}
-
-		while (state != FAILURE && state != SUCCESS) {
-			switch (state) {
-			case T_IFLAGS:
-				(void) strncpy(d_if, getword(ptr, &size, 1),
-				    BUFSIZ);
-				gptr->g_iflags = d_if;
-				ptr += size;
-				if (*ptr != ':' || check_flags(d_if) != 0) {
-					field = state;
-					state = FAILURE;
-				} else {
-					ptr++;	
-					state++;
-				}
-				break;
-
-			case T_FFLAGS:
-				(void) strncpy(d_ff, getword(ptr, &size, 1),
-				    BUFSIZ);
-				gptr->g_fflags = d_ff;
-				ptr += size;
-				if (*ptr != ':' || check_flags(d_ff) != 0) {
-					field = state;
-					state = FAILURE;
-				} else {
-					ptr++;	
-					state++;
-				}
-				break;
-
-			case T_AUTOBAUD:
-				(void) strncpy(d_autobaud, getword(ptr, &size,
-				    0), MAXID);
-				if (size > 1) {
-					ptr += size;
-					field = state;
-					state = FAILURE;
-					break;
-				}
-				if (size == 1) {
-					if (*d_autobaud == 'A') {
-						gptr->g_autobaud |= A_FLAG;
-					} else {
-						ptr += size;
-						field = state;
-						state = FAILURE;
-						break;
-					}
-				}
-				ptr += size;
-				if (*ptr != ':') {
-					field = state;
-					state = FAILURE;
-				} else {
-					ptr++;	/* Skip the ':' */
-					state++;
-				}
-				break;
-
-			case T_NEXTLABEL:
-				(void) strncpy(d_nextid, getword(ptr, &size,
-				    0), MAXID);
-				gptr->g_nextid = d_nextid;
-				ptr += size;
-				if (*ptr != '\0') {
-					field = state;
-					state = FAILURE;
-				} else {
-					state = SUCCESS;
-				}
-				break;
-			}
-		}
-
-		if (state == SUCCESS) {
-			if (check) {
-				log("ttylabel:\t%s", gptr->g_id);
-				log("initial flags:\t%s", gptr->g_iflags);
-				log("final flags:\t%s", gptr->g_fflags);
-				if (gptr->g_autobaud & A_FLAG) 
-					log("autobaud:\tyes");
-				else
-					log("autobaud:\tno");
-				log("nextlabel:\t%s", gptr->g_nextid);
-			}
-			if (Ndefs < MAXDEFS) {
-				insert_def(gptr);
-			} else {
-				log("can't add more entries to ttydefs table, "
-				   " Maximum entries = %d", MAXDEFS);
-				(void) fclose(fp);
-				return;
-			}
-			if (id != NULL) {
-				return;
-			}
 		} else {
-			*++ptr = '\0';
-			log("Parsing failure in the \"%s\" field\n"
-			    "%s<--error detected here\n", states[field], line);
+			failed = true;
+			break;
 		}
-	} while (input == ACTIVE);
+	}
 
-	(void) fclose(fp);
+	if (!failed) {
+		g->g_line = safe_strdup(line);
+		insert_def(g);
+	} else {
+		free_def(g);
+		log("Parsing failure in the \"%s\" field of line %u: \"%s\"",
+		    ttydefs_field_name(f), lnum, line);
+	}
+}
+
+/*
+ * read_ttydefs	- read in the /etc/ttydefs and store in Gdef tree
+ */
+void
+read_ttydefs(void)
+{
+	if (g_defs_init) {
+		/*
+		 * We have already read the file once, and are being asked to
+		 * discard the prior version and reread.
+		 */
+		void *cookie = NULL;
+		struct Gdef *g;
+
+		while ((g = avl_destroy_nodes(&g_defs, &cookie)) != NULL) {
+			g->g_next = NULL;
+			free_def(g);
+		}
+
+		avl_destroy(&g_defs);
+		g_defs_init = false;
+		g_defs_head = NULL;
+		g_defs_tail = NULL;
+	}
+
+	g_defs_init = true;
+	avl_create(&g_defs, g_defs_compare, sizeof (struct Gdef),
+	    offsetof(struct Gdef, g_node));
+
+	(void) walk_table(TTYDEFS, ttydefs_line, &g_ttydefs_mtime);
 }
 
 /*
@@ -257,18 +318,16 @@ read_ttydefs(char *id, int check)
  *	- return a Gdef ptr if entry with "ttylabel" is found 
  *	- return NULL if no entry with matching "ttylabel"
  */
-struct Gdef *
-find_def(char *ttylabel)
+const struct Gdef *
+find_def(const char *ttylabel)
 {
-	struct Gdef *tp = &Gdef[0];
-
-	for (int i = 0; i < Ndefs; i++, tp++) {
-		if (strcmp(ttylabel, tp->g_id) == 0) {
-			return (tp);
-		}
+	if (!g_defs_init) {
+		return (NULL);
 	}
 
-	return (NULL);
+	struct Gdef g = { .g_id = (char *)ttylabel };
+
+	return (avl_find(&g_defs, &g, NULL));
 }
 
 /*
@@ -279,23 +338,25 @@ find_def(char *ttylabel)
 int
 check_flags(const char *flags)
 {
-	struct 	 termio termio;
-	struct 	 termios termios;
-	struct 	 termiox termiox;
-	struct 	 winsize winsize;
-	int	 term;
-	int	 cnt = 1;
-	char	 *argvp[MAXARGS];	/* stty args */
-	static   char	 *binstty = "/usr/bin/stty";
-	static	 char	buf[BUFSIZ];
-	extern	 char	*sttyparse();
-	char	*s_arg;		/* this will point to invalid option */
+	struct termio termio;
+	struct termios termios;
+	struct termiox termiox;
+	struct winsize winsize;
+	int term;
+	int r = 0;
+	char *s_arg;		/* this will point to invalid option */
+	strlist_t *args = NULL;
 
-	/* put flags into buf, because strtok will break up buffer */
-	(void) strcpy(buf, flags);
-	argvp[0] = binstty;	/* just a place holder */
-	mkargv(buf, &argvp[1], &cnt, MAXARGS - 1);
-	argvp[cnt] = (char *)0;
+	/*
+	 * Create a fake argument list for stty:
+	 */
+	if (strlist_alloc(&args, 8) != 0 ||
+	    strlist_set(args, 0, "/usr/bin/stty") != 0) {
+		log("could not allocate argument memory: %s", strerror(errno));
+		strlist_free(args);
+		return (-1);
+	}
+	mkargv(flags, args);
 
 	/*
 	 * because we don't know what type of terminal we have now,
@@ -303,103 +364,153 @@ check_flags(const char *flags)
 	 * are accepted
 	 */
 	term = ASYNC|TERMIOS|FLOW;
-	if ((s_arg = sttyparse(cnt, argvp, term, &termio, &termios,
+	if ((s_arg = sttyparse(strlist_contig_count(args),
+	    strlist_array(args), term, &termio, &termios,
 	    &termiox, &winsize)) != NULL) {
 		log("invalid mode: %s", s_arg);
-		return (-1);
+		r = -1;
 	}
-	return (0);
+
+	strlist_free(args);
+	return (r);
 }
 
 /*
  * insert_def - insert one entry into Gdef table
  */
 static void
-insert_def(struct Gdef *gptr)
+insert_def(struct Gdef *g)
 {
-	struct Gdef *tp;
+	avl_index_t where;
 
-	if (find_def(gptr->g_id) != NULL) {
-		log("Warning -- duplicate entry <%s>, ignored", gptr->g_id);
+	printf("CHECK %s\n", g->g_id);
+	print_ttydef(g);
+
+	if (avl_find(&g_defs, g, &where) != NULL) {
+		log("Warning -- duplicate entry <%s>, ignored", g->g_id);
+		free_def(g);
 		return;
 	}
 
-	tp = &Gdef[Ndefs];
-	tp->g_id = safe_strdup(gptr->g_id);
-	tp->g_iflags = safe_strdup(gptr->g_iflags);
-	tp->g_fflags = safe_strdup(gptr->g_fflags);
-	tp->g_autobaud = gptr->g_autobaud;
-	tp->g_nextid = safe_strdup(gptr->g_nextid);
-	Ndefs++;
-	return;
+	printf("INSERT %s\n", g->g_id);
+	avl_insert(&g_defs, g, where);
+
+	/*
+	 * Maintain a linked list of the order in which lines appeared in the
+	 * file for printing during the check phase.
+	 */
+	if (g_defs_tail != NULL) {
+		g_defs_tail->g_next = g;
+	}
+	g_defs_tail = g;
+}
+
+static void
+free_def(struct Gdef *g)
+{
+	VERIFY3P(g->g_next, ==, NULL);
+	free(g->g_id);
+	free(g->g_iflags);
+	free(g->g_fflags);
+	free(g->g_nextid);
+	free(g);
+}
+
+static struct Gdef *
+alloc_def(void)
+{
+	struct Gdef *g;
+
+	if ((g = calloc(1, sizeof (*g))) == NULL) {
+		log("could not allocate memory for ttydefs table");
+		exit(1);
+	}
+
+	return (g);
+}
+
+const struct Gdef *
+next_def(const struct Gdef *g)
+{
+	if (g == NULL) {
+		return (g_defs_head);
+	}
+
+	return (g->g_next);
 }
 
 /*
  * mkargv - parse the string into args, starting from args[cnt]
  */
 void
-mkargv(char *string, char *args[], int *cnt, int maxargs)
+mkargv(const char *string, strlist_t *args)
 {
-	char *ptrin, *ptrout;
-	int i;
-	int qsize;
-	extern char quoted();
+	ilstr_t ils;
 
-	for (i=0 ; i < maxargs; i++) {
-		args[i] = NULL;
-	}
+	ilstr_init(&ils, 0);
 
-	for (ptrin = ptrout = string, i=0; *ptrin != '\0' && i < maxargs;
-	    i++) {
-		/*
-		 * Skip excess white spaces between arguments.
-		 */
-		while (*ptrin == ' ' || *ptrin == '\t') {
-			ptrin++;
-			ptrout++;
-		}
+	enum {
+		ST_REST = 1,
+		ST_ARG
+	} state = ST_REST;
 
-		/*
-		 * Save the address of argument if there is something there.
-		 */
-		if (*ptrin == '\0') {
-			break;
-		} else {
-			args[i] = ptrout;
-		}
+	for (;;) {
+		char c = *string;
 
-		/*
-		 * Span the argument itself.  The '\' character causes quoting
-		 * of the next character to take place (except for '\0').
-		 */
-		while (*ptrin != '\0') {
-			if (*ptrin == '\\') {
-				*ptrout++ = quoted(ptrin,&qsize);
-				ptrin += qsize;
-
-			/*
-			 * Is this the end of the argument?  If so quit loop.
-			 */
-			} else if (*ptrin == ' ' || *ptrin == '\t') {
-				ptrin++;
-				break;
-
-			/*
-			 * If this is a normal letter of the argument, save it,
-			 * advancing the pointers at the same time.
-			 */
-			} else {
-				*ptrout++ = *ptrin++;
+		switch (state) {
+		case ST_REST:
+			if (c == '\0') {
+				goto done;
 			}
-		}
+			if (c == ' ' || c == '\t') {
+				/*
+				 * Skip excess whitespace between arguments.
+				 */
+				string++;
+				continue;
+			}
+			ilstr_reset(&ils);
+			state = ST_ARG;
+			continue;
 
-		/*
-		 * Null terminate the string.
-		 */
-		*ptrout++ = '\0';
+		case ST_ARG:
+			if (c == '\0' || c == ' ' || c == '\t') {
+				/*
+				 * Attempt to commit the argument we've read.
+				 */
+				if (ilstr_errno(&ils) != 0) {
+					log("error processing arguments: %s",
+					    ilstr_errstr(&ils));
+					exit(1);
+				}
+				if (strlist_set_tail(args,
+				    ilstr_cstr(&ils)) != 0) {
+					log("error appending arguments: %s",
+					    strerror(errno));
+					exit(1);
+				}
+				if (c == '\0') {
+					goto done;
+				}
+				state = ST_REST;
+				continue;
+			}
+			if (c == '\\') {
+				size_t qsize;
+
+				ilstr_append_char(&ils,
+				    quoted(string, &qsize));
+				string += qsize;
+				continue;
+			}
+			ilstr_append_char(&ils, c);
+			string++;
+			continue;
+		}
 	}
 
-	(*cnt) += i;
+done:
+	ilstr_fini(&ils);
 }
 
 #ifdef	DEBUG
@@ -409,22 +520,20 @@ mkargv(char *string, char *args[], int *cnt, int maxargs)
 void
 dump_ttydefs()
 {
-	struct Gdef *gptr = &Gdef[0];
-
 	log("********** dumping ttydefs table **********");
-	log("Ndefs = %d", Ndefs);
+	log("Ndefs = %d", avl_numnodes(&g_defs));
 	log(" ");
 
-	for (int i = 0; i < Ndefs; i++,gptr++) {
+	for (struct Gdef *g = g_defs_head; g != NULL; g = g->g_next) {
 		log("----------------------------------------");
-		log("ttylabel:\t%s", gptr->g_id);
-		log("initial flags:\t%s", gptr->g_iflags);
-		log("final flags:\t%s", gptr->g_fflags);
-		if (gptr->g_autobaud & A_FLAG) 
+		log("ttylabel:\t%s", g->g_id);
+		log("initial flags:\t%s", g->g_iflags);
+		log("final flags:\t%s", g->g_fflags);
+		if (g->g_autobaud & A_FLAG) 
 			log("autobaud:\tyes");
 		else
 			log("autobaud:\tno");
-		log("nextlabel:\t%s", gptr->g_nextid);
+		log("nextlabel:\t%s", g->g_nextid);
 		log(" ");
 	}
 

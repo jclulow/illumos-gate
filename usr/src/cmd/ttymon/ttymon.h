@@ -40,78 +40,6 @@
 #define		FINISHED	0
 
 /*
- *	flags to indicate the field of /etc/ttydefs
- *	NOTE: The sequence of definitions here must match the list below
- *		in T_STATE_LIST.
- */
-#define		T_TTYLABEL	1
-#define		T_IFLAGS	2
-#define		T_FFLAGS	3
-#define		T_AUTOBAUD	4
-#define		T_NEXTLABEL	5
-
-/*
- * 	Printable names for the T_* states defined above.  An empty string is
- * 	defined for the unused zero value.  These are used to set up an array
- * 	in "read_ttydefs()".
- */
-#define		T_STATE_LIST		\
-		"",			\
-		"tty label",		\
-		"Initial flags",	\
-		"Final flags",		\
-		"Autobaud",		\
-		"Next label"
-
-/*
- *	flags to indicate the field of pmtab
- *	NOTE: The sequence of definitions here must match the list below
- *		in P_STATE_LIST.
- */
-#define		P_TAG		1
-#define		P_FLAGS		2
-#define		P_IDENTITY	3
-#define		P_RES1		4
-#define		P_RES2		5
-#define		P_RES3		6
-#define		P_DEVICE	7
-#define		P_TTYFLAGS	8
-#define		P_COUNT		9
-#define		P_SERVER	10
-#define		P_TIMEOUT	11
-#define		P_TTYLABEL	12
-#define		P_MODULES	13
-#define		P_PROMPT	14
-#define		P_DMSG		15
-#define		P_TERMTYPE	16
-#define		P_SOFTCAR	17
-
-/*
- * 	Printable names for the P_* states defined above.  An empty string is
- * 	defined for the unused zero value.  These are used to set up an array
- * 	in "read_pmtab()".
- */
-#define		P_STATE_LIST		\
-		"",			\
-		"tag",			\
-		"flags",		\
-		"identity",		\
-		"reserved1",		\
-		"reserved2",		\
-		"reserved3",		\
-		"device",		\
-		"ttyflags",		\
-		"count",		\
-		"service",		\
-		"timeout",		\
-		"ttylabel",		\
-		"modules",		\
-		"prompt",		\
-		"disable msg",		\
-		"terminal type",	\
-		"soft-carrier"
-
-/*
  *	termio mode
  */
 #define		RAW	0x1	/* raw mode		*/
@@ -161,8 +89,6 @@
 
 #define	PMTAB_VERS	1		/* pmtab version number		*/
 #define	TTYDEFS_VERS	1		/* /etc/ttydefs version number	*/
-
-#define	MAXDEFS		100		/* max entries Gdef table can have */
 
 /*
  * - ttymon reserves 7 fd for the following use:

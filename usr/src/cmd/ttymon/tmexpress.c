@@ -76,7 +76,6 @@ ttymon_express(int argc, char **argv)
 	struct	pmtab	*pmtab;
 	struct	sigaction	sigact;
 	extern	void	open_device();
-	extern	void	read_ttydefs();
 	extern	int	checkut_line();
 #ifdef	DEBUG
 	extern	void	opendebug();
@@ -101,7 +100,7 @@ ttymon_express(int argc, char **argv)
 		exit(1);
 	}
 
-	read_ttydefs(NULL, FALSE);
+	read_ttydefs();
 
 	if (!empty(pmtab->pmt_device)) {
 		while (checkut_line(pmtab->pmt_device)) {
@@ -230,7 +229,6 @@ ttymon_options(int argc, char **argv, struct pmtab *pmtab)
 	int c;
 	char *timeout;
 	int gflag = 0;
-	int size = 0;
 	char tbuf[BUFSIZ];
 
 	while ((c = getopt(argc, argv, "T:gd:ht:p:m:l:")) != -1) {
@@ -260,8 +258,7 @@ ttymon_options(int argc, char **argv, struct pmtab *pmtab)
 			break;
 		case 'p':
 			copystr(tbuf, optarg);
-			pmtab->pmt_prompt = safe_strdup(getword(tbuf, &size,
-			    TRUE));
+			pmtab->pmt_prompt = getword(tbuf, NULL, true);
 			break;
 		case 'm':
 			pmtab->pmt_modules = optarg;

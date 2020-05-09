@@ -33,7 +33,7 @@ DEFAULTFILES= init.dfl
 
 include ../Makefile.cmd
 
-OBJS = init.o bootbanner.o
+OBJS = init.o bootbanner.o ilstr.o
 CSTD = $(CSTD_GNU99)
 LDLIBS += -lpam -lbsm -lcontract -lscf
 CERRWARN += -_gcc=-Wno-parentheses
@@ -67,6 +67,10 @@ $(PROG):	$(OBJS)
 	$(POST_PROCESS)
 
 %.o:	$(SRC)/common/bootbanner/%.c
+	$(COMPILE.c) $(OUTPUT_OPTION) $<
+	$(POST_PROCESS_O)
+
+%.o:	$(SRC)/common/strings/%.c
 	$(COMPILE.c) $(OUTPUT_OPTION) $<
 	$(POST_PROCESS_O)
 

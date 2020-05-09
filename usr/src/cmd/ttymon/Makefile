@@ -38,12 +38,12 @@ XPG4STTYOBJ=	sttyobjs.xpg4/stty.o sttyobjs.xpg4/sttytable.o \
 TTYMONOBJ=	ttymon.o tmglobal.o tmhandler.o tmpmtab.o tmttydefs.o \
 		tmparse.o tmsig.o tmsac.o tmchild.o tmautobaud.o tmterm.o \
 		tmutmp.o tmpeek.o tmlog.o tmlock.o tmutil.o tmexpress.o \
-		sttytable.o sttyparse.o ulockf.o
+		sttytable.o sttyparse.o ulockf.o strlist.o ilstr.o
 
 TTYADMOBJ=	ttyadm.o tmutil.o admutil.o 
 
 STTYDEFSOBJ=	sttydefs.o admutil.o tmttydefs.o tmparse.o sttytable.o \
-		sttyparse.o tmutil.o
+		sttyparse.o tmutil.o tmglobal.o strlist.o ilstr.o
 
 OBJS= $(STTYOBJ) $(XPG4STTYOBJ) $(TTYMONOBJ) $(TTYADMOBJ) $(STTYDEFSOBJ)
 STTYSRC= stty.c sttytable.c sttyparse.c
@@ -51,20 +51,24 @@ TTYMONSRC= $(TTYMONOBJ:%.o=%.c)
 TTYADMSRC= $(TTYADMOBJ:%.o=%.c)
 STTYDEFSSRC= $(STTYDEFSOBJ:%.o=%.c)
 SRCS= $(STTYSRC) $(TTYMONSRC) $(TTYADMSRC) $(STTYDEFSSRC)
+CPPFLAGS += -I$(SRC)/lib/strings
 
 .PARALLEL:	$(OBJS) $(PROG)
 
 include ../Makefile.cmd
 
 # If debug is needed, then:  CPPFLAGS += -DDEBUG
-$(XPG4):= CPPFLAGS += -DXPG4
-sttydefs := LDLIBS += -lnsl
-ttymon := LDLIBS += -lnsl -lsec -ldevinfo
+$(XPG4) := CPPFLAGS += -DXPG4 -I$(SRC)/lib/strings
+sttydefs := LDLIBS += -lnsl -lavl
+ttymon := LDLIBS += -lnsl -lsec -ldevinfo -lavl -lpam
+ttymon := CPPFLAGS += -I$(SRC)/lib/strings
+ttyadm := CPPFLAGS += -I$(SRC)/lib/strings
+sttydefs := CPPFLAGS += -I$(SRC)/lib/strings
 
 # Only stty can be built with -DEUC.  ttymon will dump core unless further
 # changes are made to it.
-$(STTYOBJ) := CPPFLAGS += -DEUC
-$(XPG4STTYOBJ) := CPPFLAGS += -DEUC
+$(STTYOBJ) := CPPFLAGS += -DEUC -I$(SRC)/lib/strings
+$(XPG4STTYOBJ) := CPPFLAGS += -DEUC -I$(SRC)/lib/strings
 
 CSTD = $(CSTD_GNU99)
 CFLAGS += $(CCVERBOSE)
@@ -107,6 +111,12 @@ stty.xpg4: $(XPG4STTYOBJ) $(MAPFILE.NGB)
 
 $(XPG4STTYOBJ): sttyobjs.xpg4
 
+%.o: $(SRC)/lib/strings/%.c
+	$(COMPILE.c) -o $@ $<
+
+%.o: $(SRC)/common/strings/%.c
+	$(COMPILE.c) -o $@ $<
+
 sttyobjs/%.o:	%.c
 	$(COMPILE.c) -o $@ $<
 
@@ -120,7 +130,7 @@ sttyobjs.xpg4:
 	-@mkdir -p $@
 
 ttymon:	$(TTYMONOBJ) $(MAPFILE.NGB)
-	$(LINK.c) $(TTYMONOBJ) -o $@ $(LDLIBS) -lpam
+	$(LINK.c) $(TTYMONOBJ) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
 ttyadm:	$(TTYADMOBJ) $(MAPFILE.NGB)

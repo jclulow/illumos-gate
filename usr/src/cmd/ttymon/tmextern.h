@@ -34,6 +34,7 @@
 #include <termio.h>
 #include <sys/termiox.h>
 #include <sys/stermio.h>
+#include <strlist.h>
 
 #include "tmstruct.h"
 
@@ -44,8 +45,9 @@ extern "C" {
 extern void setup_PCpipe();
 extern void set_softcar(struct pmtab *);
 extern int find_label(FILE *, const char *);
-extern struct Gdef *get_speed(const char *);
+extern const struct Gdef *get_speed(const char *);
 extern void open_device(struct pmtab *);
+extern bool mod_ttydefs(void);
 
 extern int get_ttymode(int, struct termio *, struct termios *,
     struct stio *, struct termiox *, struct winsize *
@@ -59,7 +61,7 @@ extern int set_ttymode(int, int, struct termio *, struct termios *,
     , struct eucioc *, ldterm_cs_data_user_t *, int
 #endif /* EUC */
     );
-char *sttyparse(int, char **, int, struct termio *, struct termios *,
+char *sttyparse(int, char *const *, int, struct termio *, struct termios *,
     struct termiox *, struct winsize *
 #ifdef EUC
     , eucwidth_t *, struct eucioc *, ldterm_cs_data_user_t *,
@@ -105,8 +107,10 @@ char *sttyparse(int, char **, int, struct termio *, struct termios *,
 
 
 /* tmparse.c 	*/
-	extern	char	*getword();
-	extern	char	quoted();
+extern char *getword(const char *, size_t *, bool);
+extern char quoted(const char *, size_t *);
+extern bool walk_table(const char *, void (*)(uint_t, const char *), time_t *);
+
 
 /* tmpeek.c 	*/
 	extern	int	poll_data();
@@ -116,6 +120,7 @@ char *sttyparse(int, char **, int, struct termio *, struct termios *,
 /* tmpmtab.c 	*/
 	extern	void	read_pmtab();
 	extern	void	purge();
+extern struct pmtab *next_pmtab(struct pmtab *);
 
 /* tmsac.c 	*/
 	extern 	void	openpid();
@@ -135,10 +140,13 @@ char *sttyparse(int, char **, int, struct termio *, struct termios *,
 	extern	void 	flush_input();
 
 /* tmttydefs.c 	*/
-	extern	void	read_ttydefs();
-	extern 	struct 	Gdef *find_def();
-	extern	void	mkargv();
-	extern int check_flags(const char *);
+extern void read_ttydefs(void);
+extern bool check_ttydefs(const char *);
+extern const struct Gdef *find_def(const char *);
+extern void mkargv(const char *, strlist_t *);
+extern int check_flags(const char *);
+const struct Gdef *next_def(const struct Gdef *);
+
 
 /* tmutmp.c 	*/
 	extern 	int 	account();
@@ -172,9 +180,6 @@ extern 	void sys_name();
 	extern struct pollfd *Pollp;
 
 	extern struct Gdef DEFAULT;
-	extern	struct 	Gdef Gdef[];
-	extern	int	Ndefs;
-	extern	long	Mtime;
 
 	extern	FILE	*Logfp;
 	extern	int	Sfd, Pfd;

@@ -55,8 +55,6 @@ static void initialize(void);
 static void open_all(void);
 static int set_poll(struct pollfd *);
 static int check_spawnlimit(struct pmtab *);
-static int mod_ttydefs(void);
-static void free_defs(void);
 
 
 /*
@@ -133,7 +131,6 @@ main(int argc, char *argv[])
 static void
 initialize(void)
 {
-	struct pmtab *tp;
 	struct passwd *pwdp;
 	struct group *gp;
 	struct rlimit rlimit;
@@ -202,11 +199,10 @@ initialize(void)
 		fatal("malloc for Pollp failed");
 	}
 
-	(void) mod_ttydefs();	/* just to initialize Mtime */
 	if (check_version(TTYDEFS_VERS, TTYDEFS) != 0)
 		fatal("check /etc/ttydefs version failed");
 
-	read_ttydefs(NULL, FALSE);
+	read_ttydefs();
 
 	/* initialize global variables, Uucp_uid & Tty_gid */
 	if ((pwdp = getpwnam(UUCP)) != NULL)
@@ -227,7 +223,9 @@ initialize(void)
 	Retry = TRUE;
 	while (Retry) {
 		Retry = FALSE;
-		for (tp = PMtab; tp != NULL; tp = tp->pmt_next) {
+
+		struct pmtab *tp = NULL;
+		while ((tp = next_pmtab(tp)) != NULL) {
 			if ((tp->pmt_status > 0) &&
 			    (tp->pmt_fd == 0) &&
 			    (tp->pmt_pid == 0) &&
@@ -260,7 +258,8 @@ open_all(void)
 #endif
 	check_modtime = TRUE;
 
-	for (tp = PMtab; tp; tp = tp->pmt_next) {
+	tp = NULL;
+	while ((tp = next_pmtab(tp)) != NULL) {
 		if ((tp->pmt_status > 0) && (tp->pmt_fd == 0) &&
 		    (tp->pmt_pid == 0) &&
 		    !(tp->pmt_ttyflags & I_FLAG) && (!((State == PM_DISABLED) &&
@@ -275,11 +274,10 @@ open_all(void)
 				tset = cset;
 				(void) sigaddset(&tset, SIGCLD);
 				(void) sigprocmask(SIG_SETMASK, &tset, NULL);
-				free_defs();
 #ifdef	DEBUG
 				debug("/etc/ttydefs is modified, re-read it");
 #endif
-				read_ttydefs(NULL, FALSE);
+				read_ttydefs();
 				(void) sigprocmask(SIG_SETMASK, &cset, NULL);
 			}
 			open_device(tp);
@@ -297,11 +295,10 @@ open_all(void)
 				tset = cset;
 				(void) sigaddset(&tset, SIGCLD);
 				(void) sigprocmask(SIG_SETMASK, &tset, NULL);
-				free_defs();
 #ifdef	DEBUG
 				debug("/etc/ttydefs is modified, re-read it");
 #endif
-				read_ttydefs(NULL, FALSE);
+				read_ttydefs();
 				(void) sigprocmask(SIG_SETMASK, &cset, NULL);
 			}
 			tp->pmt_status = VALID;
@@ -512,8 +509,9 @@ static int
 set_poll(struct pollfd *fdp)
 {
 	int nfd = 0;
+	struct pmtab *tp = NULL;
 
-	for (struct pmtab *tp = PMtab; tp != NULL; tp = tp->pmt_next) {
+	while ((tp = next_pmtab(tp)) != NULL) {
 		if (tp->pmt_fd > 0)  {
 			fdp->fd = tp->pmt_fd;
 			fdp->events = POLLIN;
@@ -551,48 +549,6 @@ check_spawnlimit(struct pmtab *pmptr)
 }
 
 /*
- * mod_ttydefs	- to check if /etc/ttydefs has been modified
- *		- return TRUE if file modified
- *		- otherwise, return FALSE
- */
-static int
-mod_ttydefs(void)
-{
-	struct	stat	statbuf;
-	if (stat(TTYDEFS, &statbuf) == -1) {
-		/* if stat failed, don't bother reread ttydefs */
-		return (FALSE);
-	}
-	if ((long)statbuf.st_mtime != Mtime) {
-		Mtime = (long)statbuf.st_mtime;
-		return (TRUE);
-	}
-	return (FALSE);
-}
-
-/*
- * free_defs - free the Gdef table
- */
-static void
-free_defs(void)
-{
-	int	i;
-	struct	Gdef	*tp;
-	tp = &Gdef[0];
-	for (i = 0; i < Ndefs; i++, tp++) {
-		free(tp->g_id);
-		free(tp->g_iflags);
-		free(tp->g_fflags);
-		free(tp->g_nextid);
-		tp->g_id = NULL;
-		tp->g_iflags = NULL;
-		tp->g_fflags = NULL;
-		tp->g_nextid = NULL;
-	}
-	Ndefs = 0;
-}
-
-/*
  * struct Gdef *get_speed(ttylabel)
  *	- search "/etc/ttydefs" for speed and term. specification
  *	  using "ttylabel". If "ttylabel" is NULL, default
@@ -600,10 +556,10 @@ free_defs(void)
  * arg:	  ttylabel - label/id of speed settings.
  */
 
-struct Gdef *
+const struct Gdef *
 get_speed(const char *ttylabel)
 {
-	struct Gdef *sp;
+	const struct Gdef *sp;
 
 	if (empty(ttylabel)) {
 		return (&DEFAULT);
@@ -611,7 +567,7 @@ get_speed(const char *ttylabel)
 
 	if ((sp = find_def(ttylabel)) == NULL) {
 		log("unable to find <%s> in \"%s\"", ttylabel, TTYDEFS);
-		sp = &DEFAULT; /* use default */
+		return (&DEFAULT);
 	}
 
 	return (sp);

@@ -528,6 +528,7 @@ usr/include/sys/u8_textprep_data.h
 # Private, for the boot banner code shared between zone init and the kernel:
 #
 usr/include/sys/bootbanner.h
+usr/include/sys/ilstr.h
 #
 # SQLite is private, used by SMF (svc.configd), idmapd and libsmb.
 #

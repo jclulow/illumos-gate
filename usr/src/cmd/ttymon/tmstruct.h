@@ -26,6 +26,7 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
+#include <sys/avl.h>
 
 #ifndef	_TMSTRUCT_H
 #define	_TMSTRUCT_H
@@ -39,6 +40,9 @@ struct Gdef {
 	char		*g_fflags;	/* final terminal flags 	*/
 	short		g_autobaud;	/* autobaud indicator 		*/
 	char		*g_nextid;	/* next id if this speed is wrong */
+	char		*g_line;
+	avl_node_t	g_node;
+	struct Gdef	*g_next;
 };
 
 /*
@@ -74,7 +78,7 @@ struct pmtab {
 	uid_t	pmt_uid;	/* uid of pmt_identity		*/
 	gid_t	pmt_gid;	/* gid of pmt_identity		*/
 	char	*pmt_dir;	/* home dir of pmt_identity	*/
-	struct	pmtab *pmt_next;
+	avl_node_t pmt_node;
 };
 
 /*
@@ -98,7 +102,7 @@ struct pmtab {
 #define	A_FLAG	0x20	/* autobaud flag			*/
 
 /*
- *	values for p_status field of pmtab
+ *	values for pmt_status field of pmtab
  */
 #define	NOTVALID	0	/* entry is not valid		*/
 #define	VALID		1	/* entry is valid		*/

@@ -48,23 +48,8 @@ static	int  iflg = 0;		/* -i seen */
 static	int  fflg = 0;		/* -f seen */
 static	int  lflg = 0;		/* -l seen */
 
-struct  Gdef Gdef[MAXDEFS];	/* array to hold entries in /etc/ttydefs */
-int	Ndefs = 0;		/* highest index to Gdef that was used   */
-struct Gdef DEFAULT = {		/* default terminal settings	*/
-	"default",
-	"9600",
-	"9600 sane",
-	0,
-	/* 
-	 * next label is set to 4800 so we can start searching ttydefs.
-	 * if 4800 is not in ttydefs, we will loop back to use DEFAULT 
-	 */
-	"4800"
-};
-
-
 static	void	usage();
-static	void	check_ref();
+static void check_ref(void);
 static	void	add_entry();
 static	void	remove_entry();
 static	int	copy_file();
@@ -72,58 +57,44 @@ static	int	verify();
 static	FILE	*open_temp();
 
 /*
- *	sttydefs - add, remove or check entries in /etc/ttydefs
- *
- *	Usage:	   sttydefs -a ttylabel [-n nextlabel] [-i initail-flags] 
- *			    [-f final-flags] [-b]
- *		   sttydefs -r ttylabel
- *		   sttydefs -l [ttylabel]
- *
+ * sttydefs - add, remove or check entries in /etc/ttydefs
  */
 
 int
 main(int argc, char *argv[])
 {
-	int c;			/* option letter */
-	int errflg = 0;		/* error indicator */
-	int  aflg = 0;		/* -a seen */
-	int  bflg = 0;		/* -b seen */
-	int	ret;
-#ifdef __STDC__
-	const
-#endif
-	char	*argtmp;
-	char	*nextlabel;
-	struct Gdef ttydef, *ptr;
+	int c;
+	int errflg = 0;
+	int aflg = 0;
+	int bflg = 0;
+	int ret;
+	const char *argtmp;
+	struct Gdef g;
 
 	if (argc == 1)
 		usage();
 
-        /* Initialize ttydef structure */
-        memset (&ttydef, 0, sizeof(ttydef));
- 
-	ptr = &ttydef;
 	while ((c = getopt(argc, argv, "a:n:i:f:br:l")) != -1) {
 		switch (c) {
 		case 'a':
 			aflg = TRUE;
-			ptr->g_id = optarg;
+			g.g_id = optarg;
 			break;
 		case 'n':
 			nflg = TRUE;
-			ptr->g_nextid = optarg;
+			g.g_nextid = optarg;
 			break;
 		case 'i':
 			iflg = TRUE;
-			ptr->g_iflags = optarg;
+			g.g_iflags = optarg;
 			break;
 		case 'f':
 			fflg = TRUE;
-			ptr->g_fflags = optarg;
+			g.g_fflags = optarg;
 			break;
 		case 'b':
 			bflg = TRUE;
-			ptr->g_autobaud |= A_FLAG;
+			g.g_autobaud |= A_FLAG;
 			break;
 		case 'r':
 			if ((argc > 3) || (optind < argc))
@@ -143,52 +114,61 @@ main(int argc, char *argv[])
 				exit(1);
 			}
 			if (argv[optind] == NULL) {
-				read_ttydefs(NULL,TRUE);
+				read_ttydefs();
+				(void) check_ttydefs(NULL);
 				printf("\n");
 				check_ref();
-			}
-			else {
+			} else {
 				if (argc == 3) { /* -l ttylabel */
-					if (verify(argv[optind],0) != 0) {
+					if (verify(argv[optind], 0) != 0) {
 						errflg++;
 						break;
 					}
 					argtmp = argv[optind];
+				} else { /* -lttylabel */
+					argtmp = argv[optind] + 2;
 				}
-				else { /* -lttylabel */
-					argtmp = argv[optind]+2;
-				}
-				read_ttydefs(argtmp,TRUE);
-				if (Ndefs == 0) {
+
+				read_ttydefs();
+				if (!check_ttydefs(argtmp)) {
 					(void)fprintf(stderr,
-					"ttylabel <%s> not found.\n", argtmp);
+					    "ttylabel <%s> not found.\n",
+					    argtmp);
 					exit(1);
 				}
-				nextlabel = Gdef[--Ndefs].g_nextid;
-				Ndefs = 0;
-				read_ttydefs(nextlabel,FALSE);
-				if (Ndefs == 0) {
-					(void)printf("\nWarning -- nextlabel <%s> of <%s> does not reference any existing ttylabel.\n", 
-					nextlabel, argtmp);
+
+				/*
+				 * Because check_ttydefs() succeeded for this
+				 * label, we can just fetch it:
+				 */
+				const struct Gdef *g = find_def(argtmp);
+				if (find_def(g->g_nextid) == NULL) {
+					(void)printf("\nWarning -- nextlabel "
+					    "<%s> of <%s> does not reference "
+					    "any existing ttylabel.\n",
+					    g->g_nextid, argtmp);
 				}
 			}
 			exit(0);
-			break;		/*NOTREACHED*/
+			break;
 		case '?':
 			errflg++;
 			break;
-		} /* end switch */
+		}
 		if (errflg) 
 			usage();
-	} /* end while */
+	}
 	if (optind < argc) 
 		usage();
 
 	if (aflg) {
-		add_entry(ptr); 	/* never return */
+		add_entry(&g);
 	}
-	if ((iflg) || (fflg) || (bflg) || (nflg)) 
+
+	if ((iflg) || (fflg) || (bflg) || (nflg)) {
 		usage();
+	}
+
 	return (0); 
 }
 
@@ -198,73 +178,78 @@ main(int argc, char *argv[])
  *		  arg must not longer than maxarglen
  *		- return 0 if ok. Otherwise return -1
  */
-static	int
-verify(arg,maxarglen)
-char	*arg;
-int	maxarglen;
+static int
+verify(char *arg, size_t maxarglen)
 {
 	if (*arg == '-') {
-		(void)fprintf(stderr, "Invalid argument -- %s.\n", arg);
-		return(-1);
+		(void) fprintf(stderr, "Invalid argument -- %s.\n", arg);
+		return (-1);
 	}
-	if ((maxarglen) && ((int)strlen(arg) > maxarglen)) {
+
+	if (maxarglen != 0 && strlen(arg) > maxarglen) {
 		arg[maxarglen] = '\0';
-		(void)fprintf(stderr,"string too long, truncated to %s.\n",arg);
-		return(-1);
+		(void) fprintf(stderr, "string too long, truncated to %s.\n",
+		    arg);
+		return (-1);
 	}
+
 	return(0);
 }
 
 /*
  * usage - print out a usage message
  */
-
-static	void
+static void
 usage()
 {
-	(void)fprintf(stderr, "Usage:\tsttydefs -a ttylabel [-n nextlabel] [-i initial-flags]\n\t\t [-f final-flags] [-b]\n");
-	(void)fprintf(stderr, "\tsttydefs -r ttylabel\n");
-	(void)fprintf(stderr, "\tsttydefs -l [ttylabel]\n");
+	(void) fprintf(stderr, "Usage:\tsttydefs -a ttylabel [-n nextlabel] "
+	    "[-i initial-flags]\n\t\t [-f final-flags] [-b]\n");
+	(void) fprintf(stderr, "\tsttydefs -r ttylabel\n");
+	(void) fprintf(stderr, "\tsttydefs -l [ttylabel]\n");
 	exit(2);
 }
 
 /*
- *	add_entry - add an entry to /etc/ttydefs
+ * add_entry - add an entry to /etc/ttydefs
  */
-
-static	void
-add_entry(ttydef)
-struct Gdef *ttydef;
+static void
+add_entry(struct Gdef *ttydef)
 {
 	FILE *fp;
-	int	errflg = 0;
+	int errflg = 0;
 	char tbuf[BUFSIZ], *tp;
-	int  add_version = FALSE;
+	int add_version = FALSE;
 
-	if (getuid()) {
-		(void)fprintf(stderr, "User not privileged for operation.\n");
+	if (getuid() != 0) {
+		(void) fprintf(stderr, "User not privileged for operation.\n");
 		exit(1);
 	}
+
 	tp = tbuf;
 	*tp = '\0';
 	if ((fp = fopen(TTYDEFS, "r")) != NULL) {
 		if (check_version(TTYDEFS_VERS, TTYDEFS) != 0) {
-			(void)fprintf(stderr, 
-			"%s version number is incorrect or missing.\n",TTYDEFS);
+			(void) fprintf(stderr, 
+			    "%s version number is incorrect or missing.\n",
+			    TTYDEFS);
 			exit(1);
 		}
-		if (find_label(fp,ttydef->g_id) != 0) {
-			(void)fclose(fp);
-			(void)fprintf(stderr,
-			"Invalid request -- ttylabel <%s> already exists.\n",
-			ttydef->g_id);
+		if (find_label(fp, ttydef->g_id) != 0) {
+			(void) fclose(fp);
+			(void) fprintf(stderr,
+			    "Invalid request -- ttylabel <%s> already "
+			    "exists.\n", ttydef->g_id);
 			exit(1);
-		}	
+		}
 		(void)fclose(fp);
-	}
-	else  {
+	} else {
+		/*
+		 * If the file does not yet exist, we need to add the version
+		 * header.
+		 */
 		add_version = TRUE;
 	}
+
 	if ((fp = fopen(TTYDEFS, "a+")) == NULL) {
 		(void) fprintf(stderr, "Could not open \"%s\": %s", TTYDEFS,
 		    strerror(errno));
@@ -272,90 +257,109 @@ struct Gdef *ttydef;
 	}
 
 	if (add_version) {
-	   (void)fprintf(fp,"# VERSION=%d\n", TTYDEFS_VERS);
+		(void) fprintf(fp,"# VERSION=%d\n", TTYDEFS_VERS);
 	}
-
 
 	/* if optional fields are not provided, set to default */
-	if (!iflg)
+	if (!iflg) {
 		ttydef->g_iflags = DEFAULT.g_iflags;
-	else
-		if (check_flags(ttydef->g_iflags) != 0 )
+	} else {
+		if (check_flags(ttydef->g_iflags) != 0) {
 			errflg++;
-	if (!fflg)
+		}
+	}
+	if (!fflg) {
 		ttydef->g_fflags = DEFAULT.g_fflags;
-	else
-		if (check_flags(ttydef->g_fflags) != 0 )
+	} else {
+		if (check_flags(ttydef->g_fflags) != 0) {
 			errflg++;
-	if (errflg)
+		}
+	}
+
+	if (errflg) {
 		exit(1);
+	}
 
-	if (!nflg)
+	if (!nflg) {
 		ttydef->g_nextid = ttydef->g_id;
+	}
 
-	if (ttydef->g_autobaud & A_FLAG)  {
-	   (void)fprintf(fp,"%s:%s:%s:A:%s\n", ttydef->g_id, ttydef->g_iflags,
-		ttydef->g_fflags, ttydef->g_nextid);
-	}
-	else {
-	   (void)fprintf(fp,"%s:%s:%s::%s\n", ttydef->g_id, ttydef->g_iflags,
-		ttydef->g_fflags, ttydef->g_nextid);
-	}
-	(void)fclose(fp);
+	char *abaud = (ttydef->g_autobaud & A_FLAG) ? "A" : "";
+	(void) fprintf(fp, "%s:%s:%s:%s:%s\n", ttydef->g_id,
+	    ttydef->g_iflags, ttydef->g_fflags, abaud, ttydef->g_nextid);
+
+	(void) fclose(fp);
 	exit(0);
 }
 
-static	void
-remove_entry(ttylabel)
-char	*ttylabel;
+static void
+remove_entry(const char *ttylabel)
 {
 	FILE *tfp;		/* file pointer for temp file */
 	int line;		/* line number entry is on */
 	FILE *fp;		/* scratch file pointer */
-	char *tname = "/etc/.ttydefs";
+	const char *tname = "/etc/.ttydefs";
 
-	if (getuid()) {
-		(void)fprintf(stderr, "User not privileged for operation.\n");
+	if (getuid() != 0) {
+		(void) fprintf(stderr, "User not privileged for operation.\n");
 		exit(1);
 	}
+
 	fp = fopen(TTYDEFS, "r");
 	if (fp == NULL) {
 		(void) fprintf(stderr, "Could not open \"%s\": %s", TTYDEFS,
 		    strerror(errno));
 		exit(1);
 	}
+
 	if (check_version(TTYDEFS_VERS, TTYDEFS) != 0) {
-		(void)fprintf(stderr, 
-			"%s version number is incorrect or missing.\n",TTYDEFS);
+		(void) fprintf(stderr, 
+		    "%s version number is incorrect or missing.\n", TTYDEFS);
 		exit(1);
 	}
+
 	if ((line = find_label(fp, ttylabel)) == 0) {
-		(void)fprintf(stderr, 
-		"Invalid request, ttylabel <%s> does not exist.\n", ttylabel);
+		(void) fprintf(stderr, 
+		    "Invalid request, ttylabel <%s> does not exist.\n",
+		    ttylabel);
 		exit(1);
 	}
+
 	tfp = open_temp(tname);
-	if (line != 1) 
+
+	if (line != 1) {
+		/*
+		 * Copy the lines before the line to delete into the temporary
+		 * file:
+		 */
 		if (copy_file(fp, tfp, 1, line - 1)) {
-			(void)fprintf(stderr,"Error accessing temp file.\n");
+			(void) fprintf(stderr,"Error accessing temp file.\n");
 			exit(1);
 		}
+	}
+
+	/*
+	 * Copy the lines after the line to delete into the temporary file:
+	 */
 	if (copy_file(fp, tfp, line + 1, -1)) {
-		(void)fprintf(stderr,"Error accessing temp file.\n");
+		(void) fprintf(stderr,"Error accessing temp file.\n");
 		exit(1);
 	}
-	(void)fclose(fp);
+
+	(void) fclose(fp);
+
 	if (fclose(tfp) == EOF) {
-		(void)unlink(tname);
-		(void)fprintf(stderr,"Error closing temp file.\n");
+		(void) unlink(tname);
+		(void) fprintf(stderr,"Error closing temp file.\n");
 		exit(1);
 	}
-	(void)unlink(TTYDEFS);
-	if (rename(tname, TTYDEFS) != 0 ) {
+
+	if (rename(tname, TTYDEFS) != 0) {
 		perror("Rename failed");
-		(void)unlink(tname);
+		(void) unlink(tname);
 		exit(1);
 	}
+
 	exit(0);
 }
 
@@ -403,16 +407,10 @@ char *tname;
  *		start - starting line number
  *		finish - ending line number (-1 indicates entire file)
  */
-
-
-static	int
-copy_file(fp, tfp, start, finish)
-FILE *fp;
-FILE *tfp;
-register int start;
-register int finish;
+static int
+copy_file(FILE *fp, FILE *tfp, int start, int finish)
 {
-	register int i;		/* loop variable */
+	int i;		/* loop variable */
 	char dummy[BUFSIZ];	/* scratch buffer */
 
 /*
@@ -462,19 +460,17 @@ register int finish;
  *	check_ref	- to check if nextlabel are referencing
  *			  existing ttylabel
  */
-static	void
-check_ref()
+static void
+check_ref(void)
 {
-	int	i;
-	struct	Gdef	*np;
-	np = &Gdef[0];
-	for (i = 0; i < Ndefs; i++, np++) {
-		if (find_def(np->g_nextid) == NULL) {
-			(void)printf("Warning -- nextlabel <%s> of <%s> does not reference any existing ttylabel.\n", 
-			np->g_nextid, np->g_id);
+	for (const struct Gdef *g = next_def(NULL); g != NULL;
+	    g = next_def(g)) {
+		if (find_def(g->g_nextid) == NULL) {
+			(void) printf("Warning -- nextlabel <%s> of <%s> "
+			    "does not reference any existing ttylabel.\n", 
+			g->g_nextid, g->g_id);
 		}
 	}
-	return;
 }
 
 /*

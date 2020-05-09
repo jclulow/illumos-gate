@@ -57,10 +57,6 @@ int	Retry;			/* retry open_device flag		*/
 struct  pmtab *PMtab = NULL;	/* head pointer to pmtab linked list 	*/
 int	Nentries = 0;		/* # of entries in pmtab linked list	*/
 
-struct  Gdef Gdef[MAXDEFS];	/* array to hold entries in /etc/ttydefs */
-int	Ndefs = 0;		/* highest index to Gdef that was used   */
-long	Mtime = 0;		/* last modification time of ttydefs	 */
-
 struct pollfd *Pollp;		/* ptr to an array of poll struct	*/
 int	Npollfd;		/* size of the pollfd array		 */
 

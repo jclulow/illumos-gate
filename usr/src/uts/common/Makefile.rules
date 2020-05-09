@@ -1523,6 +1523,10 @@ $(OBJS_DIR)/%.o:		$(COMMONBASE)/bootbanner/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(COMMONBASE)/strings/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(COMMONBASE)/list/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)

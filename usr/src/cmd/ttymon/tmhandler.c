@@ -145,25 +145,25 @@ got_carrier(struct pmtab *pmptr)
 
 	if (pmptr->pmt_ttyflags & R_FLAG) {
 #ifdef	DEBUG
-	debug("R_FLAG");
+		debug("R_FLAG");
 #endif
 		return;
-	} 
-	else if ((pmptr->pmt_ttyflags & (C_FLAG|B_FLAG)) &&
-		(State != PM_DISABLED) &&
-		(!(pmptr->pmt_flags & X_FLAG))) {
+
+	} else if ((pmptr->pmt_ttyflags & (C_FLAG|B_FLAG)) &&
+	    (State != PM_DISABLED) &&
+	    (!(pmptr->pmt_flags & X_FLAG))) {
 		fork_tmchild(pmptr);
-	}
-	else if (pmptr->pmt_ttyflags & A_FLAG) {
+
+	} else if (pmptr->pmt_ttyflags & A_FLAG) {
 #ifdef	DEBUG
-	debug("A_FLAG");
+		debug("A_FLAG");
 #endif
 		return;
-	}
-	else if (pmptr->pmt_timeout) {
+
+	} else if (pmptr->pmt_timeout) {
 		fork_tmchild(pmptr);
-	}
-	else if ( ! (pmptr->pmt_ttyflags & X_FLAG) ) {
+
+	} else if (!(pmptr->pmt_ttyflags & X_FLAG)) {
 		write_prompt(pmptr->pmt_fd,pmptr,TRUE,TRUE);
 	}
 }
@@ -330,8 +330,6 @@ sigterm(void)
 void
 state_change(void)
 {
-	struct pmtab *pmptr;
-
 #ifdef	DEBUG
 	debug("in state_change");
 #endif
@@ -350,7 +348,8 @@ state_change(void)
 	 * also close all open ports so ttymon can start over
 	 * with new internal state
 	 */
-	for (pmptr = PMtab; pmptr; pmptr = pmptr->pmt_next) {
+	struct pmtab *pmptr = NULL;
+	while ((pmptr = next_pmtab(pmptr)) != NULL) {
 		if (pmptr->pmt_fd > 0 && pmptr->pmt_pid == 0) {
 			safe_close(pmptr->pmt_fd);
 			pmptr->pmt_fd = 0;
@@ -406,7 +405,8 @@ re_read(void)
 static struct pmtab *
 find_pid(pid_t pid)
 {
-	for (struct pmtab *pmt = PMtab; pmt != NULL; pmt = pmt->pmt_next) {
+	struct pmtab *pmt = NULL;
+	while ((pmt = next_pmtab(pmt)) != NULL) {
 		if (pmt->pmt_pid == pid) {
 			return (pmt);
 		}
@@ -421,7 +421,8 @@ find_pid(pid_t pid)
 static struct pmtab *
 find_fd(int fd)
 {
-	for (struct pmtab *pmt = PMtab; pmt != NULL; pmt = pmt->pmt_next) {
+	struct pmtab *pmt = NULL;
+	while ((pmt = next_pmtab(pmt)) != NULL) {
 		if (pmt->pmt_fd == fd) {
 			return (pmt);
 		}
@@ -438,7 +439,8 @@ find_fd(int fd)
 static void
 kill_children(void)
 {
-	for (struct pmtab *pmt = PMtab; pmt != NULL; pmt = pmt->pmt_next) {
+	struct pmtab *pmt = NULL;
+	while ((pmt = next_pmtab(pmt)) != NULL) {
 		if (pmt->pmt_status == VALID)
 			continue;
 
@@ -535,7 +537,8 @@ sigalarm(int signo)
 	debug("in sigalarm, Nlocked = %d", Nlocked);
 #endif
 
-	for (struct pmtab *pmt = PMtab; pmt != NULL; pmt = pmt->pmt_next) {
+	struct pmtab *pmt = NULL;
+	while ((pmt = next_pmtab(pmt)) != NULL) {
 		if (pmt->pmt_status == LOCKED && pmt->pmt_fd == 0) {
 			if ((fd = open(pmt->pmt_device,
 			    O_RDWR | O_NONBLOCK)) == -1) {
@@ -608,8 +611,8 @@ pcsync_close(int *p0, int *p1, int pid, int fd)
 	char	ch;
 
 	if (pid == 0) {				/* Child */
-		struct  pmtab   *tp;
-		for (tp = PMtab; tp; tp = tp->pmt_next) {
+		struct pmtab *tp = NULL;
+		while ((tp = next_pmtab(tp)) != NULL) {
 			if ((tp->pmt_fd > 0) && (tp->pmt_fd != fd)) {
 				safe_close(tp->pmt_fd);
 			}
