@@ -118,6 +118,9 @@ extern "C" {
 #define	MS_TOSHIBA_VID	0x930	/* Vendor ID of Toshiba Corp */
 #define	MS_TOSHIBA_PID0	0x6545	/* Kingston DataTraveler / PNY Attache Stick */
 
+#define	MS_TOSHIBA_DSC_VID	0x0480	/* Toshiba Device & Storage Corp */
+#define	MS_TOSHIBA_PID_CANVIO	0x0900	/* Canvio Basics USB 3.0 2.5" drives */
+
 #define	MS_PNY_VID	0x154b	/* Vendor ID of PNY Corp */
 #define	MS_PNY_PID0	0x16	/* PNY floppy drive */
 
@@ -206,6 +209,7 @@ extern "C" {
 #define	SCSA2USB_ATTRS_NO_MEDIA_CHECK	0x1000	/* for media checking */
 #define	SCSA2USB_ATTRS_NO_CAP_ADJUST	0x2000	/* for CAPACITY adjusting */
 #define	SCSA2USB_ATTRS_INQUIRY_EVPD	0x4000	/* SCMD_INQUIRY with evpd */
+#define	SCSA2USB_ATTRS_NOT_RMB		0x8000	/* drive is not removable */
 #define	SCSA2USB_ATTRS_REDUCED_CMD	\
 	(SCSA2USB_ATTRS_DOORLOCK|SCSA2USB_ATTRS_MODE_SENSE| \
 	SCSA2USB_ATTRS_START_STOP|SCSA2USB_ATTRS_INQUIRY| \

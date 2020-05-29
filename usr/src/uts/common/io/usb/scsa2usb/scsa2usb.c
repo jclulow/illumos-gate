@@ -384,7 +384,11 @@ static struct blacklist {
 
 	/* Western Digital External HDD */
 	{MS_WD_VID, MS_WD_PID, 0,
-	    SCSA2USB_ATTRS_INQUIRY_EVPD}
+	    SCSA2USB_ATTRS_INQUIRY_EVPD},
+
+	/* Toshiba Canvio Basics 2.5" USB 3.0 Hard Disk */
+	{MS_TOSHIBA_DSC_VID, MS_TOSHIBA_PID_CANVIO,
+	    SCSA2USB_ATTRS_INQUIRY | SCSA2USB_ATTRS_NOT_RMB},
 };
 
 
@@ -4415,7 +4419,17 @@ scsa2usb_fake_inquiry(scsa2usb_state_t *scsa2usbp, struct scsi_inquiry *inqp)
 	}
 
 	inqp->inq_dtype = DTYPE_DIRECT;
-	inqp->inq_rmb = 1;
+	if (!(scsa2usbp->scsa2usb_attrs & SCSA2USB_ATTRS_NOT_RMB)) {
+		/*
+		 * Though this device is unable to withstand INQUIRY, it is
+		 * nonetheless not removable.  This distinction is relatively
+		 * important as sd(7D) will, for example, refuse to use the G4
+		 * commands needed for access to larger LBAs.
+		 */
+		inqp->inq_rmb = 0;
+	} else {
+		inqp->inq_rmb = 1;
+	}
 	inqp->inq_ansi = 2;
 	inqp->inq_rdf = RDF_SCSI2;
 	inqp->inq_len = sizeof (struct scsi_inquiry)-4;
