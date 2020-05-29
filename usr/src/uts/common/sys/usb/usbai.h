@@ -849,7 +849,7 @@ int usb_get_string_descr(
 	size_t			buflen);
 
 /*
- * With the advent of USB 3.x, several endpoint compantion descriptors have been
+ * With the advent of USB 3.x, several endpoint companion descriptors have been
  * added. These provide additional information required by HCI drivers to
  * properly open and configure the pipes.
  */

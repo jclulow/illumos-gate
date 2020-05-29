@@ -554,7 +554,7 @@ usba_init_pipe_handle(dev_info_t *dip,
 	/* now update usba_ph_impl structure */
 	mutex_enter(&ph_impl->usba_ph_mutex);
 	ph_impl->usba_ph_dip = dip;
-	ph_impl->usba_ph_ep = ph_data->p_ep;
+	ph_impl->usba_ph_xep = ph_data->p_xep;
 	ph_impl->usba_ph_policy = ph_data->p_policy = *pipe_policy;
 	mutex_exit(&ph_impl->usba_ph_mutex);
 
@@ -746,13 +746,13 @@ usba_drain_cbs(usba_pipe_handle_data_t *ph_data, usb_cb_flags_t cb_flags,
 
 
 /*
- * usb_pipe_open():
+ * usb_pipe_xopen():
  *
  * Before using any pipe including the default pipe, it should be opened
- * using usb_pipe_open(). On a successful open, a pipe handle is returned
+ * using usb_pipe_xopen(). On a successful open, a pipe handle is returned
  * for use in other usb_pipe_*() functions
  *
- * The default pipe can only be opened by the hub driver
+ * The default pipe can only be opened by the hub driver.
  *
  * The bandwidth has been allocated and guaranteed on successful
  * opening of an isoc/intr pipes.
@@ -760,14 +760,14 @@ usba_drain_cbs(usba_pipe_handle_data_t *ph_data, usb_cb_flags_t cb_flags,
  * Only the default pipe can be shared. all other control pipes
  * are excusively opened by default.
  * A pipe policy and endpoint descriptor must always be provided
- * except for default pipe
+ * except for the default pipe.
  *
  * Arguments:
  *	dip		- devinfo ptr
- *	ep		- endpoint descriptor pointer
+ *	ep_xdesc	- extended endpoint descriptor pointer
  *	pipe_policy	- pointer to pipe policy which provides hints on how
  *			  the pipe will be used.
- *	flags		- USB_FLAGS_SLEEP wait for resources
+ *	usb_flags	- USB_FLAGS_SLEEP wait for resources
  *			  to become available
  *	pipe_handle	- a pipe handle pointer. On a successful open,
  *			  a pipe_handle is returned in this pointer.
@@ -1723,8 +1723,8 @@ usba_persistent_pipe_open(usba_device_t *usba_device)
 				mutex_exit(&ph_impl->usba_ph_mutex);
 				mutex_exit(&usba_device->usb_mutex);
 
-				rval = usb_pipe_open(ph_impl->usba_ph_dip,
-				    &ph_impl->usba_ph_ep,
+				rval = usb_pipe_xopen(ph_impl->usba_ph_dip,
+				    &ph_impl->usba_ph_xep,
 				    &ph_impl->usba_ph_policy,
 				    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED,
 				    &pipe_handle);

@@ -3115,7 +3115,7 @@ usba_check_for_leaks(usba_device_t *usba_device)
 			    ddi_get_instance(ph_impl->usba_ph_data->p_dip),
 			    (void *)ph_impl,
 			    (void *)ph_impl->usba_ph_data,
-			    ph_impl->usba_ph_ep.bEndpointAddress);
+			    ph_impl->usba_ph_xep.uex_ep.bEndpointAddress);
 			ph_open_cnt++;
 			leaks++;
 #ifndef DEBUG

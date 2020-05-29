@@ -43,7 +43,7 @@ typedef struct usba_ph_impl {
 	kmutex_t			usba_ph_mutex;
 	struct usba_pipe_handle_data	*usba_ph_data;	/* actual pipe handle */
 	dev_info_t			*usba_ph_dip;	/* owner dip */
-	usb_ep_descr_t			usba_ph_ep;	/* save ep descr */
+	usb_ep_xdescr_t			usba_ph_xep;	/* save ext ep descr */
 	usb_pipe_policy_t		usba_ph_policy; /* saved pipe policy */
 	uint_t				usba_ph_flags;
 
