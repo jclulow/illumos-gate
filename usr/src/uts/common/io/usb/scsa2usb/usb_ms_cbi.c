@@ -21,18 +21,18 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2020 Oxide Computer Company
+ */
 
 
 /*
- * scsa2usb_ms_cbi.c:
- *
- * This file implements USB Mass Storage Class
- * Control Bulk Interrupt (CB/CBI) transport v1.0
- * http://www.usb.org/developers/data/devclass/usbmass-cbi10.pdf
+ * USB Mass Storage Class: Control Bulk Interrupt (CB/CBI) Transport v1.0
  */
+
 #include <sys/usb/usba/usbai_version.h>
 #include <sys/scsi/scsi.h>
-#include <sys/callb.h>		/* needed by scsa2usb.h */
+#include <sys/callb.h>
 #include <sys/strsubr.h>
 
 #include <sys/usb/usba.h>
@@ -45,28 +45,12 @@
 /*
  * Function Prototypes
  */
-int		scsa2usb_cbi_transport(scsa2usb_state_t *, scsa2usb_cmd_t *);
-static int	scsa2usb_handle_cbi_status(usb_intr_req_t *);
-static void	scsa2usb_cbi_reset_recovery(scsa2usb_state_t *);
-static void	scsa2usb_cbi_handle_error(scsa2usb_state_t *, int, usb_cr_t);
+int scsa2usb_cbi_transport(scsa2usb_state_t *, scsa2usb_cmd_t *);
+static int scsa2usb_handle_cbi_status(usb_intr_req_t *);
+static void scsa2usb_cbi_reset_recovery(scsa2usb_state_t *);
+static void scsa2usb_cbi_handle_error(scsa2usb_state_t *, int, usb_cr_t);
 static usb_intr_req_t *scsa2usb_cbi_start_intr_polling(scsa2usb_state_t *);
-void		scsa2usb_cbi_stop_intr_polling(scsa2usb_state_t *);
-
-/* extern functions */
-extern void	scsa2usb_setup_next_xfer(scsa2usb_state_t *, scsa2usb_cmd_t *);
-extern int	scsa2usb_handle_data_start(scsa2usb_state_t *,
-		    scsa2usb_cmd_t *, usb_bulk_req_t *);
-extern void	scsa2usb_handle_data_done(scsa2usb_state_t *, scsa2usb_cmd_t *,
-		    usb_bulk_req_t *);
-extern usb_bulk_req_t *scsa2usb_init_bulk_req(scsa2usb_state_t *,
-			    size_t, uint_t, usb_req_attrs_t, usb_flags_t);
-extern int	scsa2usb_clear_ept_stall(scsa2usb_state_t *, uint_t,
-		    usb_pipe_handle_t, char *);
-extern void	scsa2usb_close_usb_pipes(scsa2usb_state_t *);
-
-#ifdef DEBUG	/* debugging information */
-extern void	scsa2usb_print_cdb(scsa2usb_state_t *, scsa2usb_cmd_t *);
-#endif	/* DEBUG */
+void scsa2usb_cbi_stop_intr_polling(scsa2usb_state_t *);
 
 
 /*
@@ -150,20 +134,17 @@ extern void	scsa2usb_print_cdb(scsa2usb_state_t *, scsa2usb_cmd_t *);
 int
 scsa2usb_cbi_transport(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 {
-	int			i, rval = TRAN_ACCEPT;
-	mblk_t			*data;
-	usb_cr_t		completion_reason;
-	usb_cb_flags_t		cb_flags;
-	usb_bulk_req_t		*data_req;
-	usb_intr_req_t		*status_req;
+	int i, rval = TRAN_ACCEPT;
+	mblk_t *data;
+	usb_cr_t completion_reason;
+	usb_cb_flags_t cb_flags;
+	usb_bulk_req_t *data_req;
+	usb_intr_req_t *status_req;
 
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_cbi_transport: cmd = 0x%p", (void *)cmd);
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
-Cmd_Phase:
+command_phase:
 	if (!(SCSA2USB_DEVICE_ACCESS_OK(scsa2usbp))) {
-
 		return (TRAN_FATAL_ERROR);
 	}
 
@@ -177,7 +158,8 @@ Cmd_Phase:
 		*data->b_wptr++ = cmd->cmd_cdb[i];
 	}
 
-	SCSA2USB_PRINT_CDB(scsa2usbp, cmd);	/* print the CDB */
+	DTRACE_PROBE2(print__cdb, scsa2usb_cmd_t *, cmd,
+	    scsa2usb_state_t *, scsa2usbp);
 
 	/* Send the Command to the device */
 	mutex_exit(&scsa2usbp->scsa2usb_mutex);
@@ -193,14 +175,9 @@ Cmd_Phase:
 	    &completion_reason, &cb_flags, USB_FLAGS_SLEEP);
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
-	USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_cbi_transport: sent cmd = 0x%x  rval = %d",
-	    cmd->cmd_cdb[SCSA2USB_OPCODE], rval);
-
-	SCSA2USB_FREE_MSG(data);	/* get rid of the data */
+	freemsg(data);
 	if (rval != USB_SUCCESS) {
 		scsa2usb_cbi_handle_error(scsa2usbp, rval, completion_reason);
-
 		return (TRAN_FATAL_ERROR);
 	}
 
@@ -216,8 +193,7 @@ Cmd_Phase:
 	cmd->cmd_resid_xfercount = 0;
 
 	/* if data to be xferred ? */
-	if (cmd->cmd_xfercount) {
-
+	if (cmd->cmd_xfercount != 0) {
 		/* Initialize a bulk_req_t */
 		data_req = scsa2usb_init_bulk_req(scsa2usbp, 0,
 		    cmd->cmd_timeout, USB_ATTRS_PIPE_RESET, USB_FLAGS_SLEEP);
@@ -241,20 +217,16 @@ Cmd_Phase:
 				scsa2usb_cbi_handle_error(scsa2usbp,
 				    rval, data_req->bulk_completion_reason);
 
-				/* get rid of req */
-				SCSA2USB_FREE_BULK_REQ(data_req);
-
+				usb_free_bulk_req(data_req);
 				return (TRAN_FATAL_ERROR);
 			}
 		}
 
-		SCSA2USB_FREE_BULK_REQ(data_req); /* get rid of bulk_req */
+		usb_free_bulk_req(data_req); /* get rid of bulk_req */
 	}
 
 	/* CB devices don't do status over interrupt pipe */
 	if (SCSA2USB_IS_CB(scsa2usbp)) {
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "scsa2usb_cbi_transport: CB done rval = %d", rval);
 		goto end_it;
 	}
 
@@ -264,7 +236,6 @@ Cmd_Phase:
 
 	/* Get Status over interrupt pipe */
 	if ((status_req = scsa2usb_cbi_start_intr_polling(scsa2usbp)) == NULL) {
-
 		return (TRAN_FATAL_ERROR); /* lack of better return code */
 	}
 
@@ -278,12 +249,12 @@ Cmd_Phase:
 	}
 
 end_it:
-	if ((rval == USB_SUCCESS) &&		/* CSW was ok */
-	    (scsa2usbp->scsa2usb_cur_pkt->pkt_reason == CMD_CMPLT) &&
-	    (cmd->cmd_xfercount != 0) &&	/* more data to xfer */
+	if (rval == USB_SUCCESS &&		/* CSW was ok */
+	    scsa2usbp->scsa2usb_cur_pkt->pkt_reason == CMD_CMPLT &&
+	    cmd->cmd_xfercount != 0 &&	/* more data to xfer */
 	    !cmd->cmd_done) {			/* we aren't done yet */
 		scsa2usb_setup_next_xfer(scsa2usbp, cmd);
-		goto Cmd_Phase;
+		goto command_phase;
 	} else {
 		if (SCSA2USB_IS_CB(scsa2usbp)) {
 			cmd->cmd_done = 1;
@@ -303,9 +274,6 @@ static void
 scsa2usb_cbi_handle_error(scsa2usb_state_t *scsa2usbp, int rval, usb_cr_t cr)
 {
 	struct scsi_pkt	*pkt = scsa2usbp->scsa2usb_cur_pkt;
-
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_cbi_handle_error: data error %d cr = %d", rval, cr);
 
 	SCSA2USB_SET_PKT_DO_COMP_STATE(scsa2usbp);
 
@@ -348,14 +316,10 @@ static usb_intr_req_t *
 scsa2usb_cbi_start_intr_polling(scsa2usb_state_t *scsa2usbp)
 {
 	int rval;
-	usb_pipe_state_t   pipe_state;
+	usb_pipe_state_t pipe_state;
 	usb_intr_req_t *req = NULL;
 
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_cbi_start_intr_polling:");
-
 	if (!SCSA2USB_IS_CBI(scsa2usbp)) {
-
 		return (NULL);
 	}
 
@@ -364,14 +328,12 @@ scsa2usb_cbi_start_intr_polling(scsa2usb_state_t *scsa2usbp)
 	req->intr_attributes = USB_ATTRS_ONE_XFER | USB_ATTRS_PIPE_RESET |
 	    USB_ATTRS_SHORT_XFER_OK;
 	req->intr_len = scsa2usbp->scsa2usb_intr_ept.wMaxPacketSize;
-	req->intr_timeout = 20;	/* arbitrary large for now */
+	req->intr_timeout = 20;	/* arbitrary and large for now */
 	mutex_exit(&scsa2usbp->scsa2usb_mutex);
 
 	if ((rval = usb_pipe_intr_xfer(scsa2usbp->scsa2usb_intr_pipe, req,
 	    USB_FLAGS_SLEEP)) != USB_SUCCESS) {
 		mutex_enter(&scsa2usbp->scsa2usb_mutex);
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "polling failed rval: %d", rval);
 
 		/* clear stall */
 		if (req->intr_completion_reason == USB_CR_STALL) {
@@ -391,10 +353,6 @@ scsa2usb_cbi_start_intr_polling(scsa2usb_state_t *scsa2usbp)
 
 	rval = usb_pipe_get_state(scsa2usbp->scsa2usb_intr_pipe,
 	    &pipe_state, USB_FLAGS_SLEEP);
-	if (pipe_state != USB_PIPE_STATE_ACTIVE) {
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "intr pipes state: %d, rval: %d", pipe_state, rval);
-	}
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
 	return (req);
@@ -408,13 +366,9 @@ scsa2usb_cbi_start_intr_polling(scsa2usb_state_t *scsa2usbp)
 void
 scsa2usb_cbi_stop_intr_polling(scsa2usb_state_t *scsa2usbp)
 {
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_cbi_stop_intr_polling:");
-
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
 	if (!SCSA2USB_IS_CBI(scsa2usbp)) {
-
 		return;
 	}
 
@@ -436,19 +390,18 @@ scsa2usb_handle_cbi_status(usb_intr_req_t *req)
 {
 	int rval = USB_SUCCESS;
 	int status;
-	char *msg;
 	scsa2usb_cmd_t *cmd;
 	scsa2usb_state_t *scsa2usbp = (scsa2usb_state_t *)
 	    req->intr_client_private;
-
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_handle_cbi_status: req: 0x%p", (void *)req);
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 	ASSERT(req->intr_data != NULL);
 
 	cmd = PKT2CMD(scsa2usbp->scsa2usb_cur_pkt);
 	status = *(req->intr_data->b_rptr + 1) & CBI_STATUS_MASK;
+
+	DTRACE_PROBE3(cbi__decode, scsa2usb_state_t *, scsa2usbp,
+	    scsa2usb_cmd_t *, cmd, int, status);
 
 	/*
 	 * CBI status contains ASC and ASCQ.
@@ -459,12 +412,8 @@ scsa2usb_handle_cbi_status(usb_intr_req_t *req)
 	 * SEND_DIAG, and REQUEST_SENSE ought to be supported by any deivce
 	 * irrespective).
 	 */
-	if ((cmd->cmd_cdb[SCSA2USB_OPCODE] == SCMD_REQUEST_SENSE) ||
-	    (cmd->cmd_cdb[SCSA2USB_OPCODE] == SCMD_INQUIRY)) {
-		USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "scsa2usb_handle_cbi_status: CBI STATUS = (0x%x, 0x%x)",
-		    *(req->intr_data->b_rptr), *(req->intr_data->b_rptr+1));
-
+	if (cmd->cmd_cdb[SCSA2USB_OPCODE] == SCMD_REQUEST_SENSE ||
+	    cmd->cmd_cdb[SCSA2USB_OPCODE] == SCMD_INQUIRY) {
 		SCSA2USB_SET_PKT_DO_COMP_STATE(scsa2usbp);
 
 		return (USB_SUCCESS);
@@ -472,7 +421,6 @@ scsa2usb_handle_cbi_status(usb_intr_req_t *req)
 
 	switch (status) {
 	case CBI_STATUS_PASS:
-		msg = "PASSED";
 		/* non-zero command completion interrupt */
 		if (*(req->intr_data->b_rptr)) {
 			*(scsa2usbp->scsa2usb_cur_pkt->pkt_scbp) = STATUS_CHECK;
@@ -481,21 +429,14 @@ scsa2usb_handle_cbi_status(usb_intr_req_t *req)
 		break;
 	case CBI_STATUS_FAILED:
 	case CBI_STATUS_PERSISTENT_FAIL:
-		msg = (status == CBI_STATUS_PERSISTENT_FAIL) ?
-		    "PERSISTENT_FAILURE" : "FAILED";
 		*(scsa2usbp->scsa2usb_cur_pkt->pkt_scbp) = STATUS_CHECK;
 		cmd->cmd_done = 1;
 		break;
 	case CBI_STATUS_PHASE_ERR:
-		msg = "PHASE_ERR";
 		scsa2usb_cbi_reset_recovery(scsa2usbp);
 		rval = USB_FAILURE;
 		break;
 	}
-
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "CBI STATUS = 0x%x %s (0x%x, 0x%x)", status, msg,
-	    *(req->intr_data->b_rptr), *(req->intr_data->b_rptr+1));
 
 	/* we are done and ready to callback */
 	SCSA2USB_SET_PKT_DO_COMP_STATE(scsa2usbp);
@@ -516,13 +457,9 @@ scsa2usb_cbi_reset_recovery(scsa2usb_state_t *scsa2usbp)
 	usb_cr_t	completion_reason;
 	usb_cb_flags_t	cb_flags;
 
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_cbi_reset_recovery: (0x%p)", (void *)scsa2usbp);
-
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
 	if (!(SCSA2USB_DEVICE_ACCESS_OK(scsa2usbp))) {
-
 		return;
 	}
 
@@ -556,8 +493,6 @@ scsa2usb_cbi_reset_recovery(scsa2usb_state_t *scsa2usbp)
 	    0, &completion_reason, &cb_flags, 0);
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
-	USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "\tCBI RESET: rval = %x cr = %x", rval, completion_reason);
 	if (rval != USB_SUCCESS) {
 		goto exc_exit;
 	}
@@ -566,8 +501,6 @@ scsa2usb_cbi_reset_recovery(scsa2usb_state_t *scsa2usbp)
 	rval = scsa2usb_clear_ept_stall(scsa2usbp,
 	    scsa2usbp->scsa2usb_bulkin_ept.bEndpointAddress,
 	    scsa2usbp->scsa2usb_bulkin_pipe, "bulk-in");
-	USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "\tclear stall on bulk-in pipe: %d", rval);
 	if (rval != USB_SUCCESS) {
 		goto exc_exit;
 	}
@@ -576,8 +509,6 @@ scsa2usb_cbi_reset_recovery(scsa2usb_state_t *scsa2usbp)
 	rval = scsa2usb_clear_ept_stall(scsa2usbp,
 	    scsa2usbp->scsa2usb_bulkout_ept.bEndpointAddress,
 	    scsa2usbp->scsa2usb_bulkout_pipe, "bulk-out");
-	USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "\tclear stall on bulk-out pipe: %d", rval);
 	if (rval != USB_SUCCESS) {
 		goto exc_exit;
 	}
@@ -587,12 +518,9 @@ scsa2usb_cbi_reset_recovery(scsa2usb_state_t *scsa2usbp)
 		rval = scsa2usb_clear_ept_stall(scsa2usbp,
 		    scsa2usbp->scsa2usb_intr_ept.bEndpointAddress,
 		    scsa2usbp->scsa2usb_intr_pipe, "intr");
-
-		USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "\tclear stall on intr pipe:  %d", rval);
 	}
 
 exc_exit:
-	SCSA2USB_FREE_MSG(cdb);	/* Free the data */
+	freemsg(cdb);
 	scsa2usbp->scsa2usb_pipe_state &= ~SCSA2USB_PIPE_DEV_RESET;
 }

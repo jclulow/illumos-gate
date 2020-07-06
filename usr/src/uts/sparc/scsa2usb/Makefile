@@ -23,78 +23,53 @@
 # Use is subject to license terms.
 #
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2020 Oxide Computer Company
 #
 # uts/sparc/scsa2usb/Makefile
 #
-#	This makefile drives the production of the scsa2usb driver
-#	kernel module. sparc architecture dependent
-#
-
 
 #
-#	Path to the base of the uts directory tree (usually /usr/src/uts).
+# Path to the base of the uts directory tree (usually /usr/src/uts).
 #
-UTSBASE = ../..
+UTSBASE =		../..
 
 #
-#	Define the module and object file sets.
+# Define the module and object file sets.
 #
-MODULE		= scsa2usb
-OBJECTS		= $(SCSA2USB_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SCSA2USB_OBJS:%.o=$(LINTS_DIR)/%.ln)
-ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
-CONF_SRCDIR	= $(UTSBASE)/common/io/usb/scsa2usb
+MODULE =		scsa2usb
+OBJECTS =		$(SCSA2USB_OBJS:%=$(OBJS_DIR)/%)
+ROOTMODULE =		$(ROOT_DRV_DIR)/$(MODULE)
+CONF_SRCDIR =		$(UTSBASE)/common/io/usb/scsa2usb
 
 #
-#	Include common rules.
+# Include common rules.
 #
 include $(UTSBASE)/sparc/Makefile.sparc
 
 #
-# lint pass one enforcement
+# Define targets
 #
-CFLAGS += $(CCVERBOSE)
-
-# depends on misc/usba misc/scsi
-#
-LDFLAGS		+= -dy -Nmisc/usba -Nmisc/scsi
+ALL_TARGET =		$(BINARY) $(SRC_CONFILE)
+INSTALL_TARGET =	$(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
-#	Define targets
+# Depends on misc/usba misc/scsi
 #
-ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
-INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
-
-CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= $(CNOWARN_UNINIT)
-
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
+LDFLAGS +=		-dy -Nmisc/usba -Nmisc/scsi
 
 .KEEP_STATE:
 
-all:		$(ALL_DEPS)
+def:			$(DEF_DEPS)
 
-def:		$(DEF_DEPS)
+all:			$(ALL_DEPS)
 
-clean:		$(CLEAN_DEPS)
+clean:			$(CLEAN_DEPS)
 
-clobber:	$(CLOBBER_DEPS)
+clobber:		$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
-install:	$(INSTALL_DEPS)
+install:		$(INSTALL_DEPS)
 
 #
-#	Include common targets.
+# Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ

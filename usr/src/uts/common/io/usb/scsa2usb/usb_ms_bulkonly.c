@@ -21,18 +21,18 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2020 Oxide Computer Company
+ */
 
 
 /*
- * scsa2usb_ms_bulkonly.c:
- *
- * This file implements USB Mass Storage Class
- * Bulk Only (BO) transport v1.0
- * http://www.usb.org/developers/data/devclass/usbmassbulk_10.pdf
+ * USB Mass Storage Class: Bulk Only (BO) Transport v1.0
  */
+
 #include <sys/usb/usba/usbai_version.h>
 #include <sys/scsi/scsi.h>
-#include <sys/callb.h>		/* needed by scsa2usb.h */
+#include <sys/callb.h>
 #include <sys/strsubr.h>
 #include <sys/strsun.h>
 
@@ -46,54 +46,15 @@
 /*
  * Function Prototypes
  */
-int		scsa2usb_bulk_only_transport(scsa2usb_state_t *,
-		    scsa2usb_cmd_t *);
-static void	scsa2usb_fill_in_cbw(scsa2usb_state_t *, scsa2usb_cmd_t *,
-		    mblk_t *);
-static void	scsa2usb_bulk_only_reset_recovery(scsa2usb_state_t *);
-static void	scsa2usb_bulk_only_handle_error(scsa2usb_state_t *,
-		    usb_bulk_req_t *);
-int		scsa2usb_bulk_only_get_max_lun(scsa2usb_state_t *);
-static int	scsa2usb_handle_status_start(scsa2usb_state_t *,
-		    usb_bulk_req_t *);
-static int	scsa2usb_handle_csw_result(scsa2usb_state_t *, mblk_t *);
-
-
-/* extern functions */
-extern void	scsa2usb_setup_next_xfer(scsa2usb_state_t *, scsa2usb_cmd_t *);
-extern int	scsa2usb_handle_data_start(scsa2usb_state_t *,
-		    scsa2usb_cmd_t *, usb_bulk_req_t *);
-extern void	scsa2usb_handle_data_done(scsa2usb_state_t *, scsa2usb_cmd_t *,
-		    usb_bulk_req_t *);
-extern usb_bulk_req_t *scsa2usb_init_bulk_req(scsa2usb_state_t *,
-			    size_t, uint_t, usb_req_attrs_t, usb_flags_t);
-extern int	scsa2usb_bulk_timeout(int);
-extern int	scsa2usb_clear_ept_stall(scsa2usb_state_t *, uint_t,
-		    usb_pipe_handle_t, char *);
-extern void	scsa2usb_close_usb_pipes(scsa2usb_state_t *);
-
-#ifdef DEBUG	/* debugging information */
-extern void	scsa2usb_print_cdb(scsa2usb_state_t *, scsa2usb_cmd_t *);
-#endif	/* DEBUG */
-
-
-#ifdef	SCSA2USB_BULK_ONLY_TEST
-/*
- * Test 13 cases. (See USB Mass Storage Class - Bulk Only Transport).
- * We are not covering test cases 1, 6, and 12 as these are the "good"
- * test cases and are tested as part of the normal drive access operations.
- *
- * NOTE: This is for testing only. It will be replaced by a uscsi test.
- */
-int scsa2usb_test_case_2 = 0;
-int scsa2usb_test_case_3 = 0;
-int scsa2usb_test_case_4 = 0;
-int scsa2usb_test_case_7 = 0;
-extern int scsa2usb_test_case_8;
-int scsa2usb_test_case_9 = 0;
-extern int scsa2usb_test_case_10;
-int scsa2usb_test_case_13 = 0;
-#endif	/* SCSA2USB_BULK_ONLY_TEST */
+int scsa2usb_bulk_only_transport(scsa2usb_state_t *, scsa2usb_cmd_t *);
+static void scsa2usb_fill_in_cbw(scsa2usb_state_t *, scsa2usb_cmd_t *,
+    mblk_t *);
+static void scsa2usb_bulk_only_reset_recovery(scsa2usb_state_t *);
+static void scsa2usb_bulk_only_handle_error(scsa2usb_state_t *,
+    usb_bulk_req_t *);
+int scsa2usb_bulk_only_get_max_lun(scsa2usb_state_t *);
+static int scsa2usb_handle_status_start(scsa2usb_state_t *, usb_bulk_req_t *);
+static int scsa2usb_handle_csw_result(scsa2usb_state_t *, mblk_t *);
 
 
 /*
@@ -185,7 +146,7 @@ int scsa2usb_test_case_13 = 0;
  *			set pkt_residue
  *		goto  SCSA2USB_PKT_DO_COMP
  *
- * The reset recovery walks sequentially thru device reset, clearing
+ * The reset recovery walks sequentially through device reset, clearing
  * stalls and pipe resets. When the reset recovery completes we return
  * to the taskq thread.
  *
@@ -195,50 +156,47 @@ int scsa2usb_test_case_13 = 0;
 int
 scsa2usb_bulk_only_transport(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 {
-	int	rval;
-	int	nretry;
+	int rval;
 	usb_bulk_req_t *req;
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
-Cmd_Phase:
+command_phase:
 	/*
-	 * Start Command Phase
-	 * Initialize a bulk_req_t
+	 * COMMAND PHASE
+	 *
+	 * Initialise a bulk transfer request and prepare a Command Block
+	 * Wrapper (CBW) to send to the device.
 	 */
 	req = scsa2usb_init_bulk_req(scsa2usbp, USB_BULK_CBWCMD_LEN,
 	    SCSA2USB_BULK_PIPE_TIMEOUT, USB_ATTRS_PIPE_RESET, USB_FLAGS_SLEEP);
 
-	scsa2usb_fill_in_cbw(scsa2usbp, cmd, req->bulk_data);	/* Fill CBW */
-	SCSA2USB_PRINT_CDB(scsa2usbp, cmd);			/* Print CDB */
+	scsa2usb_fill_in_cbw(scsa2usbp, cmd, req->bulk_data);
+	DTRACE_PROBE2(print__cdb, scsa2usb_cmd_t *, cmd,
+	    scsa2usb_state_t *, scsa2usbp);
 
-	/* Send a Bulk Command Block Wrapper (CBW) to the device */
 	mutex_exit(&scsa2usbp->scsa2usb_mutex);
 
-	ASSERT(req->bulk_timeout);
+	ASSERT(req->bulk_timeout != 0);
 	rval = usb_pipe_bulk_xfer(scsa2usbp->scsa2usb_bulkout_pipe, req,
 	    USB_FLAGS_SLEEP);
+
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_bulk_only_transport: "
-	    "sent cmd = 0x%x Tag = 0x%x DataXferLen = 0x%lx rval = %d",
-	    cmd->cmd_cdb[SCSA2USB_OPCODE], cmd->cmd_tag, cmd->cmd_xfercount,
-	    rval);
-
 	if (rval != USB_SUCCESS) {
+		/*
+		 * Transferring the command failed.  Reset everything and
+		 * return failure:
+		 */
 		scsa2usb_bulk_only_handle_error(scsa2usbp, req);
-
 		return (TRAN_FATAL_ERROR);
 	}
 
-	/* free the data */
-	SCSA2USB_FREE_MSG(req->bulk_data);
+	freemsg(req->bulk_data);
 	req->bulk_data = NULL;
 
-Data_Phase:
 	/*
-	 * Start Data Phase
+	 * DATA PHASE
 	 * re-set timeout
 	 */
 	req->bulk_timeout = scsa2usb_bulk_timeout(cmd->cmd_timeout);
@@ -249,7 +207,7 @@ Data_Phase:
 	 */
 	cmd->cmd_resid_xfercount = cmd->cmd_xfercount;
 
-	if (cmd->cmd_xfercount) {
+	if (cmd->cmd_xfercount != 0) {
 		/* start I/O to/from the device */
 		rval = scsa2usb_handle_data_start(scsa2usbp, cmd, req);
 
@@ -257,10 +215,6 @@ Data_Phase:
 		scsa2usb_handle_data_done(scsa2usbp, cmd, req);
 
 		if (rval != USB_SUCCESS) {
-			USB_DPRINTF_L2(DPRINT_MASK_SCSA,
-			    scsa2usbp->scsa2usb_log_handle,
-			    "data xfer phase, error =  %d, cr = %d",
-			    rval, req->bulk_completion_reason);
 			/*
 			 * we ran into an error
 			 */
@@ -274,19 +228,18 @@ Data_Phase:
 
 				return (TRAN_FATAL_ERROR);
 			}
-		} /* end of else */
+		}
 
 		/* free the data */
-		SCSA2USB_FREE_MSG(req->bulk_data);
+		freemsg(req->bulk_data);
 		req->bulk_data = NULL;
 	}
 
-Status_Phase:
 	/*
 	 * Start status phase
 	 * read in CSW
 	 */
-	for (nretry = 0; nretry < SCSA2USB_STATUS_RETRIES; nretry++) {
+	for (uint_t nretry = 0; nretry < SCSA2USB_STATUS_RETRIES; nretry++) {
 		rval = scsa2usb_handle_status_start(scsa2usbp, req);
 
 		if ((rval != USB_SUCCESS) &&
@@ -299,28 +252,26 @@ Status_Phase:
 			scsa2usbp->scsa2usb_pkt_state =
 			    SCSA2USB_PKT_PROCESS_CSW;
 		} else {
-
 			break;
 		}
 	}
 
-	if (rval == USB_SUCCESS) {
-		/* process CSW */
-		rval = scsa2usb_handle_csw_result(scsa2usbp, req->bulk_data);
-	} else {
+	if (rval != USB_SUCCESS) {
 		scsa2usb_bulk_only_handle_error(scsa2usbp, req);
-
 		return (TRAN_FATAL_ERROR);
 	}
 
-	SCSA2USB_FREE_BULK_REQ(req);	/* free request */
+	rval = scsa2usb_handle_csw_result(scsa2usbp, req->bulk_data);
 
-	if ((rval == USB_SUCCESS) &&		/* CSW was ok */
-	    (scsa2usbp->scsa2usb_cur_pkt->pkt_reason == CMD_CMPLT) &&
-	    (cmd->cmd_xfercount != 0) &&	/* more data to xfer */
+	usb_free_bulk_req(req);
+	req = NULL;
+
+	if (rval == USB_SUCCESS &&
+	    scsa2usbp->scsa2usb_cur_pkt->pkt_reason == CMD_CMPLT &&
+	    cmd->cmd_xfercount != 0 &&	/* more data to xfer */
 	    !cmd->cmd_done) {			/* we aren't done yet */
 		scsa2usb_setup_next_xfer(scsa2usbp, cmd);
-		goto Cmd_Phase;
+		goto command_phase;
 	}
 
 	return (rval == USB_SUCCESS ? TRAN_ACCEPT : TRAN_FATAL_ERROR);
@@ -333,11 +284,11 @@ Status_Phase:
  *	packet is transported to the device
  */
 static void
-scsa2usb_fill_in_cbw(scsa2usb_state_t *scsa2usbp,
-    scsa2usb_cmd_t *cmd, mblk_t *mp)
+scsa2usb_fill_in_cbw(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd,
+    mblk_t *mp)
 {
-	int	i;
-	int	len;
+	int i;
+	int len;
 	uchar_t dir, *cdb = (uchar_t *)(&cmd->cmd_cdb);
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
@@ -353,71 +304,6 @@ scsa2usb_fill_in_cbw(scsa2usb_state_t *scsa2usbp,
 
 	dir = cmd->cmd_dir;
 	len = cmd->cmd_xfercount;
-#ifdef	SCSA2USB_BULK_ONLY_TEST
-	if (scsa2usb_test_case_2 && (cdb[0] == SCMD_READ_CAPACITY)) {
-		/* Host expects no data. The device wants data. Hn < Di */
-		scsa2usb_test_case_2 = len = 0;
-		USB_DPRINTF_L1(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "TEST 2: Hn < Di cdb: 0x%x len: 0x%x", cdb[0], len);
-	}
-
-	if (scsa2usb_test_case_3 && (cmd->cmd_dir == CBW_DIR_OUT)) {
-		/* Host expects no data. The device wants data. Hn < Do */
-		if (cdb[0] == SCMD_WRITE_G1) {
-			scsa2usb_test_case_3 = len = 0;
-			USB_DPRINTF_L1(DPRINT_MASK_SCSA,
-			    scsa2usbp->scsa2usb_log_handle,
-			    "TEST 3: Hn < Do cdb: 0x%x len:%x", cdb[0], len);
-		}
-	}
-
-	if (scsa2usb_test_case_4 && (cdb[0] == SCMD_READ_G1)) {
-		cdb[0] = 0x5e;
-		USB_DPRINTF_L1(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "TEST 4: Hi > Dn: changed cdb to 0x%x", cdb[0]);
-		scsa2usb_test_case_4 = 0;
-	}
-
-	if (scsa2usb_test_case_7 && (cmd->cmd_cdb[0] == SCMD_READ_G1)) {
-		len -= 0x10;
-		USB_DPRINTF_L1(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "TEST 7: Hi < Di cdb: 0x%x len: 0x%x", cdb[0], len);
-		scsa2usb_test_case_7 = 0;
-	}
-
-	if (scsa2usb_test_case_8 && (cdb[0] == SCMD_READ_G1)) {
-		dir = (dir == CBW_DIR_IN) ? CBW_DIR_OUT : dir;
-		USB_DPRINTF_L1(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "TEST 8: Hi <> Do cdb: 0x%x dir: 0x%x", cdb[0], dir);
-	}
-
-	if (scsa2usb_test_case_9 && (cdb[0] == SCMD_WRITE_G1)) {
-		USB_DPRINTF_L1(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "TEST 9: Ho <> Di (%x)", cdb[0]);
-		cdb[SCSA2USB_LEN_0] = cdb[SCSA2USB_LEN_1] = 0;
-		scsa2usb_test_case_9 = 0;
-	}
-
-	if (scsa2usb_test_case_10 && (cdb[0] == SCMD_WRITE_G1)) {
-		dir = (dir == CBW_DIR_OUT) ? CBW_DIR_IN : dir;
-		USB_DPRINTF_L1(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "TEST 10: Ho <> Di cdb: 0x%x dir: 0x%x", cdb[0], dir);
-	}
-
-	/*
-	 * This case occurs when the device intends to receive
-	 * more data from the host than the host sends.
-	 */
-	if (scsa2usb_test_case_13) {
-		if ((cdb[0] == SCMD_WRITE_G1) || (cdb[0] == SCMD_READ_G1)) {
-			USB_DPRINTF_L1(DPRINT_MASK_SCSA,
-			    scsa2usbp->scsa2usb_log_handle, "TEST 13: Ho < Do");
-
-			len -= 30;
-			scsa2usb_test_case_13 = 0;
-		}
-	}
-#endif	/* SCSA2USB_BULK_ONLY_TEST */
 
 	*mp->b_wptr++ = CBW_MSB(len);		/* Transfer Length */
 	*mp->b_wptr++ = CBW_MID1(len);
@@ -432,23 +318,6 @@ scsa2usb_fill_in_cbw(scsa2usb_state_t *scsa2usbp,
 	for (i = 0; i < CBW_CDB_LEN; i++) {
 		*mp->b_wptr++ = *cdb++;
 	}
-#ifdef DUMP_CWB
-{
-	int len = mp->b_wptr - mp->b_rptr;
-	char *buf;
-
-	int i;
-
-	cmn_err(CE_CONT, "CWB: len=%d\n", len);
-	buf = kmem_zalloc(512, KM_SLEEP);
-	for (i = 0; i < len; i++) {
-		sprintf(&buf[strlen(buf)], "%02x ", mp->b_rptr[i]);
-	}
-	cmn_err(CE_CONT, "%s\n", buf);
-	kmem_free(buf, 512);
-}
-#endif
-
 }
 
 
@@ -461,10 +330,6 @@ scsa2usb_bulk_only_handle_error(scsa2usb_state_t *scsa2usbp,
     usb_bulk_req_t *req)
 {
 	struct scsi_pkt *pkt = scsa2usbp->scsa2usb_cur_pkt;
-
-	USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_bulk_only_handle_error: req = 0x%p, cr = 0x%x",
-	    (void *)req, (req ? req->bulk_completion_reason : 0));
 
 	if (req) {
 		SCSA2USB_SET_PKT_DO_COMP_STATE(scsa2usbp);
@@ -497,7 +362,7 @@ scsa2usb_bulk_only_handle_error(scsa2usb_state_t *scsa2usbp,
 		scsa2usb_bulk_only_reset_recovery(scsa2usbp);
 	}
 
-	SCSA2USB_FREE_BULK_REQ(req);
+	usb_free_bulk_req(req);
 }
 
 
@@ -511,20 +376,13 @@ scsa2usb_handle_status_start(scsa2usb_state_t *scsa2usbp,
 {
 	int rval;
 
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_handle_status_start: req = 0x%p", (void *)req);
-
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
 	/* setup up for receiving CSW */
-#ifdef	SCSA2USB_BULK_ONLY_TEST
-	req->bulk_attributes = 0;
-#else
 	req->bulk_attributes = USB_ATTRS_SHORT_XFER_OK;
-#endif	/* SCSA2USB_BULK_ONLY_TEST */
 	req->bulk_len = CSW_LEN;
 
-	SCSA2USB_FREE_MSG(req->bulk_data);
+	freemsg(req->bulk_data);
 	req->bulk_data = allocb_wait(req->bulk_len,
 	    BPRI_LO, STR_NOSIG, NULL);
 
@@ -536,13 +394,9 @@ scsa2usb_handle_status_start(scsa2usb_state_t *scsa2usbp,
 	    USB_FLAGS_SLEEP);
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
-	USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_handle_status_start: END rval = 0x%x", rval);
-
 	if (rval != USB_SUCCESS) {
 		if (scsa2usbp->scsa2usb_pkt_state == SCSA2USB_PKT_PROCESS_CSW) {
 			scsa2usb_bulk_only_reset_recovery(scsa2usbp);
-
 			return (rval);
 		}
 
@@ -564,13 +418,12 @@ scsa2usb_handle_status_start(scsa2usb_state_t *scsa2usbp,
 static int
 scsa2usb_handle_csw_result(scsa2usb_state_t *scsa2usbp, mblk_t *data)
 {
-	int		rval = USB_SUCCESS;
-	int		residue;
-	char		*msg = "CSW FAILED";
-	uint_t		signature, tag, status;
-	usb_bulk_csw_t	csw;
+	int rval = USB_SUCCESS;
+	int residue;
+	uint_t signature, tag, status;
+	usb_bulk_csw_t csw;
 	struct scsi_pkt *pkt = scsa2usbp->scsa2usb_cur_pkt;
-	scsa2usb_cmd_t	*cmd = PKT2CMD(pkt);
+	scsa2usb_cmd_t *cmd = PKT2CMD(pkt);
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
@@ -580,18 +433,11 @@ scsa2usb_handle_csw_result(scsa2usb_state_t *scsa2usbp, mblk_t *data)
 	 * return failure back.
 	 */
 	if (data == NULL) {
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "scsa2usb_handle_csw_result: data == NULL");
-
 		return (USB_FAILURE);
 	}
 
 	/* check if we got back CSW_LEN or not */
 	if (MBLKL(data) != CSW_LEN) {
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "scsa2usb_handle_csw_result: no enough data (%ld)",
-		    (long)(MBLKL(data)));
-
 		return (USB_FAILURE);
 	}
 
@@ -608,18 +454,14 @@ scsa2usb_handle_csw_result(scsa2usb_state_t *scsa2usbp, mblk_t *data)
 	tag = SCSA2USB_MK_32BIT(csw.csw_dCSWTag3, csw.csw_dCSWTag2,
 	    csw.csw_dCSWTag1, csw.csw_dCSWTag0);
 
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "CSW: Signature = 0x%x Status = 0%x Tag = 0x%x Residue = 0x%x",
-	    signature, status, tag,  residue);
+	DTRACE_PROBE6(csw__decode,
+	    scsa2usb_state_t *, scsa2usbp,
+	    scsa2usb_cmd_t *, cmd,
+	    uint_t, signature, uint_t, status, uint_t, tag, int, residue);
 
 	/* Check for abnormal errors */
-	if ((signature != CSW_SIGNATURE) || (tag != cmd->cmd_tag) ||
-	    (status > CSW_STATUS_PHASE_ERROR)) {
-
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "CSW_ERR: Status = 0x%x, Tag = 0x%x xfercount = 0x%lx",
-		    status, cmd->cmd_tag, cmd->cmd_total_xfercount);
-
+	if (signature != CSW_SIGNATURE || tag != cmd->cmd_tag ||
+	    status > CSW_STATUS_PHASE_ERROR) {
 		return (USB_FAILURE);
 	}
 
@@ -644,40 +486,29 @@ scsa2usb_handle_csw_result(scsa2usb_state_t *scsa2usbp, mblk_t *data)
 			*(pkt->pkt_scbp) = STATUS_CHECK;
 			cmd->cmd_xfercount = 0;
 			cmd->cmd_done = 1;
-		} else {
-			msg = "CSW GOOD";
 		}
 		break;
+
 	case CSW_STATUS_FAILED:
 		*(pkt->pkt_scbp) = STATUS_CHECK; /* Set check condition */
 		cmd->cmd_done = 1;
 		break;
+
 	case CSW_STATUS_PHASE_ERROR:
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "scsa2usb_handle_csw_result: Phase Error");
-
 		/* invoke reset recovery */
 		scsa2usb_bulk_only_handle_error(scsa2usbp, NULL);
-
 		return (USB_FAILURE);
-	default:	/* shouldn't happen anymore */
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "scsa2usb_handle_csw_result: Invalid CSW");
 
+	default:	/* shouldn't happen anymore */
 		/* invoke reset recovery */
 		scsa2usb_bulk_only_handle_error(scsa2usbp, NULL);
-
 		return (USB_SUCCESS);
-	} /* end of switch */
+	}
 
 	/* Set resid */
-	if (residue || cmd->cmd_resid_xfercount) {
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA,
-		    scsa2usbp->scsa2usb_log_handle,
-		    "total=0x%lx cmd_xfercount=0x%lx residue=0x%x "
-		    "cmd_offset=0x%lx",
-		    cmd->cmd_total_xfercount, cmd->cmd_xfercount,
-		    residue, cmd->cmd_offset);
+	if (residue != 0 || cmd->cmd_resid_xfercount != 0) {
+		DTRACE_PROBE3(csw__residue, scsa2usb_state_t *, scsa2usbp,
+		    scsa2usb_cmd_t *, cmd, int, residue);
 
 		/*
 		 * we need to adjust using the residue and
@@ -742,10 +573,6 @@ scsa2usb_handle_csw_result(scsa2usb_state_t *scsa2usbp, mblk_t *data)
 		pkt->pkt_resid = cmd->cmd_total_xfercount;
 	}
 
-	USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_handle_csw_result: %s, resid: 0x%lx",
-	    msg, pkt->pkt_resid);
-
 	/* we are done and ready to callback */
 	SCSA2USB_SET_PKT_DO_COMP_STATE(scsa2usbp);
 
@@ -761,18 +588,13 @@ scsa2usb_handle_csw_result(scsa2usb_state_t *scsa2usbp, mblk_t *data)
 static void
 scsa2usb_bulk_only_reset_recovery(scsa2usb_state_t *scsa2usbp)
 {
-	int		rval;
-	usb_cr_t	completion_reason;
-	usb_cb_flags_t	cb_flags;
-
-	USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_bulk_only_reset_recovery: scsa2usbp = 0x%p",
-	    (void *)scsa2usbp);
+	int rval;
+	usb_cr_t completion_reason;
+	usb_cb_flags_t cb_flags;
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
 	if (!(SCSA2USB_DEVICE_ACCESS_OK(scsa2usbp))) {
-
 		return;
 	}
 
@@ -799,30 +621,21 @@ scsa2usb_bulk_only_reset_recovery(scsa2usb_state_t *scsa2usbp)
 	    NULL, 0, &completion_reason, &cb_flags, 0);
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
-	USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "\tbulk-only device-reset rval: %d", rval);
 	if (rval != USB_SUCCESS) {
 		goto exc_exit;
 	}
 
 	/* reset and clear STALL on bulk-in pipe */
-	rval = scsa2usb_clear_ept_stall(scsa2usbp,
+	if (scsa2usb_clear_ept_stall(scsa2usbp,
 	    scsa2usbp->scsa2usb_bulkin_ept.bEndpointAddress,
-	    scsa2usbp->scsa2usb_bulkin_pipe, "bulk-in");
-
-	USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "\tbulk-in pipe clear stall: %d", rval);
-	if (rval != USB_SUCCESS) {
+	    scsa2usbp->scsa2usb_bulkin_pipe, "bulk-in") != USB_SUCCESS) {
 		goto exc_exit;
 	}
 
 	/* reset and clear STALL on bulk-out pipe */
-	rval = scsa2usb_clear_ept_stall(scsa2usbp,
+	(void) scsa2usb_clear_ept_stall(scsa2usbp,
 	    scsa2usbp->scsa2usb_bulkout_ept.bEndpointAddress,
 	    scsa2usbp->scsa2usb_bulkout_pipe, "bulk-out");
-
-	USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "\tbulk-out pipe clear stall: %d", rval);
 
 exc_exit:
 	/* clear the reset condition */
@@ -837,13 +650,10 @@ exc_exit:
 int
 scsa2usb_bulk_only_get_max_lun(scsa2usb_state_t *scsa2usbp)
 {
-	int		luns = 1, rval;
-	mblk_t		*data = NULL;
-	usb_cr_t	completion_reason;
-	usb_cb_flags_t	cb_flags;
-
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_bulk_only_get_max_lun:");
+	int luns, rval;
+	mblk_t *data = NULL;
+	usb_cr_t completion_reason;
+	usb_cb_flags_t cb_flags;
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
@@ -859,42 +669,29 @@ scsa2usb_bulk_only_get_max_lun(scsa2usb_state_t *scsa2usbp)
 	    &completion_reason, &cb_flags, 0);
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
 
-	if (rval != USB_SUCCESS) {
-		USB_DPRINTF_L2(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-		    "get max lun failed, rval=%d cr=%d cb=0x%x data=0x%p",
-		    rval, completion_reason, cb_flags, (void *)data);
+	if (rval != USB_SUCCESS || MBLKL(data) != 1) {
+		/*
+		 * If the command failed or the response length is not as
+		 * expected, we assume a single LUN:
+		 */
+		luns = 1;
 	} else {
 		/*
-		 * This check ensures that we have valid data returned back.
-		 * Otherwise we assume that device supports only one LUN.
+		 * Set scsa2usb_n_luns to value returned by the device plus 1.
+		 * (See Section 3.2)
 		 */
-		if (MBLKL(data) != 1) {
-			USB_DPRINTF_L2(DPRINT_MASK_SCSA,
-			    scsa2usbp->scsa2usb_log_handle,
-			    "device reported incorrect luns (adjusting to 1)");
-		} else {
-			/*
-			 * Set scsa2usb_n_luns to value returned by the device
-			 * plus 1. (See Section 3.2)
-			 */
-			luns = *data->b_rptr + 1;
+		luns = *data->b_rptr + 1;
 
-			/*
-			 * In case a device returns incorrect LUNs
-			 * which are more than 15 or negative or 0;
-			 * we assume 1.
-			 */
-			if ((luns >= SCSA2USB_MAX_LUNS) || (luns <= 0)) {
-				USB_DPRINTF_L2(DPRINT_MASK_SCSA,
-				    scsa2usbp->scsa2usb_log_handle,
-				    "device reported %d luns "
-				    "(adjusting to 1)", luns);
-				luns = 1;
-			}
+		/*
+		 * If the supported LUN count falls outside our expected range,
+		 * we assume a single LUN:
+		 */
+		if (luns >= SCSA2USB_MAX_LUNS || luns <= 0) {
+			luns = 1;
 		}
 	}
 
-	SCSA2USB_FREE_MSG(data);	/* Free data */
+	freemsg(data);
 
 	return (luns);
 }
