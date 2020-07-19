@@ -155,7 +155,6 @@ vioscsi_fill_events(vioscsi_t *vis)
 	 */
 	for (uint_t n = 0; n < 64; n++) {
 		vioscsi_cmd_t *vsc;
-		struct vq_entry *ve;
 
 		if ((vsc = vioscsi_cmd_alloc(vis, vis->vis_q_event, sz)) ==
 		    NULL) {
@@ -350,7 +349,7 @@ vioscsi_process_finishq_one(vioscsi_cmd_t *vsc)
 	case VIOSCSI_CMDTYPE_CONTROL:
 		panic("unexpected command type 0x%x in request queue",
 		    vsc->vsc_type);
-		return;
+		break;
 	}
 
 	panic("unknown command type 0x%x", vsc->vsc_type);
@@ -1024,7 +1023,7 @@ vioscsi_tran_start(struct scsi_address *sa, struct scsi_pkt *pkt)
 		/*
 		 * XXX poll
 		 */
-		vioscsi_poll_for(vis, vsc);
+		(void) vioscsi_poll_for(vis, vsc);
 	}
 
 	mutex_exit(&vis->vis_mutex);
@@ -1314,7 +1313,7 @@ vioscsi_tran_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 	vist->vist_lun[0] = 0x01;
 	vist->vist_lun[1] = target & 0xFF;
 	vist->vist_lun[2] = lun & 0xFF;
-	vist->vist_lun[3] = (lun >> 8) && 0xFF;
+	vist->vist_lun[3] = (lun >> 8) & 0xFF;
 
 	/*
 	 * XXX Link this target object to the controller.
@@ -1461,7 +1460,6 @@ vioscsi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	uint32_t instance;
 	vioscsi_t *vis;
 	virtio_t *vio;
-	int r;
 
 	if (scsi_hba_iport_unit_address(dip) != NULL) {
 		return (vioscsi_iport_attach(dip, cmd));

@@ -67,7 +67,6 @@ void
 vioscsi_q_push(vioscsi_cmd_t *vsc)
 {
 	vioscsi_t *vis = vsc->vsc_vioscsi;
-	virtio_t *vio = vis->vis_virtio;
 
 	VERIFY(MUTEX_HELD(&vis->vis_mutex));
 
