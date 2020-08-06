@@ -123,7 +123,7 @@ int openpty(int *, int *, char *, const struct termios *,
     const struct winsize *);
 int login_tty(int);
 int forkpty(int *, char *, const struct termios *, const struct winsize *);
-#endif /* !defined(_STRICT_SYMBOLS)
+#endif /* !defined(_STRICT_SYMBOLS) */
 
 #endif
 
