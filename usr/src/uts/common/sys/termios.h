@@ -23,8 +23,8 @@
 
 
 /*
+ * Copyright 2020 Oxide Computer Company
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
- *
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -112,10 +112,18 @@ extern int tcflush(int, int);
 extern int tcflow(int, int);
 
 #if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-
 extern pid_t tcgetsid(int);
-
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) ... */
+
+#if !defined(_STRICT_SYMBOLS)
+/*
+ * These routines are not specified by POSIX, but are widely implemented:
+ */
+int openpty(int *, int *, char *, const struct termios *,
+    const struct winsize *);
+int login_tty(int);
+int forkpty(int *, char *, const struct termios *, const struct winsize *);
+#endif /* !defined(_STRICT_SYMBOLS)
 
 #endif
 

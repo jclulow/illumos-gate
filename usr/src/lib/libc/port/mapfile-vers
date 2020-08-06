@@ -28,6 +28,7 @@
 # Copyright (c) 2013 Gary Mills
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 # Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2020 Oxide Computer Company
 #
 
 #
@@ -77,6 +78,13 @@ $endif
 $if _x86 && _ELF64
 $add amd64
 $endif
+
+SYMBOL_VERSION ILLUMOS_0.34 {
+    protected:
+	openpty;
+	login_tty;
+	forkpty;
+} ILLUMOS_0.33;
 
 SYMBOL_VERSION ILLUMOS_0.33 {
     protected:
