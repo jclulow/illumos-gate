@@ -400,7 +400,8 @@ clock(void)
 	uint_t	w_io;
 	cpu_t	*cp;
 	cpupart_t *cpupart;
-	extern	void	set_freemem();
+	extern	void set_freemem();
+	extern	void pageout_deadman(void);
 	void	(*funcp)();
 	int32_t ltemp;
 	int64_t lltemp;
@@ -477,6 +478,7 @@ clock(void)
 	if (one_sec) {
 		loadavg_update();
 		deadman_counter++;
+		pageout_deadman();
 	}
 
 	/*

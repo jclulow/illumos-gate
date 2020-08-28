@@ -58,6 +58,8 @@
 #include <sys/tnf_probe.h>
 #include <sys/mem_cage.h>
 #include <sys/time.h>
+#include <sys/cyclic.h>
+#include <sys/stdbool.h>
 
 #include <vm/hat.h>
 #include <vm/as.h>
@@ -504,6 +506,26 @@ static struct async_reqs *push_list;	/* pending reqs */
 static kmutex_t push_lock;		/* protects req pool */
 static kcondvar_t push_cv;
 
+
+/*
+ * When debugging pageout issues, it can be a challenge to get debugging
+ * processes to make reliable forward progress.  The pageout deadman will
+ * optionally print out some basics about the current free memory situation
+ * once per second:
+ */
+uint_t pageout_deadman_print = 0;
+
+/*
+ * If pageout() is stuck on a single push for this many seconds,
+ * pageout_deadman() will assume the system has hit a memory deadlock.  If set
+ * to 0, the deadman will have no effect.
+ */
+uint_t pageout_deadman_seconds = 30;
+static uint_t pageout_stucktime = 0;
+static bool pageout_pushing = false;
+static uint64_t pageout_pushcount = 0;
+static uint64_t pageout_pushcount_seen = 0;
+
 static int async_list_size = 256;	/* number of async request structs */
 
 static void pageout_scanner(void);
@@ -620,6 +642,63 @@ ulong_t		push_list_size;		/* # of requests on pageout queue */
 int dopageout = 1;	/* must be non-zero to turn page stealing on */
 
 /*
+ * The pageout deadman is run once per second by clock().
+ */
+void
+pageout_deadman(void)
+{
+	if (panicstr != NULL) {
+		/*
+		 * There is no pageout after panic.
+		 */
+		return;
+	}
+
+	if (pageout_deadman_print != 0) {
+		printf("freemem %lu availrmem %lu pushcount %lu\n",
+		    freemem, availrmem, pageout_pushcount);
+	}
+
+	if (pageout_deadman_seconds == 0) {
+		/*
+		 * The deadman is not enabled.
+		 */
+		return;
+	}
+
+	if (!pageout_pushing) {
+		goto reset;
+	}
+
+	/*
+	 * We are pushing a page.  Check to see if it is the same call we saw
+	 * last time we looked:
+	 */
+	if (pageout_pushcount != pageout_pushcount_seen) {
+		/*
+		 * It is a different call from the last check, so we are not
+		 * stuck.
+		 */
+		goto reset;
+	}
+
+	if (++pageout_stucktime >= pageout_deadman_seconds) {
+		panic("pageout_deadman: stuck pushing the same page for %d "
+		    "seconds (freemem is %lu)", pageout_deadman_seconds,
+		    freemem);
+	}
+
+	return;
+
+reset:
+	/*
+	 * Reset our tracking state to reflect that we are not stuck:
+	 */
+	pageout_stucktime = 0;
+	pageout_pushcount_seen = pageout_pushcount;
+}
+
+/*
  * The page out daemon, which runs as process 2.
  *
  * As long as there are at least lotsfree pages,
@@ -718,6 +797,7 @@ pageout()
 		}
 		push_list = arg->a_next;
 		arg->a_next = NULL;
+		pageout_pushing = true;
 		mutex_exit(&push_lock);
 
 		if (VOP_PUTPAGE(arg->a_vp, (offset_t)arg->a_off,
@@ -729,6 +809,8 @@ pageout()
 		VN_RELE(arg->a_vp);
 
 		mutex_enter(&push_lock);
+		pageout_pushing = false;
+		pageout_pushcount++;
 		arg->a_next = req_freelist;	/* back on freelist */
 		req_freelist = arg;
 		push_list_size--;
