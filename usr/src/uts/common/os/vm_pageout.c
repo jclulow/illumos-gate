@@ -284,16 +284,14 @@ setupclock(int recalc)
 		throttlefree = init_tfree;
 
 	/*
-	 * Pageout_reserve is the number of pages that we keep in
-	 * stock for pageout's own use.  Having a few such pages
-	 * provides insurance against system deadlock due to
-	 * pageout needing pages.  When freemem < pageout_reserve,
-	 * non-blocking allocations are denied to any threads
-	 * other than pageout and sched.  (At some point we might
-	 * want to consider a per-thread flag like T_PUSHING_PAGES
-	 * to indicate that a thread is part of the page-pushing
-	 * dance (e.g. an interrupt thread) and thus is entitled
-	 * to the same special dispensation we accord pageout.)
+	 * pageout_reserve is the number of pages that we keep in stock for
+	 * pageout's own use.  Having a few such pages provides insurance
+	 * against system deadlock due to pageout needing pages.  When freemem
+	 * is below pageout_reserve, non-blocking allocations are denied to any
+	 * threads other than pageout, sched, or the ZFS I/O pipeline.
+	 *
+	 * See also: the NOMEMWAIT() macro, the T_PUSHPAGE thread flag, and the
+	 * KM_PUSHPAGE/VM_PUSHPAGE allocation flags.
 	 */
 	if (init_preserve == 0 || init_preserve >= throttlefree)
 		pageout_reserve = throttlefree / 2;
