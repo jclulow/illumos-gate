@@ -37,6 +37,7 @@
 #include <sys/dsl_pool.h>
 #include <sys/metaslab_impl.h>
 #include <sys/abd.h>
+#include <sys/vmsystm.h>
 
 /*
  * ZFS I/O Scheduler
@@ -547,6 +548,16 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 	boolean_t stretch = B_FALSE;
 	avl_tree_t *t = vdev_queue_type_tree(vq, zio->io_type);
 	enum zio_flag flags = zio->io_flags & ZIO_FLAG_AGG_INHERIT;
+
+#ifdef _KERNEL
+	if (freemem < minfree + needfree) {
+		/*
+		 * Memory is tight and aggregation requires allocation.  We opt
+		 * not to aggregate I/O until more memory becomes available.
+		 */
+		return (NULL);
+	}
+#endif
 
 	if (zio->io_flags & ZIO_FLAG_DONT_AGGREGATE)
 		return (NULL);

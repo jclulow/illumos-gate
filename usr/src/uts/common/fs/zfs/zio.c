@@ -50,6 +50,7 @@
 #include <sys/cityhash.h>
 #include <sys/dsl_crypt.h>
 #include <sys/stdbool.h>
+#include <sys/vmsystm.h>
 
 /*
  * ==========================================================================
@@ -1520,6 +1521,18 @@ zio_write_compress(zio_t *zio)
 		ASSERT(BP_IS_EMBEDDED(bp) || MIN(zp->zp_copies + BP_IS_GANG(bp),
 		    spa_max_replication(spa)) == BP_GET_NDVAS(bp));
 	}
+
+#ifdef _KERNEL
+	if (freemem < minfree + needfree) {
+		/*
+		 * The system is short on memory and pageout is running.  We
+		 * need to make progress on I/O with a minimum of extra
+		 * allocations.  Compression is technically optional, so we
+		 * avoid allocating for it until the situation improves.
+		 */
+		compress = ZIO_COMPRESS_OFF;
+	}
+#endif
 
 	/* If it's a compressed write that is not raw, compress the buffer. */
 	if (compress != ZIO_COMPRESS_OFF &&
@@ -3128,6 +3141,17 @@ zio_dva_throttle(zio_t *zio)
 	spa_t *spa = zio->io_spa;
 	zio_t *nio;
 	metaslab_class_t *mc;
+
+#ifdef _KERNEL
+	if (freemem < minfree + needfree) {
+		/*
+		 * Memory is tight and we need pageout to make forward
+		 * progress.  Do not throttle or optimise I/Os until the
+		 * memory pressure situation improves.
+		 */
+		return (ZIO_PIPELINE_CONTINUE);
+	}
+#endif
 
 	/* locate an appropriate allocation class */
 	mc = spa_preferred_class(spa, zio->io_size, zio->io_prop.zp_type,

@@ -34,6 +34,7 @@
 #include <sys/dmu.h>
 #include <sys/dbuf.h>
 #include <sys/kstat.h>
+#include <sys/vmsystm.h>
 
 /*
  * This tunable disables predictive prefetch.  Note that it leaves "prescient"
@@ -215,6 +216,15 @@ dmu_zfetch(zfetch_t *zf, uint64_t blkid, uint64_t nblks, boolean_t fetch_data)
 
 	if (zfs_prefetch_disable)
 		return;
+
+#ifdef _KERNEL
+	if (freemem < minfree + needfree) {
+		/*
+		 * We are under memory pressure.  Don't make it worse.
+		 */
+		return;
+	}
+#endif
 
 	/*
 	 * If we haven't yet loaded the indirect vdevs' mappings, we
