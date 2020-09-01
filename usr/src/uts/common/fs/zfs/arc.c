@@ -7360,8 +7360,8 @@ arc_init(void)
 	mutex_init(&arc_adjust_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&arc_adjust_waiters_cv, NULL, CV_DEFAULT, NULL);
 
-	/* set min cache to 1/32 of all memory, or 64MB, whichever is more */
-	arc_c_min = MAX(allmem / 32, 64 << 20);
+	/* set min cache to 1/64 of all memory, or 64MB, whichever is more */
+	arc_c_min = MAX(allmem / 64, 64 << 20);
 	/* set max to 3/4 of all memory, or all but 1GB, whichever is more */
 	if (allmem >= 1 << 30)
 		arc_c_max = allmem - (1 << 30);
@@ -7408,9 +7408,6 @@ arc_init(void)
 	/* Allow the tunable to override if it is reasonable */
 	if (zfs_arc_meta_limit > 0 && zfs_arc_meta_limit <= arc_c_max)
 		arc_meta_limit = zfs_arc_meta_limit;
-
-	if (arc_c_min < arc_meta_limit / 2 && zfs_arc_min == 0)
-		arc_c_min = arc_meta_limit / 2;
 
 	if (zfs_arc_meta_min > 0) {
 		arc_meta_min = zfs_arc_meta_min;
