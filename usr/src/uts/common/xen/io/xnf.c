@@ -564,9 +564,13 @@ xnf_data_txbuf_free_chain(xnf_t *xnfp, xnf_txbuf_t *txp)
 }
 
 static xnf_txbuf_t *
-xnf_data_txbuf_alloc(xnf_t *xnfp)
+xnf_data_txbuf_alloc(xnf_t *xnfp, int flag)
 {
-	xnf_txbuf_t *txp = kmem_cache_alloc(xnfp->xnf_tx_buf_cache, KM_SLEEP);
+	xnf_txbuf_t *txp;
+	if ((txp = kmem_cache_alloc(xnfp->xnf_tx_buf_cache, flag)) == NULL) {
+		return (NULL);
+	}
+
 	txp->tx_type = TX_DATA;
 	txp->tx_next = NULL;
 	txp->tx_prev = NULL;
@@ -1547,9 +1551,9 @@ xnf_tx_get_lookaside(xnf_t *xnfp, mblk_t *mp, size_t *plen)
 	xnf_buf_t *bd;
 	caddr_t bp;
 
-	bd = xnf_buf_get(xnfp, KM_SLEEP, B_TRUE);
-	if (bd == NULL)
+	if ((bd = xnf_buf_get(xnfp, KM_NOSLEEP, B_TRUE)) == NULL) {
 		return (NULL);
+	}
 
 	bp = bd->buf;
 	while (mp != NULL) {
@@ -1751,8 +1755,12 @@ xnf_tx_push_packet(xnf_t *xnfp, xnf_txbuf_t *head)
 static xnf_txbuf_t *
 xnf_mblk_copy(xnf_t *xnfp, mblk_t *mp)
 {
-	xnf_txbuf_t *txp = xnf_data_txbuf_alloc(xnfp);
+	xnf_txbuf_t *txp;
 	size_t length;
+
+	if ((txp = xnf_data_txbuf_alloc(xnfp, KM_NOSLEEP)) == NULL) {
+		return (NULL);
+	}
 
 	txp->tx_bdesc = xnf_tx_get_lookaside(xnfp, mp, &length);
 	if (txp->tx_bdesc == NULL) {
@@ -1786,7 +1794,9 @@ xnf_mblk_map(xnf_t *xnfp, mblk_t *mp, int *countp)
 		if (MBLKL(ml) == 0)
 			continue;
 
-		txp = xnf_data_txbuf_alloc(xnfp);
+		if ((txp = xnf_data_txbuf_alloc(xnfp, KM_NOSLEEP)) == NULL) {
+			goto error;
+		}
 
 		if (head == NULL) {
 			head = txp;
@@ -1825,7 +1835,10 @@ xnf_mblk_map(xnf_t *xnfp, mblk_t *mp, int *countp)
 				goto error;
 			}
 			if (dma_cookie_prev != NULL) {
-				txp = xnf_data_txbuf_alloc(xnfp);
+				if ((txp = xnf_data_txbuf_alloc(xnfp,
+				    KM_NOSLEEP)) == NULL) {
+					goto error;
+				}
 				ASSERT(tail != NULL);
 				TXBUF_SETNEXT(tail, txp);
 				txp->tx_head = head;
@@ -2017,6 +2030,11 @@ pulledup:
 			 */
 			mblk_t *newmp = msgpullup(mp, -1);
 			freemsg(mp);
+			if (newmp == NULL) {
+				dev_err(xnfp->xnf_devinfo, CE_WARN,
+				    "msgpullup() failed");
+				goto drop;
+			}
 			mp = newmp;
 			xnfp->xnf_stat_tx_pullup++;
 			pulledup = B_TRUE;
