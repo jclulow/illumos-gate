@@ -4530,7 +4530,7 @@ kmem_thread_init(void)
 {
 	kmem_move_init();
 	kmem_taskq = taskq_create_instance("kmem_taskq", 0, 1, minclsyspri,
-	    300, INT_MAX, TASKQ_PREPOPULATE);
+	    600, INT_MAX, TASKQ_PREPOPULATE);
 }
 
 void
