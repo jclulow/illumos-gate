@@ -122,6 +122,8 @@ typedef struct ekstat {
 	avl_node_t	e_avl_bykid;	/* AVL tree to sort by KID */
 	avl_node_t	e_avl_byname;	/* AVL tree to sort by name */
 	kstat_zone_t	e_zone;		/* zone to export stats to */
+	volatile uint64_t *e_percpu;	/* per-CPU storage for COUNT64 */
+	size_t		e_percpu_size;	/* allocated size of e_percpu */
 } ekstat_t;
 
 static uint64_t kstat_initial[8192];
@@ -429,6 +431,35 @@ kstat_hold_byname(const char *ks_module, int ks_instance, const char *ks_name,
 	return (kstat_hold(&kstat_avl_byname, &e));
 }
 
+static void
+kstat_percpu_alloc(ekstat_t *e, size_t nelems)
+{
+	if (kstat_arena == NULL) {
+		return (NULL);
+	}
+
+	/*
+	 * To avoid false sharing, we need a cache line sized chunk for each
+	 * potential CPU in the system.  Lines are expected to be 64 bytes
+	 * wide, and will thus hold up to 8 counter values.
+	 */
+	size_t line_width = 64; /* XXX */
+	size_t size = P2ROUNDUP(nelems * sizeof (uint64_t), line_width) *
+	    max_ncpus;
+
+	/*
+	 * Each chunk must also be aligned to a cache line:
+	 */
+	volatile uint64_t *percpu = vmem_xalloc(kstat_arena, size, line_width,
+	    0, 0, NULL, NULL, VM_NOSLEEP);
+
+	if (percpu != NULL) {
+		bzero(percpu, size);
+		e->e_percpu = percpu;
+		e->e_percpu_size = size;
+	}
+}
+
 static ekstat_t *
 kstat_alloc(size_t size)
 {
@@ -458,6 +489,9 @@ kstat_alloc(size_t size)
 static void
 kstat_free(ekstat_t *e)
 {
+	if (e->e_percpu != NULL) {
+		vmem_free(kstat_arena, e->e_percpu, e->e_percpu_size);
+	}
 	cv_destroy(&e->e_cv);
 	vmem_free(kstat_arena, e, e->e_size);
 }
@@ -651,7 +685,44 @@ default_kstat_update(kstat_t *ksp, int rw)
 		ksp->ks_data_size =
 		    ksp->ks_ndata * sizeof (kstat_named_t) + len;
 	}
+
+	kstat_percpu_aggregate(ksp);
+
 	return (0);
+}
+
+/*
+ * KSTAT_TYPE_NAMED kstats with type KSTAT_DATA_COUNT64 have their data values
+ * stored in per-CPU arrays of values that must be aggregated during the
+ * snapshot process.
+ */
+static void
+kstat_percpu_aggregate(kstat_t *ksp)
+{
+	if (ksp->ks_type != KSTAT_TYPE_NAMED) {
+		return;
+	}
+
+	if (!(ksp->ksp_flags & KSTAT_FLAG_PERCPU)) {
+		return;
+	}
+
+	/*
+	 * Counters for a given CPU are colocated on a cache line, so we try to
+	 * minimise ownership changes by reading all of the counters for a
+	 * given CPU together.
+	 */
+	for (int cpu = 0; cpu < max_ncpus; cpu++) {
+		kstat_named_t *knp = KSTAT_NAMED_PTR(ksp);
+		for (uint_t i = 0; i < ksp->ks_ndata; i++, knp++) {
+			if (knp->data_type != KSTAT_DATA_COUNT64) {
+				continue;
+			}
+
+			atomic_add_64(KSTAT_NAMED_C64_VAL(knp),
+			    atomic_swap_64(KSTAT_NAMED_C64_PTR(knp, cpu), 0));
+		}
+	}
 }
 
 static int
@@ -678,7 +749,6 @@ default_kstat_snapshot(kstat_t *ksp, void *buf, int rw)
 	 * if any, are copied below. For other kstat types, ks_data holds the
 	 * entire buffer.
 	 */
-
 	namedsz = sizeof (kstat_named_t) * ksp->ks_ndata;
 	if (ksp->ks_type == KSTAT_TYPE_NAMED && ksp->ks_data_size > namedsz)
 		bcopy(ksp->ks_data, buf, namedsz);
@@ -741,6 +811,25 @@ default_kstat_snapshot(kstat_t *ksp, void *buf, int rw)
 				}
 			}
 			ASSERT(dst <= ((char *)buf + ksp->ks_data_size));
+		}
+
+		/*
+		 * Per-CPU aggregated counter statistics are exposed to users
+		 * as regular 64-bit unsigned quantities.
+		 */
+		if (ksp->ksp_flags & KSTAT_FLAG_PERCPU) {
+			kstat_named_t *knp = buf;
+			for (uint_t i = 0; i < ksp->ks_ndata; i++, knp++) {
+				if (knp->data_type == KSTAT_DATA_COUNT64) {
+					knp->data_type = KSTAT_DATA_UINT64;
+
+					/*
+					 * Scrub the kernel data pointer to
+					 * prevent leaking information:
+					 */
+					knp->value.count64.base = NULL;
+				}
+			}
 		}
 		break;
 	}
@@ -980,6 +1069,18 @@ kstat_create_zone(const char *ks_module, int ks_instance, const char *ks_name,
 	}
 
 	/*
+	 * The aggregation of per-CPU kstats during the snapshot step can only
+	 * happen for a named kstat.
+	 */
+	if ((ks_flags & KSTAT_FLAG_PERCPU) &&
+	    ks_type != KSTAT_TYPE_NAMED) {
+		cmn_err(CE_WARN, "kstat_create('%s', %d, '%s'): "
+		    "cannot create per-CPU kstats for type %d",
+		    ks_module, ks_instance, ks_name, ks_type);
+		return (NULL);
+	}
+
+	/*
 	 * Don't allow persistent virtual kstats -- it makes no sense.
 	 * ks_data points to garbage when the client goes away.
 	 */
@@ -1100,6 +1201,13 @@ kstat_create_zone(const char *ks_module, int ks_instance, const char *ks_name,
 	ksp->ks_snapshot	= default_kstat_snapshot;
 	ksp->ks_lock		= NULL;
 
+	if (ks_flags & KSTAT_FLAG_PERCPU) {
+		/*
+		 * Allocate per-CPU storage for KSTAT_DATA_TYPE_COUNT64 kstats.
+		 */
+		kstat_percpu_alloc(e, ksp->ks_ndata);
+	}
+
 	mutex_enter(&kstat_chain_lock);
 
 	/*
@@ -1134,7 +1242,8 @@ kstat_create_zone(const char *ks_module, int ks_instance, const char *ks_name,
 void
 kstat_install(kstat_t *ksp)
 {
-	zoneid_t zoneid = ((ekstat_t *)ksp)->e_zone.zoneid;
+	ekstat_t *e = (ekstat_t *)ksp;
+	zoneid_t zoneid = e->e_zone.zoneid;
 
 	/*
 	 * If this is a variable-size kstat, it MUST provide kstat data locking
@@ -1150,6 +1259,53 @@ kstat_install(kstat_t *ksp)
 		cmn_err(CE_WARN, "kstat_install(%p): does not exist",
 		    (void *)ksp);
 		return;
+	}
+
+	if (ksp->ks_flags & KSTAT_FLAG_PERCPU) {
+		/*
+		 * Check that we were able to allocate per-CPU counters, and
+		 * that this is a correctly configured named kstat:
+		 */
+		if (e->e_percpu == NULL ||
+		    ksp->ks_type != KSTAT_TYPE_NAMED ||
+		    ksp->ks_data == NULL) {
+			ksp->ks_flags &= ~KSTAT_FLAG_PERCPU;
+
+			/*
+			 * Clear base pointers to for per-CPU kstat:
+			 */
+			kstat_named_t *knp = KSTAT_NAMED_PTR(ksp);
+			for (i = 0; i < ksp->ks_ndata; i++, knp++) {
+				if (knp->data_type != KSTAT_DATA_COUNT64) {
+					continue;
+				}
+
+				knp->value.count64.base = NULL;
+			}
+		} else {
+			size_t chunk = 0;
+			size_t chunkpos = 0;
+
+			/*
+			 * Assign base pointers to each per-CPU kstat:
+			 */
+			kstat_named_t *knp = KSTAT_NAMED_PTR(ksp);
+			for (i = 0; i < ksp->ks_ndata; i++, knp++) {
+				if (knp->data_type != KSTAT_DATA_COUNT64) {
+					continue;
+				}
+
+				knp->value.count64.base =
+				    &e->e_percpu[chunk * max_ncpus + chunkpos];
+
+				if (chunkpos == 7) {
+					chunkpos = 0;
+					chunk++;
+				} else {
+					chunkpos++;
+				}
+			}
+		}
 	}
 
 	if (ksp->ks_type == KSTAT_TYPE_NAMED && ksp->ks_data != NULL) {
@@ -1446,4 +1602,24 @@ kstat_timer_stop(kstat_timer_t *ktp)
 		ktp->max_time = etime;
 	ktp->elapsed_time += etime;
 	ktp->num_events = num_events + 1;
+}
+
+void
+kstat_count_incr(kstat_named_t *knp)
+{
+	if (knp->value.count64.base != NULL) {
+		atomic_inc_64(KSTAT_NAMED_C64_PTR(knp, CPU->cpu_id));
+	} else {
+		atomic_inc_64(KSTAT_NAMED_C64_VAL(knp));
+	}
+}
+
+void
+kstat_count_add(kstat_named_t *knp, uint64_t addend)
+{
+	if (knp->value.count64.base != NULL) {
+		atomic_add_64(KSTAT_NAMED_C64_PTR(knp, CPU->cpu_id), addend);
+	} else {
+		atomic_add_64(KSTAT_NAMED_C64_VAL(knp), addend);
+	}
 }

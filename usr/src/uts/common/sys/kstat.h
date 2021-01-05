@@ -283,6 +283,13 @@ typedef struct kstat32 {
  *		NOTE: Persistent kstats cannot be virtual, since ks_data
  *		points to garbage as soon as the driver goes away.
  *
+ *	KSTAT_FLAG_PERCPU:
+ *
+ *		For a named kstat, allocate a per-CPU array of 64-bit
+ *		counters.  Any COUNT64-typed kstat value can then be incremented
+ *		using kstat_inc_64(), and will be automatically aggregated
+ *		during kstat read and passed to users as a UINT64.
+ *
  * The following flags are maintained by the kstat framework:
  *
  *	KSTAT_FLAG_DORMANT:
@@ -312,6 +319,7 @@ typedef struct kstat32 {
 #define	KSTAT_FLAG_DORMANT		0x10
 #define	KSTAT_FLAG_INVALID		0x20
 #define	KSTAT_FLAG_LONGSTRINGS		0x40
+#define	KSTAT_FLAG_PERCPU		0x80
 
 /*
  * Dynamic update support
@@ -465,6 +473,18 @@ typedef struct kstat_named {
 			} addr;
 			uint32_t	len;	/* # bytes for strlen + '\0' */
 		} str;
+#if defined(_KERNEL)
+		/*
+		 * These values become KSTAT_DATA_UINT64 at snapshot time, and
+		 * thus are only visible within the kernel.  The aggregated
+		 * counter value is first so that it lines up with the regular
+		 * 64-bit values.
+		 */
+		struct {
+			volatile uint64_t ui64; /* aggregated counter value */
+			volatile uint64_t *base; /* counter for CPU 0 */
+		} count64;
+#endif
 /*
  * The int64_t and uint64_t types are not valid for a maximally conformant
  * 32-bit compilation environment (cc -Xc) using compilers prior to the
@@ -528,6 +548,10 @@ typedef struct kstat_named {
  */
 #define	KSTAT_DATA_STRING	9
 
+#if defined(_KERNEL)
+#define	KSTAT_DATA_COUNT64	10
+#endif
+
 /* These types are obsolete */
 
 #define	KSTAT_DATA_LONGLONG	KSTAT_DATA_INT64
@@ -547,6 +571,9 @@ typedef struct kstat_named {
  * named kstat.
  */
 #define	KSTAT_NAMED_STR_BUFLEN(knptr) ((knptr)->value.str.len)
+
+#define	KSTAT_NAMED_C64_VAL(knptr)	(&(knptr)->value.count64.ui64)
+#define	KSTAT_NAMED_C64_PTR(knptr, cpu)	(&(knptr)->value.count64.base[cpu * 8])
 
 /*
  * Interrupt statistics.
@@ -810,6 +837,8 @@ extern void kstat_waitq_to_runq(kstat_io_t *);
 extern void kstat_runq_back_to_waitq(kstat_io_t *);
 extern void kstat_timer_start(kstat_timer_t *);
 extern void kstat_timer_stop(kstat_timer_t *);
+extern void kstat_count_incr(kstat_named_t *);
+extern void kstat_count_add(kstat_named_t *, uint64_t);
 
 extern void kstat_zone_add(kstat_t *, zoneid_t);
 extern void kstat_zone_remove(kstat_t *, zoneid_t);
