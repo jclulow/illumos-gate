@@ -36,7 +36,7 @@ POFILES= $(OBJS:%.o=%.po)
 include ../Makefile.cmd
 
 CPPFLAGS += -I $(SRC)/common/crypto -I $(SRC)/common/lzma
-LDLIBS += -ldevinfo -lpkcs11 -lcryptoutil
+LDLIBS += -ldevinfo -lpkcs11 -lcryptoutil -llofiadm
 
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += $(CNOWARN_UNINIT)

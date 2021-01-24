@@ -48,24 +48,6 @@ static const char *pname;
 
 /*PRINTFLIKE1*/
 void
-warn(const char *format, ...)
-{
-	int err = errno;
-	va_list alist;
-
-	if (pname != NULL)
-		(void) fprintf(stderr, gettext(PNAME_FMT), pname);
-
-	va_start(alist, format);
-	(void) vfprintf(stderr, format, alist);
-	va_end(alist);
-
-	if (strchr(format, '\n') == NULL)
-		(void) fprintf(stderr, gettext(ERRNO_FMT), strerror(err));
-}
-
-/*PRINTFLIKE1*/
-void
 die(const char *format, ...)
 {
 	int err = errno;
