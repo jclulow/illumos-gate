@@ -49,6 +49,7 @@ extern void ilstr_fini(ilstr_t *ils);
 extern void ilstr_reset(ilstr_t *ils);
 
 extern void ilstr_append_str(ilstr_t *ils, const char *s);
+extern void ilstr_append_strn(ilstr_t *ils, const char *s, size_t n);
 extern void ilstr_append_uint(ilstr_t *ils, uint_t n);
 extern void ilstr_append_char(ilstr_t *ils, char c);
 

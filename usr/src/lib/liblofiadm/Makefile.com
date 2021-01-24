@@ -16,10 +16,14 @@
 LIBRARY =	liblofiadm.a
 VERS =		.1
 
-OBJECTS =	liblofiadm.o
+OBJECTS =	ilstr.o liblofiadm.o
 
 include $(SRC)/lib/Makefile.lib
 include $(SRC)/lib/Makefile.rootfs
+
+CSTD =		$(CSTD_GNU99)
+
+CPPFLAGS +=	-I$(SRC)/common/ilstr
 
 LIBS =		$(DYNLIB)
 LDLIBS +=	-lc
@@ -31,3 +35,7 @@ SRCDIR =	../common
 all: $(LIBS)
 
 include $(SRC)/lib/Makefile.targ
+
+pics/ilstr.o: $(SRC)/common/ilstr/ilstr.c
+	$(COMPILE.c) -o $@ $^
+	$(POST_PROCESS_O)

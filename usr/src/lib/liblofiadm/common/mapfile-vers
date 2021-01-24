@@ -33,6 +33,25 @@ SYMBOL_VERSION ILLUMOS_0.1 {
     global:
 	lofiadm_init;
 	lofiadm_fini;
+	lofiadm_strerror;
+	lofiadm_error;
+	lofiadm_walk;
+	lofiadm_walk_next;
+	lofiadm_ent_filename;
+	lofiadm_ent_devpath;
+	lofiadm_ent_rdevpath;
+	lofiadm_ent_readonly;
+	lofiadm_ent_label;
+	lofiadm_ent_encrypted;
+	lofiadm_ent_compressed;
+	lofiadm_ent_compression;
+	lofiadm_lookup_file;
+	lofiadm_lookup_device;
+};
+
+SYMBOL_VERSION ILLUMOSprivate {
+    global:
+	lofiadm_fd;
     local:
 	*;
 };

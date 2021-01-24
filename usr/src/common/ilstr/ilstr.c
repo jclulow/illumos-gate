@@ -61,6 +61,12 @@ ilstr_fini(ilstr_t *ils)
 void
 ilstr_append_str(ilstr_t *ils, const char *s)
 {
+	ilstr_append_strn(ils, s, SIZE_MAX);
+}
+
+void
+ilstr_append_strn(ilstr_t *ils, const char *s, size_t maxlen)
+{
 	size_t len;
 	size_t chunksz = 64;
 
@@ -70,6 +76,10 @@ ilstr_append_str(ilstr_t *ils, const char *s)
 
 	if ((len = strlen(s)) < 1) {
 		return;
+	}
+
+	if (len > maxlen) {
+		len = maxlen;
 	}
 
 	/*
