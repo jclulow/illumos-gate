@@ -12,8 +12,8 @@
 /*
  * Copyright 2021 Oxide Computer Company
  */
-#ifndef _PROTOTYPE_H
-#define	_PROTOTYPE_H
+#ifndef _ILSTR_H
+#define	_ILSTR_H
 
 #ifdef _KERNEL
 #include <sys/types.h>
@@ -63,4 +63,4 @@ extern const char *ilstr_errstr(ilstr_t *ils);
 }
 #endif
 
-#endif /* _PROTOTYPE_H */
+#endif /* _ILSTR_H */
