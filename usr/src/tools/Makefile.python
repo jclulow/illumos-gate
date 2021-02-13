@@ -101,7 +101,7 @@ $(ROOTPYDIR)/%.pyc: python$(PYVER)/%.pyc
 python$(PYVER)/__pycache__/%.cpython$(PYPKGVERS).pyc: ../%.py
 	@[ -d $(@D) ] || mkdir -p $(@D)
 	$(RM) $@
-	$(PYTHON3) -mpy_compile $<
+	$(TOOLS_PYTHON) -mpy_compile $<
 	$(MV) ../__pycache__/$(*).cpython$(PYPKGVERS).pyc $@
 
 $(ROOTPYDIR)/__pycache__/%.pyc: python$(PYVER)/__pycache__/%.pyc

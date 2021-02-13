@@ -30,9 +30,9 @@
 
 include ../Makefile.com
 
-PYVER = $(PYTHON3_VERSION)
-PYPKGVERS = $(PYTHON3_PKGVERS)
-PYOBJS = $(PYSRCS:%.py=__pycache__/%.cpython$(PYTHON3_PKGVERS).pyc)
+PYVER = $(TOOLS_PYTHON_VERSION)
+PYPKGVERS = $(TOOLS_PYTHON_PKGVERS)
+PYOBJS = $(PYSRCS:%.py=__pycache__/%.cpython$(TOOLS_PYTHON_PKGVERS).pyc)
 
 include ../../../Makefile.python
 

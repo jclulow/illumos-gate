@@ -125,13 +125,13 @@ $(BUILDPY2TOOLS)ROOTDIRS += \
 	$(ROOTONBLD)/lib/python$(PYTHON_VERSION)/onbld/Scm
 
 $(BUILDPY3TOOLS)ROOTDIRS += \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION) \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/__pycache__ \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Checks \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Checks/__pycache__ \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Scm \
-	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Scm/__pycache__
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION) \
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION)/onbld \
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION)/onbld/__pycache__ \
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION)/onbld/Checks \
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION)/onbld/Checks/__pycache__ \
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION)/onbld/Scm \
+	$(ROOTONBLD)/lib/python$(TOOLS_PYTHON_VERSION)/onbld/Scm/__pycache__
 
 all :=		TARGET= install
 install :=	TARGET= install

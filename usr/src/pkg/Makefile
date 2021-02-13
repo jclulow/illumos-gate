@@ -193,6 +193,8 @@ PKGMOG_DEFINES= \
 	PERL_PKGVERS=$(PERL_PKGVERS) \
 	BUILDPERL32=$(BUILDPERL32) \
 	BUILDPERL64=$(BUILDPERL64) \
+	TOOLS_PYTHON_VERSION=$(TOOLS_PYTHON_VERSION) \
+	TOOLS_PYTHON_PKGVERS=$(TOOLS_PYTHON_PKGVERS) \
 	PYTHON_VERSION=$(PYTHON_VERSION) \
 	PYTHON3_VERSION=$(PYTHON3_VERSION) \
 	PYTHON_PKGVERS=$(PYTHON_PKGVERS) \
@@ -711,6 +713,8 @@ pkglint: makesilent
 	$(PKGDEBUG)echo "    pkg:/runtime/python$(PYTHON_PKGVERS) \\" \
 	     >> $(PDIR)/pkglintrc
 	$(PKGDEBUG)echo "    pkg:/runtime/python$(PYTHON3_PKGVERS) \\" \
+	     >> $(PDIR)/pkglintrc
+	$(PKGDEBUG)echo "    pkg:/runtime/python$(TOOLS_PYTHON_PKGVERS) \\" \
 	     >> $(PDIR)/pkglintrc
 	$(PKGDEBUG) echo "    pkg:/runtime/perl$(PERL_PKGVERS) \\" \
 	     >> $(PDIR)/pkglintrc
