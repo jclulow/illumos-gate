@@ -1102,13 +1102,19 @@ uftdi_serdev_tx(void *arg, mblk_t *mp)
 	uftdi_t *uf = arg;
 
 	mutex_enter(&uf->uf_mutex);
-	/*
-	 * XXX I don't think we expect overlapping transmission requests from
-	 * serdev?
-	 */
-	VERIFY3P(uf->uf_tx_mp, ==, NULL);
-	uf->uf_tx_mp = mp;
+	if (mp != NULL) {
+		/*
+		 * XXX I don't think we expect overlapping transmission
+		 * requests from serdev?
+		 */
+		VERIFY3P(uf->uf_tx_mp, ==, NULL);
+		uf->uf_tx_mp = mp;
+	}
 
+	/*
+	 * Whether we were given data to send or not, we need to resume
+	 * transmission if we were previously stopped for flow control.
+	 */
 	uftdi_tx_start(uf);
 	mutex_exit(&uf->uf_mutex);
 

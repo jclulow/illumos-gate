@@ -160,7 +160,20 @@ serdev_flow_out_start(serdev_t *srd, serdev_stop_tx_t why)
 	}
 
 	srd->srd_flags &= ~SERDEV_FL_TX_STOPPED;
-	qenable(srd->srd_tty.t_writeq);
+	if (srd->srd_tty.t_writeq != NULL) {
+		qenable(srd->srd_tty.t_writeq);
+	}
+
+	if (srd->srd_flags & SERDEV_FL_TX_ACTIVE) {
+		/*
+		 * The driver may have stopped trying to feed data to the
+		 * device if they observed in the past that we were flow
+		 * controlled.  Kick them to make sure they're moving again.
+		 */
+		mutex_exit(&srd->srd_mutex);
+		srd->srd_ops.srdo_tx(srd->srd_private, NULL);
+		mutex_enter(&srd->srd_mutex);
+	}
 }
 
 static void
@@ -212,7 +225,9 @@ serdev_flow_in_start(serdev_t *srd, serdev_stop_rx_t why)
 	 * Restart the read queue:
 	 */
 	srd->srd_flags &= ~SERDEV_FL_RX_STOPPED;
-	qenable(srd->srd_tty.t_readq);
+	if (srd->srd_tty.t_readq != NULL) {
+		qenable(srd->srd_tty.t_readq);
+	}
 }
 
 static void
@@ -1124,6 +1139,14 @@ serdev_open_finish(serdev_t *srd, queue_t *rq, queue_t *wq, bool noblock)
 	serdev_open_release(srd);
 
 	serdev_state_change(srd, SERDEV_ST_OPENING, SERDEV_ST_OPEN);
+
+	/*
+	 * Ensure we request a full status update at least once up front, even
+	 * if the driver never ends up pushing a status update.
+	 */
+	srd->srd_flags |= SERDEV_FL_NEED_STATUS;
+	serdev_taskq_dispatch(srd);
+
 	mutex_exit(&srd->srd_mutex);
 	return (0);
 }
