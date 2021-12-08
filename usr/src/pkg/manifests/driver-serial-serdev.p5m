@@ -20,14 +20,13 @@
 #
 <include global_zone_only_component>
 set name=pkg.fmri value=pkg:/driver/serial/serdev@$(PKGVERS)
-set name=pkg.description value="Generic Serial Driver"
 set name=pkg.summary value="Generic Serial Driver"
-set name=info.classification \
-    value=org.opensolaris.category.2008:System/Hardware
+set name=pkg.description value="Generic Serial Driver"
+set name=info.classification value=org.opensolaris.category.2008:System/Hardware
 set name=variant.arch value=$(ARCH)
-dir path=kernel group=sys
-dir path=kernel/drv group=sys
-dir path=kernel/drv/$(ARCH64) group=sys
-driver name=serdev perms="* 0666 root sys"
+dir  path=kernel group=sys
+dir  path=kernel/drv group=sys
+dir  path=kernel/drv/$(ARCH64) group=sys
 file path=kernel/drv/$(ARCH64)/serdev group=sys mode=0755
+driver name=serdev perms="* 0666 root sys"
 license lic_CDDL license=lic_CDDL

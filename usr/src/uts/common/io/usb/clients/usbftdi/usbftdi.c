@@ -31,8 +31,8 @@
 
 #include "usbftdi.h"
 
-static void uftdi_rx_start(uftdi_t *);
-static void uftdi_tx_start(uftdi_t *);
+static void uftdi_rx_start(uftdi_t *, uftdi_if_t *);
+static void uftdi_tx_start(uftdi_t *, uftdi_if_t *);
 
 void *uftdi_state;
 
@@ -106,9 +106,9 @@ uftdi_buf_size(usb_ep_data_t *ep, size_t bus_max)
 }
 
 static bool
-uftdi_pipe_hold(uftdi_t *uf, uftdi_pipe_t *up)
+uftdi_pipe_hold(uftdi_t *uf, uftdi_if_t *ui, uftdi_pipe_t *up)
 {
-	if (uf->uf_usb_thread != NULL || uf->uf_state != UFTDI_ST_OPEN) {
+	if (uf->uf_usb_thread != NULL || ui->ui_state != UFTDI_ST_OPEN) {
 		/*
 		 * We are undergoing USB reconfiguration, or the port is not
 		 * open, so we cannot hold the pipe now.
@@ -125,7 +125,7 @@ uftdi_pipe_hold(uftdi_t *uf, uftdi_pipe_t *up)
 }
 
 static void
-uftdi_pipe_release(uftdi_t *uf, uftdi_pipe_t *up)
+uftdi_pipe_release(uftdi_t *uf, uftdi_if_t *ui, uftdi_pipe_t *up)
 {
 	VERIFY3U(up->up_state, ==, UFTDI_PIPE_BUSY);
 	up->up_state = UFTDI_PIPE_IDLE;
@@ -133,7 +133,7 @@ uftdi_pipe_release(uftdi_t *uf, uftdi_pipe_t *up)
 }
 
 static void
-uftdi_pipe_wait(uftdi_t *uf, uftdi_pipe_t *up)
+uftdi_pipe_wait(uftdi_t *uf, uftdi_if_t *ui, uftdi_pipe_t *up)
 {
 	while (up->up_state == UFTDI_PIPE_BUSY) {
 		cv_wait(&uf->uf_cv, &uf->uf_mutex);
@@ -166,27 +166,28 @@ uftdi_pipe_remove(uftdi_pipe_t *up)
 }
 
 static int
-uftdi_open_pipes(uftdi_t *uf)
+uftdi_open_pipes_one(uftdi_t *uf, uftdi_if_t *ui, size_t maxb)
 {
 	dev_info_t *dip = uf->uf_dip;
 	usb_client_dev_data_t *dev = uf->uf_usb_dev;
 	usb_ep_data_t *epin, *epout;
-	size_t maxb;
 
 	/*
-	 * If we are to adjust the pipes, we must be the only USB configuration
-	 * thread.
+	 * First, make sure we have access to the USB interface we expect to
+	 * use here:
 	 */
-	VERIFY3P(uf->uf_usb_thread, ==, curthread);
-
-	if (usb_pipe_get_max_bulk_transfer_size(dip, &maxb) != USB_SUCCESS) {
+	if (ui->ui_usb_if >= dev->dev_curr_cfg->cfg_n_if) {
+		dev_err(dip, CE_WARN, "device does not have interface %u",
+		    ui->ui_usb_if);
 		return (USB_FAILURE);
 	}
 
-	if ((epin = usb_lookup_ep_data(dip, dev, dev->dev_curr_if, 0, 0,
+	if ((epin = usb_lookup_ep_data(dip, dev, ui->ui_usb_if, 0, 0,
 	    USB_EP_ATTR_BULK, USB_EP_DIR_IN)) == NULL ||
-	    (epout = usb_lookup_ep_data(dip, dev, dev->dev_curr_if, 0, 0,
+	    (epout = usb_lookup_ep_data(dip, dev, ui->ui_usb_if, 0, 0,
 	    USB_EP_ATTR_BULK, USB_EP_DIR_OUT)) == NULL) {
+		dev_err(dip, CE_WARN, "could not locate endpoints for "
+		    "interface %u", ui->ui_usb_if);
 		return (USB_FAILURE);
 	}
 
@@ -212,11 +213,38 @@ uftdi_open_pipes(uftdi_t *uf)
 	}
 
 	mutex_enter(&uf->uf_mutex);
-	uftdi_pipe_install(&uf->uf_pipe_in, pin, uftdi_buf_size(epin, maxb));
-	uftdi_pipe_install(&uf->uf_pipe_out, pout, uftdi_buf_size(epout, maxb));
+	uftdi_pipe_install(&ui->ui_pipe_in, pin, uftdi_buf_size(epin, maxb));
+	uftdi_pipe_install(&ui->ui_pipe_out, pout, uftdi_buf_size(epout, maxb));
 	mutex_exit(&uf->uf_mutex);
 
 	return (USB_SUCCESS);
+}
+
+static int
+uftdi_open_pipes(uftdi_t *uf)
+{
+	dev_info_t *dip = uf->uf_dip;
+	size_t maxb;
+
+	/*
+	 * If we are to adjust the pipes, we must be the only USB configuration
+	 * thread.
+	 */
+	VERIFY3P(uf->uf_usb_thread, ==, curthread);
+
+	if (usb_pipe_get_max_bulk_transfer_size(dip, &maxb) != USB_SUCCESS) {
+		return (USB_FAILURE);
+	}
+
+	int r = USB_SUCCESS;
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		if (uftdi_open_pipes_one(uf, uf->uf_if[i], maxb) !=
+		    USB_SUCCESS) {
+			r = USB_FAILURE;
+		}
+	}
+
+	return (r);
 }
 
 static void
@@ -232,13 +260,17 @@ uftdi_close_pipes(uftdi_t *uf)
 	 */
 	VERIFY3P(uf->uf_usb_thread, ==, curthread);
 
-	usb_pipe_handle_t pin = uftdi_pipe_remove(&uf->uf_pipe_in);
-	usb_pipe_handle_t pout = uftdi_pipe_remove(&uf->uf_pipe_out);
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		uftdi_if_t *ui = uf->uf_if[i];
 
-	mutex_exit(&uf->uf_mutex);
-	usb_pipe_close(dip, pin, USB_FLAGS_SLEEP, NULL, NULL);
-	usb_pipe_close(dip, pout, USB_FLAGS_SLEEP, NULL, NULL);
-	mutex_enter(&uf->uf_mutex);
+		usb_pipe_handle_t pin = uftdi_pipe_remove(&ui->ui_pipe_in);
+		usb_pipe_handle_t pout = uftdi_pipe_remove(&ui->ui_pipe_out);
+
+		mutex_exit(&uf->uf_mutex);
+		usb_pipe_close(dip, pin, USB_FLAGS_SLEEP, NULL, NULL);
+		usb_pipe_close(dip, pout, USB_FLAGS_SLEEP, NULL, NULL);
+		mutex_enter(&uf->uf_mutex);
+	}
 }
 
 /*
@@ -303,12 +335,13 @@ uftdi_program_try(uftdi_t *uf, uint8_t port, const uftdi_regs_t *ur)
  * If there are errors, return the device to its previous state.
  */
 static int
-uftdi_program(uftdi_t *uf, const uftdi_regs_t *ur)
+uftdi_program(uftdi_if_t *ui, const uftdi_regs_t *ur)
 {
+	uftdi_t *uf = ui->ui_parent;
 	VERIFY(MUTEX_NOT_HELD(&uf->uf_mutex));
 
 	mutex_enter(&uf->uf_mutex);
-	uint8_t port = uf->uf_port;
+	uint8_t port = ui->ui_port;
 	mutex_exit(&uf->uf_mutex);
 
 	if (!uftdi_program_try(uf, port, ur)) {
@@ -317,7 +350,7 @@ uftdi_program(uftdi_t *uf, const uftdi_regs_t *ur)
 		 * change by reprogramming the device to our original values.
 		 */
 		mutex_enter(&uf->uf_mutex);
-		uftdi_regs_t urold = uf->uf_last_regs;
+		uftdi_regs_t urold = ui->ui_last_regs;
 		mutex_exit(&uf->uf_mutex);
 
 		(void) uftdi_program_try(uf, port, &urold);
@@ -328,26 +361,27 @@ uftdi_program(uftdi_t *uf, const uftdi_regs_t *ur)
 	 * Save the updated values:
 	 */
 	mutex_enter(&uf->uf_mutex);
-	uf->uf_last_regs = *ur;
+	ui->ui_last_regs = *ur;
 	mutex_exit(&uf->uf_mutex);
 	return (USB_SUCCESS);
 }
 
 static int
-uftdi_set_dtr(uftdi_t *uf, bool on)
+uftdi_set_dtr(uftdi_if_t *ui, bool on)
 {
+	uftdi_t *uf = ui->ui_parent;
 	uint16_t mctl = on ? FTDI_SIO_SET_DTR_HIGH : FTDI_SIO_SET_DTR_LOW;
 
-	if (uftdi_send_command(uf, uf->uf_port,
+	if (uftdi_send_command(uf, ui->ui_port,
 	    FTDI_SIO_MODEM_CTRL, mctl, 0) != USB_SUCCESS) {
 		return (EIO);
 	}
 
 	mutex_enter(&uf->uf_mutex);
 	if (on) {
-		uf->uf_last_mctl |= UFTDI_MODEM_DTR;
+		ui->ui_last_mctl |= UFTDI_MODEM_DTR;
 	} else {
-		uf->uf_last_mctl &= ~UFTDI_MODEM_DTR;
+		ui->ui_last_mctl &= ~UFTDI_MODEM_DTR;
 	}
 	mutex_exit(&uf->uf_mutex);
 
@@ -355,20 +389,21 @@ uftdi_set_dtr(uftdi_t *uf, bool on)
 }
 
 static int
-uftdi_set_rts(uftdi_t *uf, bool on)
+uftdi_set_rts(uftdi_if_t *ui, bool on)
 {
+	uftdi_t *uf = ui->ui_parent;
 	uint16_t mctl = on ? FTDI_SIO_SET_RTS_HIGH : FTDI_SIO_SET_RTS_LOW;
 
-	if (uftdi_send_command(uf, uf->uf_port,
+	if (uftdi_send_command(uf, ui->ui_port,
 	    FTDI_SIO_MODEM_CTRL, mctl, 0) != 0) {
 		return (EIO);
 	}
 
 	mutex_enter(&uf->uf_mutex);
 	if (on) {
-		uf->uf_last_mctl |= UFTDI_MODEM_RTS;
+		ui->ui_last_mctl |= UFTDI_MODEM_RTS;
 	} else {
-		uf->uf_last_mctl &= ~UFTDI_MODEM_RTS;
+		ui->ui_last_mctl &= ~UFTDI_MODEM_RTS;
 	}
 	mutex_exit(&uf->uf_mutex);
 
@@ -376,23 +411,23 @@ uftdi_set_rts(uftdi_t *uf, bool on)
 }
 
 static int
-uftdi_reset(uftdi_t *uf)
+uftdi_reset(uftdi_if_t *ui)
 {
-	return (uftdi_send_command(uf, uf->uf_port,
+	return (uftdi_send_command(ui->ui_parent, ui->ui_port,
 	    FTDI_SIO_RESET, FTDI_SIO_RESET_SIO, 0));
 }
 
 static void
-uftdi_rx_purge(uftdi_t *uf)
+uftdi_rx_purge(uftdi_if_t *ui)
 {
-	(void) uftdi_send_command(uf, uf->uf_port,
+	(void) uftdi_send_command(ui->ui_parent, ui->ui_port,
 	    FTDI_SIO_RESET, FTDI_SIO_RESET_PURGE_RX, 0);
 }
 
 static void
-uftdi_tx_purge(uftdi_t *uf)
+uftdi_tx_purge(uftdi_if_t *ui)
 {
-	(void) uftdi_send_command(uf, uf->uf_port,
+	(void) uftdi_send_command(ui->ui_parent, ui->ui_port,
 	    FTDI_SIO_RESET, FTDI_SIO_RESET_PURGE_TX, 0);
 }
 
@@ -400,13 +435,13 @@ uftdi_tx_purge(uftdi_t *uf)
  * Is the device transmit buffer empty?
  */
 static bool
-uftdi_tx_empty(uftdi_t *uf)
+uftdi_tx_empty(uftdi_t *uf, uftdi_if_t *ui)
 {
 	const uint8_t txempty = FTDI_LSR_STATUS_TEMT | FTDI_LSR_STATUS_THRE;
 
 	VERIFY(MUTEX_HELD(&uf->uf_mutex));
 
-	return ((uf->uf_last_lsr & txempty) == txempty);
+	return ((ui->ui_last_lsr & txempty) == txempty);
 }
 
 /*
@@ -415,8 +450,10 @@ uftdi_tx_empty(uftdi_t *uf)
  * value, followed by a single byte of data.
  */
 static bool
-uftdi_rx_error(uftdi_t *uf, mblk_t *mp, uint8_t lsr)
+uftdi_rx_error(uftdi_if_t *ui, mblk_t *mp, uint8_t lsr)
 {
+	uftdi_t *uf = ui->ui_parent;
+
 	VERIFY(MUTEX_HELD(&uf->uf_mutex));
 
 	serdev_error_t sre = 0;
@@ -471,7 +508,7 @@ uftdi_rx_error(uftdi_t *uf, mblk_t *mp, uint8_t lsr)
 		}
 		VERIFY3U(MBLKL(brk), ==, 2);
 
-		serdev_handle_rx(uf->uf_serdev, brk);
+		serdev_handle_rx(ui->ui_serdev, brk);
 		error_sent = true;
 
 	} while (MBLKL(mp) > 0);
@@ -480,29 +517,29 @@ uftdi_rx_error(uftdi_t *uf, mblk_t *mp, uint8_t lsr)
 }
 
 static void
-uftdi_pipe_in_complete(uftdi_t *uf)
+uftdi_pipe_in_complete(uftdi_t *uf, uftdi_if_t *ui)
 {
 	mutex_enter(&uf->uf_mutex);
-	uftdi_pipe_release(uf, &uf->uf_pipe_in);
+	uftdi_pipe_release(uf, ui, &ui->ui_pipe_in);
 
 	/*
 	 * Continue receiving:
 	 */
-	uftdi_rx_start(uf);
+	uftdi_rx_start(uf, ui);
 	mutex_exit(&uf->uf_mutex);
 }
 
 static void
 uftdi_pipe_in_err(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 {
-	uftdi_t *uf = (uftdi_t *)req->bulk_client_private;
+	uftdi_if_t *ui = (uftdi_if_t *)req->bulk_client_private;
 
 	/*
 	 * If there was an error, just free the request and try again.
 	 */
 	usb_free_bulk_req(req);
 
-	uftdi_pipe_in_complete(uf);
+	uftdi_pipe_in_complete(ui->ui_parent, ui);
 }
 
 /*
@@ -511,7 +548,8 @@ uftdi_pipe_in_err(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 static void
 uftdi_pipe_in_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 {
-	uftdi_t *uf = (uftdi_t *)req->bulk_client_private;
+	uftdi_if_t *ui = (uftdi_if_t *)req->bulk_client_private;
+	uftdi_t *uf = ui->ui_parent;
 	mblk_t *mp = req->bulk_data;
 
 	VERIFY3U(req->bulk_completion_reason, ==, USB_CR_OK);
@@ -535,23 +573,23 @@ uftdi_pipe_in_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 	uint8_t rxerr = lsr & FTDI_LSR_RX_ERR;
 
 	mutex_enter(&uf->uf_mutex);
-	if (uf->uf_last_msr != msr) {
+	if (ui->ui_last_msr != msr) {
 		/*
 		 * The MSR value has changed.  We need to save the updated
 		 * value and report the change to the serdev framework.
 		 */
-		uf->uf_last_msr = msr;
-		serdev_handle_report_status(uf->uf_serdev);
+		ui->ui_last_msr = msr;
+		serdev_handle_report_status(ui->ui_serdev);
 	}
 
-	if (uf->uf_last_lsr != lsr) {
+	if (ui->ui_last_lsr != lsr) {
 		/*
 		 * The LSR value has changed.  We need to save the updated
 		 * value.  If uftdi_serdev_drain() is waiting for the output
 		 * buffer to drain, we need to wake it up so that it can check
 		 * the THRE and TEMT bits.
 		 */
-		uf->uf_last_lsr = lsr;
+		ui->ui_last_lsr = lsr;
 		cv_broadcast(&uf->uf_cv);
 	}
 
@@ -573,7 +611,7 @@ uftdi_pipe_in_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 			 * received, each byte marked with the detected error.
 			 */
 			report_error = true;
-		} else if (uf->uf_last_rxerr != rxerr) {
+		} else if (ui->ui_last_rxerr != rxerr) {
 			/*
 			 * We did not receive any data, but the error bits have
 			 * a different value from the last time we communicated
@@ -586,13 +624,13 @@ uftdi_pipe_in_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 	}
 
 	if (report_error) {
-		if (uftdi_rx_error(uf, mp, lsr)) {
+		if (uftdi_rx_error(ui, mp, lsr)) {
 			/*
 			 * If we were able to report the error condition to the
 			 * framework, we can update our cached copy of the
 			 * receive error bits.
 			 */
-			uf->uf_last_rxerr = rxerr;
+			ui->ui_last_rxerr = rxerr;
 		}
 	} else if (MBLKL(mp) > 0) {
 		/*
@@ -600,7 +638,7 @@ uftdi_pipe_in_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 		 * USB request and pass it to the framework.
 		 */
 		req->bulk_data = NULL;
-		serdev_handle_rx(uf->uf_serdev, mp);
+		serdev_handle_rx(ui->ui_serdev, mp);
 	}
 
 	mutex_exit(&uf->uf_mutex);
@@ -608,22 +646,22 @@ uftdi_pipe_in_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 done:
 	usb_free_bulk_req(req);
 
-	uftdi_pipe_in_complete(uf);
+	uftdi_pipe_in_complete(uf, ui);
 }
 
 static void
-uftdi_rx_start(uftdi_t *uf)
+uftdi_rx_start(uftdi_t *uf, uftdi_if_t *ui)
 {
 	VERIFY(MUTEX_HELD(&uf->uf_mutex));
 
-	if (!serdev_handle_running_rx(uf->uf_serdev)) {
+	if (!serdev_handle_running_rx(ui->ui_serdev)) {
 		/*
 		 * The framework has requested that we stop receiving.
 		 */
 		return;
 	}
 
-	if (!uftdi_pipe_hold(uf, &uf->uf_pipe_in)) {
+	if (!uftdi_pipe_hold(uf, ui, &ui->ui_pipe_in)) {
 		/*
 		 * The bulk input pipe is busy.
 		 */
@@ -633,53 +671,54 @@ uftdi_rx_start(uftdi_t *uf)
 	mutex_exit(&uf->uf_mutex);
 
 	usb_bulk_req_t *br = usb_alloc_bulk_req(uf->uf_dip,
-	    uf->uf_pipe_in.up_bufsz, USB_FLAGS_SLEEP);
-	br->bulk_len = uf->uf_pipe_in.up_bufsz;
+	    ui->ui_pipe_in.up_bufsz, USB_FLAGS_SLEEP);
+	br->bulk_len = ui->ui_pipe_in.up_bufsz;
 	br->bulk_cb = uftdi_pipe_in_cb;
 	br->bulk_exc_cb = uftdi_pipe_in_err;
-	br->bulk_client_private = (usb_opaque_t)uf;
+	br->bulk_client_private = (usb_opaque_t)ui;
 	br->bulk_attributes = USB_ATTRS_AUTOCLEARING | USB_ATTRS_SHORT_XFER_OK;
 
-	int r = usb_pipe_bulk_xfer(uf->uf_pipe_in.up_pipe, br, 0);
+	int r = usb_pipe_bulk_xfer(ui->ui_pipe_in.up_pipe, br, 0);
 	if (r != USB_SUCCESS) {
 		usb_free_bulk_req(br);
 	}
 
 	mutex_enter(&uf->uf_mutex);
 	if (r != USB_SUCCESS) {
-		uftdi_pipe_release(uf, &uf->uf_pipe_in);
+		uftdi_pipe_release(uf, ui, &ui->ui_pipe_in);
 	}
 }
 
 static void
-uftdi_pipe_out_complete(uftdi_t *uf)
+uftdi_pipe_out_complete(uftdi_t *uf, uftdi_if_t *ui)
 {
 	mutex_enter(&uf->uf_mutex);
-	uftdi_pipe_release(uf, &uf->uf_pipe_out);
+	uftdi_pipe_release(uf, ui, &ui->ui_pipe_out);
 
 	/*
 	 * Continue transmitting:
 	 */
-	uftdi_tx_start(uf);
+	uftdi_tx_start(uf, ui);
 	mutex_exit(&uf->uf_mutex);
 }
 
 static void
 uftdi_pipe_out_cb(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 {
-	uftdi_t *uf = (uftdi_t *)req->bulk_client_private;
+	uftdi_if_t *ui = (uftdi_if_t *)req->bulk_client_private;
 
 	VERIFY3U(req->bulk_completion_reason, ==, USB_CR_OK);
 
 	usb_free_bulk_req(req);
 
-	uftdi_pipe_out_complete(uf);
+	uftdi_pipe_out_complete(ui->ui_parent, ui);
 }
 
 static void
 uftdi_pipe_out_err(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 {
-	uftdi_t *uf = (uftdi_t *)req->bulk_client_private;
+	uftdi_if_t *ui = (uftdi_if_t *)req->bulk_client_private;
+	uftdi_t *uf = ui->ui_parent;
 	mblk_t *mp = req->bulk_data;
 
 	if (mp != NULL && MBLKL(mp) > 0) {
@@ -689,10 +728,10 @@ uftdi_pipe_out_err(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 		 * again.
 		 */
 		mutex_enter(&uf->uf_mutex);
-		if (uf->uf_tx_mp != NULL) {
-			linkb(mp, uf->uf_tx_mp);
+		if (ui->ui_tx_mp != NULL) {
+			linkb(mp, ui->ui_tx_mp);
 		}
-		uf->uf_tx_mp = mp;
+		ui->ui_tx_mp = mp;
 		mutex_exit(&uf->uf_mutex);
 
 		req->bulk_data = NULL;
@@ -700,23 +739,23 @@ uftdi_pipe_out_err(usb_pipe_handle_t pipe, usb_bulk_req_t *req)
 
 	usb_free_bulk_req(req);
 
-	uftdi_pipe_out_complete(uf);
+	uftdi_pipe_out_complete(uf, ui);
 }
 
 static void
-uftdi_tx_start(uftdi_t *uf)
+uftdi_tx_start(uftdi_t *uf, uftdi_if_t *ui)
 {
 	VERIFY(MUTEX_HELD(&uf->uf_mutex));
-	VERIFY(uf->uf_state != UFTDI_ST_CLOSED);
+	VERIFY(ui->ui_state != UFTDI_ST_CLOSED);
 
-	if (!serdev_handle_running_tx(uf->uf_serdev)) {
+	if (!serdev_handle_running_tx(ui->ui_serdev)) {
 		/*
 		 * The framework has requested we stop transmitting.
 		 */
 		return;
 	}
 
-	if (!uftdi_pipe_hold(uf, &uf->uf_pipe_out)) {
+	if (!uftdi_pipe_hold(uf, ui, &ui->ui_pipe_out)) {
 		/*
 		 * The bulk output pipe is busy.
 		 */
@@ -726,27 +765,27 @@ uftdi_tx_start(uftdi_t *uf)
 	/*
 	 * Check to see if we have data left to send to the device:
 	 */
-	if (uf->uf_tx_mp == NULL) {
-		uftdi_pipe_release(uf, &uf->uf_pipe_out);
+	if (ui->ui_tx_mp == NULL) {
+		uftdi_pipe_release(uf, ui, &ui->ui_pipe_out);
 
 		/*
 		 * Request more data from the framework, and wake anybody that
 		 * was sleeping waiting for a drain condition.
 		 */
-		serdev_handle_report_tx(uf->uf_serdev);
+		serdev_handle_report_tx(ui->ui_serdev);
 		cv_broadcast(&uf->uf_cv);
 		return;
 	}
 
 	mblk_t *mp;
-	size_t max_size = uf->uf_pipe_out.up_bufsz;
-	if (MBLKL(uf->uf_tx_mp) <= max_size) {
+	size_t max_size = ui->ui_pipe_out.up_bufsz;
+	if (MBLKL(ui->ui_tx_mp) <= max_size) {
 		/*
 		 * We can pass this block on without allocating or copying, so
 		 * just do that.
 		 */
-		mp = uf->uf_tx_mp;
-		uf->uf_tx_mp = unlinkb(mp);
+		mp = ui->ui_tx_mp;
+		ui->ui_tx_mp = unlinkb(mp);
 	} else {
 		/*
 		 * Try to allocate a new message of the appropriate length for
@@ -759,14 +798,14 @@ uftdi_tx_start(uftdi_t *uf)
 			 * nothing we can do for now.
 			 */
 			mutex_enter(&uf->uf_mutex);
-			uftdi_pipe_release(uf, &uf->uf_pipe_out);
+			uftdi_pipe_release(uf, ui, &ui->ui_pipe_out);
 			return;
 		}
 
 		mutex_enter(&uf->uf_mutex);
-		VERIFY3S(MBLKL(uf->uf_tx_mp), >, max_size);
-		bcopy(uf->uf_tx_mp->b_rptr, mp->b_wptr, max_size);
-		uf->uf_tx_mp->b_rptr += max_size;
+		VERIFY3S(MBLKL(ui->ui_tx_mp), >, max_size);
+		bcopy(ui->ui_tx_mp->b_rptr, mp->b_wptr, max_size);
+		ui->ui_tx_mp->b_rptr += max_size;
 		mp->b_wptr += max_size;
 		VERIFY3S(MBLKL(mp), ==, max_size);
 	}
@@ -778,10 +817,10 @@ uftdi_tx_start(uftdi_t *uf)
 	br->bulk_len = MBLKL(mp);
 	br->bulk_cb = uftdi_pipe_out_cb;
 	br->bulk_exc_cb = uftdi_pipe_out_err;
-	br->bulk_client_private = (usb_opaque_t)uf;
+	br->bulk_client_private = (usb_opaque_t)ui;
 	br->bulk_attributes = USB_ATTRS_AUTOCLEARING;
 
-	int r = usb_pipe_bulk_xfer(uf->uf_pipe_out.up_pipe, br, 0);
+	int r = usb_pipe_bulk_xfer(ui->ui_pipe_out.up_pipe, br, 0);
 
 	if (r != USB_SUCCESS) {
 		br->bulk_data = NULL;
@@ -795,12 +834,12 @@ uftdi_tx_start(uftdi_t *uf)
 		 * If we could not send to the device, put the unsent data back
 		 * at the head of the queue.
 		 */
-		if (uf->uf_tx_mp != NULL) {
-			linkb(mp, uf->uf_tx_mp);
+		if (ui->ui_tx_mp != NULL) {
+			linkb(mp, ui->ui_tx_mp);
 		}
-		uf->uf_tx_mp = mp;
+		ui->ui_tx_mp = mp;
 
-		uftdi_pipe_release(uf, &uf->uf_pipe_out);
+		uftdi_pipe_release(uf, ui, &ui->ui_pipe_out);
 	}
 }
 
@@ -876,7 +915,7 @@ uftdi_usb_change_start(uftdi_t *uf, bool hotplug)
 	VERIFY(MUTEX_HELD(&uf->uf_mutex));
 
 	for (;;) {
-		if (hotplug && uf->uf_state == UFTDI_ST_DETACHING) {
+		if (hotplug && uf->uf_flags & UFTDI_FL_DETACHING) {
 			return (false);
 		}
 
@@ -973,13 +1012,19 @@ uftdi_usb_reconnect(dev_info_t *dip)
 		goto done;
 	}
 
-	if (uf->uf_state == UFTDI_ST_OPEN) {
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		uftdi_if_t *ui = uf->uf_if[i];
+
+		if (ui->ui_state != UFTDI_ST_OPEN) {
+			continue;
+		}
+
 		/*
-		 * If we were already open, reset the device and program it
-		 * with the last set of register values we used.
+		 * If we were already open for this interface, reset it and
+		 * program it with the last set of register values we used.
 		 */
-		(void) uftdi_reset(uf);
-		(void) uftdi_program(uf, &uf->uf_last_regs);
+		(void) uftdi_reset(ui);
+		(void) uftdi_program(ui, &ui->ui_last_regs);
 	}
 
 	mutex_enter(&uf->uf_mutex);
@@ -999,23 +1044,24 @@ usb_event_t uftdi_usb_events = {
 static int
 uftdi_serdev_open(void *arg)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
 	if (!(uf->uf_flags & UFTDI_FL_USB_CONNECTED) ||
-	    uf->uf_state != UFTDI_ST_CLOSED) {
+	    ui->ui_state != UFTDI_ST_CLOSED) {
 		mutex_exit(&uf->uf_mutex);
 		return (EIO);
 	}
-	uf->uf_state = UFTDI_ST_OPENING;
+	ui->ui_state = UFTDI_ST_OPENING;
 	mutex_exit(&uf->uf_mutex);
 
 	/*
 	 * Reset the device.
 	 */
-	if (uftdi_reset(uf) != USB_SUCCESS) {
+	if (uftdi_reset(ui) != USB_SUCCESS) {
 		mutex_enter(&uf->uf_mutex);
-		uf->uf_state = UFTDI_ST_CLOSED;
+		ui->ui_state = UFTDI_ST_CLOSED;
 		mutex_exit(&uf->uf_mutex);
 		return (EIO);
 	}
@@ -1029,16 +1075,16 @@ uftdi_serdev_open(void *arg)
 	uftdi_regs_set_datamode(&ur, 8, SERDEV_PARITY_NONE, 1);
 	uftdi_regs_set_flowcontrol(&ur, true);
 
-	if (uftdi_program(uf, &ur) != USB_SUCCESS) {
+	if (uftdi_program(ui, &ur) != USB_SUCCESS) {
 		mutex_enter(&uf->uf_mutex);
-		uf->uf_state = UFTDI_ST_CLOSED;
+		ui->ui_state = UFTDI_ST_CLOSED;
 		mutex_exit(&uf->uf_mutex);
 		return (EIO);
 	}
 
 	mutex_enter(&uf->uf_mutex);
-	uf->uf_state = UFTDI_ST_OPEN;
-	uftdi_rx_start(uf);
+	ui->ui_state = UFTDI_ST_OPEN;
+	uftdi_rx_start(uf, ui);
 	mutex_exit(&uf->uf_mutex);
 
 	return (0);
@@ -1047,25 +1093,26 @@ uftdi_serdev_open(void *arg)
 static int
 uftdi_serdev_close(void *arg)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
-	VERIFY3U(uf->uf_state, ==, UFTDI_ST_OPEN);
-	uf->uf_state = UFTDI_ST_CLOSING;
+	VERIFY3U(ui->ui_state, ==, UFTDI_ST_OPEN);
+	ui->ui_state = UFTDI_ST_CLOSING;
 
 	/*
 	 * Wait for the pipes to be idle.
 	 */
-	uftdi_pipe_wait(uf, &uf->uf_pipe_in);
-	uftdi_pipe_wait(uf, &uf->uf_pipe_out);
+	uftdi_pipe_wait(uf, ui, &ui->ui_pipe_in);
+	uftdi_pipe_wait(uf, ui, &ui->ui_pipe_out);
 
 	/*
 	 * Free any buffered data:
 	 */
-	mblk_t *mprx = uf->uf_rx_mp;
-	uf->uf_rx_mp = NULL;
-	mblk_t *mptx = uf->uf_tx_mp;
-	uf->uf_tx_mp = NULL;
+	mblk_t *mprx = ui->ui_rx_mp;
+	ui->ui_rx_mp = NULL;
+	mblk_t *mptx = ui->ui_tx_mp;
+	ui->ui_tx_mp = NULL;
 
 	mutex_exit(&uf->uf_mutex);
 
@@ -1075,12 +1122,12 @@ uftdi_serdev_close(void *arg)
 	/*
 	 * Purge the on-device buffers:
 	 */
-	uftdi_tx_purge(uf);
-	uftdi_rx_purge(uf);
+	uftdi_tx_purge(ui);
+	uftdi_rx_purge(ui);
 
 	mutex_enter(&uf->uf_mutex);
-	VERIFY3U(uf->uf_state, ==, UFTDI_ST_CLOSING);
-	uf->uf_state = UFTDI_ST_CLOSED;
+	VERIFY3U(ui->ui_state, ==, UFTDI_ST_CLOSING);
+	ui->ui_state = UFTDI_ST_CLOSED;
 	mutex_exit(&uf->uf_mutex);
 
 	return (0);
@@ -1089,17 +1136,19 @@ uftdi_serdev_close(void *arg)
 void
 uftdi_serdev_rx(void *arg)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
-	uftdi_rx_start(uf);
+	uftdi_rx_start(uf, ui);
 	mutex_exit(&uf->uf_mutex);
 }
 
 static int
 uftdi_serdev_tx(void *arg, mblk_t *mp)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
 	if (mp != NULL) {
@@ -1107,15 +1156,15 @@ uftdi_serdev_tx(void *arg, mblk_t *mp)
 		 * XXX I don't think we expect overlapping transmission
 		 * requests from serdev?
 		 */
-		VERIFY3P(uf->uf_tx_mp, ==, NULL);
-		uf->uf_tx_mp = mp;
+		VERIFY3P(ui->ui_tx_mp, ==, NULL);
+		ui->ui_tx_mp = mp;
 	}
 
 	/*
 	 * Whether we were given data to send or not, we need to resume
 	 * transmission if we were previously stopped for flow control.
 	 */
-	uftdi_tx_start(uf);
+	uftdi_tx_start(uf, ui);
 	mutex_exit(&uf->uf_mutex);
 
 	return (0);
@@ -1124,16 +1173,17 @@ uftdi_serdev_tx(void *arg, mblk_t *mp)
 static int
 uftdi_serdev_flush_rx(void *arg)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
-	mblk_t *mp = uf->uf_rx_mp;
-	uf->uf_rx_mp = NULL;
+	mblk_t *mp = ui->ui_rx_mp;
+	ui->ui_rx_mp = NULL;
 	mutex_exit(&uf->uf_mutex);
 
 	freemsg(mp);
 
-	uftdi_rx_purge(uf);
+	uftdi_rx_purge(ui);
 
 	return (0);
 }
@@ -1141,16 +1191,17 @@ uftdi_serdev_flush_rx(void *arg)
 static int
 uftdi_serdev_flush_tx(void *arg)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
-	mblk_t *mp = uf->uf_tx_mp;
-	uf->uf_tx_mp = NULL;
+	mblk_t *mp = ui->ui_tx_mp;
+	ui->ui_tx_mp = NULL;
 	mutex_exit(&uf->uf_mutex);
 
 	freemsg(mp);
 
-	uftdi_tx_purge(uf);
+	uftdi_tx_purge(ui);
 
 	return (0);
 }
@@ -1158,10 +1209,11 @@ uftdi_serdev_flush_tx(void *arg)
 static int
 uftdi_serdev_drain(void *arg, hrtime_t deadline)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
-	VERIFY3U(uf->uf_state, ==, UFTDI_ST_OPEN);
+	VERIFY3U(ui->ui_state, ==, UFTDI_ST_OPEN);
 
 	/*
 	 * Draining the outbound data is a two-step process. First we must
@@ -1170,7 +1222,7 @@ uftdi_serdev_drain(void *arg, hrtime_t deadline)
 	 */
 	int error = 0;
 	for (;;) {
-		if (uf->uf_tx_mp == NULL && uftdi_tx_empty(uf)) {
+		if (ui->ui_tx_mp == NULL && uftdi_tx_empty(uf, ui)) {
 			mutex_exit(&uf->uf_mutex);
 			return (0);
 		}
@@ -1201,17 +1253,18 @@ uftdi_serdev_drain(void *arg, hrtime_t deadline)
 static int
 uftdi_serdev_break(void *arg, bool on)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	mutex_enter(&uf->uf_mutex);
-	uint16_t data = uf->uf_last_regs.ur_data;
+	uint16_t data = ui->ui_last_regs.ur_data;
 	mutex_exit(&uf->uf_mutex);
 
 	if (on) {
 		data |= FTDI_SIO_SET_BREAK;
 	}
 
-	if (uftdi_send_command(uf, uf->uf_port,
+	if (uftdi_send_command(uf, ui->ui_port,
 	    FTDI_SIO_SET_DATA, data, 0) != USB_SUCCESS) {
 		return (EIO);
 	}
@@ -1222,8 +1275,8 @@ uftdi_serdev_break(void *arg, bool on)
 static int
 uftdi_serdev_params_set(void *arg, serdev_params_t *p)
 {
-	uftdi_t *uf = arg;
-	uftdi_regs_t ur = uf->uf_last_regs;
+	uftdi_if_t *ui = arg;
+	uftdi_regs_t ur = ui->ui_last_regs;
 
 	uftdi_regs_set_datamode(&ur, serdev_params_char_size(p),
 	    serdev_params_parity(p), serdev_params_stop_bits(p));
@@ -1235,7 +1288,7 @@ uftdi_serdev_params_set(void *arg, serdev_params_t *p)
 		return (EINVAL);
 	}
 
-	if (uftdi_program(uf, &ur) != USB_SUCCESS) {
+	if (uftdi_program(ui, &ur) != USB_SUCCESS) {
 		return (EIO);
 	}
 
@@ -1245,15 +1298,15 @@ uftdi_serdev_params_set(void *arg, serdev_params_t *p)
 static int
 uftdi_serdev_modem_set(void *arg, uint_t mask, uint_t val)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
 	int erts = 0, edtr = 0;
 
 	if (mask & TIOCM_DTR) {
-		edtr = uftdi_set_dtr(uf, (val & TIOCM_DTR) != 0);
+		edtr = uftdi_set_dtr(ui, (val & TIOCM_DTR) != 0);
 	}
 
 	if (mask & TIOCM_RTS) {
-		erts = uftdi_set_rts(uf, (val & TIOCM_RTS) != 0);
+		erts = uftdi_set_rts(ui, (val & TIOCM_RTS) != 0);
 	}
 
 	if (edtr != 0) {
@@ -1265,27 +1318,28 @@ uftdi_serdev_modem_set(void *arg, uint_t mask, uint_t val)
 static int
 uftdi_serdev_modem_get(void *arg, uint_t mask, uint_t *val)
 {
-	uftdi_t *uf = arg;
+	uftdi_if_t *ui = arg;
+	uftdi_t *uf = ui->ui_parent;
 
 	*val = 0;
 
 	mutex_enter(&uf->uf_mutex);
-	if ((mask & TIOCM_CTS) && (uf->uf_last_msr & FTDI_MSR_STATUS_CTS)) {
+	if ((mask & TIOCM_CTS) && (ui->ui_last_msr & FTDI_MSR_STATUS_CTS)) {
 		*val |= TIOCM_CTS;
 	}
-	if ((mask & TIOCM_DSR) && (uf->uf_last_msr & FTDI_MSR_STATUS_DSR)) {
+	if ((mask & TIOCM_DSR) && (ui->ui_last_msr & FTDI_MSR_STATUS_DSR)) {
 		*val |= TIOCM_DSR;
 	}
-	if ((mask & TIOCM_RI) && (uf->uf_last_msr & FTDI_MSR_STATUS_RI)) {
+	if ((mask & TIOCM_RI) && (ui->ui_last_msr & FTDI_MSR_STATUS_RI)) {
 		*val |= TIOCM_RI;
 	}
-	if ((mask & TIOCM_CD) && (uf->uf_last_msr & FTDI_MSR_STATUS_RLSD)) {
+	if ((mask & TIOCM_CD) && (ui->ui_last_msr & FTDI_MSR_STATUS_RLSD)) {
 		*val |= TIOCM_CD;
 	}
-	if ((mask & TIOCM_RTS) && (uf->uf_last_mctl & UFTDI_MODEM_RTS)) {
+	if ((mask & TIOCM_RTS) && (ui->ui_last_mctl & UFTDI_MODEM_RTS)) {
 		*val |= TIOCM_RTS;
 	}
-	if ((mask & TIOCM_DTR) && (uf->uf_last_mctl & UFTDI_MODEM_DTR)) {
+	if ((mask & TIOCM_DTR) && (ui->ui_last_mctl & UFTDI_MODEM_DTR)) {
 		*val |= TIOCM_DTR;
 	}
 	mutex_exit(&uf->uf_mutex);
@@ -1313,8 +1367,25 @@ uftdi_teardown(uftdi_t *uf)
 {
 	dev_info_t *dip = uf->uf_dip;
 
-	VERIFY3U(uf->uf_state, ==, UFTDI_ST_DETACHING);
+	VERIFY(uf->uf_flags & UFTDI_FL_DETACHING);
 	VERIFY3P(uf->uf_usb_thread, ==, curthread);
+
+	/*
+	 * Clean up each per-interface structure that we allocated:
+	 */
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		uftdi_if_t *ui;
+		if ((ui = uf->uf_if[i]) == NULL) {
+			continue;
+		}
+
+		if (ui->ui_serdev != NULL) {
+			serdev_handle_free(ui->ui_serdev);
+		}
+
+		kmem_free(ui, sizeof (*ui));
+		uf->uf_if[i] = NULL;
+	}
 
 	if (uf->uf_setup & UFTDI_SETUP_MUTEX) {
 		mutex_enter(&uf->uf_mutex);
@@ -1336,7 +1407,7 @@ uftdi_teardown(uftdi_t *uf)
 		uf->uf_setup &= ~UFTDI_SETUP_USB_ATTACH;
 	}
 
-	VERIFY0(uf->uf_flags);
+	VERIFY3U(uf->uf_flags, ==, UFTDI_FL_DETACHING);
 	VERIFY0(uf->uf_setup);
 
 	ddi_soft_state_free(uftdi_state, ddi_get_instance(dip));
@@ -1358,19 +1429,12 @@ uftdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	uftdi_t *uf = ddi_get_soft_state(uftdi_state, inst);
 	uf->uf_dip = dip;
-	uf->uf_state = UFTDI_ST_ATTACHING;
 	ddi_set_driver_private(dip, uf);
 
 	/*
 	 * We need to exclude hotplug callbacks until we finish attaching.
 	 */
 	uf->uf_usb_thread = curthread;
-
-	if ((uf->uf_serdev = serdev_handle_alloc(uf, 0, &uftdi_serdev_ops,
-	    KM_SLEEP)) == NULL) {
-		dev_err(dip, CE_WARN, "serdev allocation failure");
-		goto bail;
-	}
 
 	if (usb_client_attach(dip, USBDRV_VERSION, 0) != USB_SUCCESS) {
 		dev_err(dip, CE_WARN, "USB attach failure");
@@ -1396,8 +1460,10 @@ uftdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 * important.  The logic below is a synthesis of device versioning
 	 * facts found in several datasheets and drivers from other operating
 	 * systems.
+	 * XXX
 	 */
 	uf->uf_device_version = uf->uf_usb_dev->dev_descr->bcdDevice;
+	uf->uf_nif = 1;
 	if (uf->uf_usb_dev->dev_curr_cfg->cfg_descr.bNumInterfaces > 1) {
 		/*
 		 * Some models are newer devices that provide multiple ports
@@ -1406,6 +1472,7 @@ uftdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		switch (uf->uf_device_version) {
 		case 0x800:
 			uf->uf_device_type = UFTDI_DEVICE_FT4232H;
+			uf->uf_nif = 4;
 			break;
 		case 0x700:
 			uf->uf_device_type = UFTDI_DEVICE_FT2232H;
@@ -1441,12 +1508,29 @@ uftdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		uf->uf_device_type = UFTDI_DEVICE_FTX;
 	}
 
-	/*
-	 * Some FTDI devices provide multiple ports on separate USB interfaces.
-	 * A survey of available information suggests ports are numbered
-	 * starting at one, rather than at zero like USB interfaces.
-	 */
-	uf->uf_port = uf->uf_usb_dev->dev_curr_if + 1;
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		uftdi_if_t *ui = kmem_zalloc(sizeof (*ui), KM_SLEEP);
+
+		ui->ui_parent = uf;
+		uf->uf_if[i] = ui;
+
+		ui->ui_state = UFTDI_ST_ATTACHING;
+
+		/*
+		 * Some FTDI devices provide multiple ports on separate USB
+		 * interfaces.  A survey of available information suggests
+		 * ports are numbered starting at one, rather than at zero like
+		 * USB interfaces.
+		 */
+		ui->ui_usb_if = uf->uf_usb_dev->dev_curr_if + i;
+		ui->ui_port = ui->ui_usb_if + 1;
+
+		if ((ui->ui_serdev = serdev_handle_alloc(ui, i,
+		    &uftdi_serdev_ops, KM_SLEEP)) == NULL) {
+			dev_err(dip, CE_WARN, "serdev allocation failure");
+			goto bail;
+		}
+	}
 
 	if (usb_register_hotplug_cbs(dip, uftdi_usb_disconnect,
 	    uftdi_usb_reconnect) != USB_SUCCESS) {
@@ -1466,27 +1550,33 @@ uftdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 */
 	mutex_enter(&uf->uf_mutex);
 	uftdi_usb_change_finish(uf);
-	uf->uf_state = UFTDI_ST_CLOSED;
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		uf->uf_if[i]->ui_state = UFTDI_ST_CLOSED;
+	}
 	mutex_exit(&uf->uf_mutex);
 
-	if (serdev_handle_attach(dip, uf->uf_serdev) != DDI_SUCCESS) {
-		dev_err(dip, CE_WARN, "serdev attach failure");
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		if (serdev_handle_attach(dip, uf->uf_if[i]->ui_serdev) !=
+		    DDI_SUCCESS) {
+			dev_err(dip, CE_WARN, "serdev attach failure");
 
-		/*
-		 * Get back control of the USB state so we can tear it down:
-		 */
-		mutex_enter(&uf->uf_mutex);
-		uf->uf_state = UFTDI_ST_DETACHING;
-		uftdi_usb_change_start(uf, false);
-		mutex_exit(&uf->uf_mutex);
+			/*
+			 * Get back control of the USB state so we can tear it
+			 * down:
+			 */
+			mutex_enter(&uf->uf_mutex);
+			uf->uf_flags |= UFTDI_FL_DETACHING;
+			uftdi_usb_change_start(uf, false);
+			mutex_exit(&uf->uf_mutex);
 
-		goto bail;
+			goto bail;
+		}
 	}
 
 	return (0);
 
 bail:
-	uf->uf_state = UFTDI_ST_DETACHING;
+	uf->uf_flags |= UFTDI_FL_DETACHING;
 	uftdi_teardown(uf);
 	return (DDI_FAILURE);
 }
@@ -1501,10 +1591,12 @@ uftdi_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	uftdi_t *uf = ddi_get_soft_state(uftdi_state, ddi_get_instance(dip));
 
 	mutex_enter(&uf->uf_mutex);
-	if (uf->uf_state != UFTDI_ST_CLOSED) {
-		mutex_exit(&uf->uf_mutex);
-		dev_err(dip, CE_WARN, "cannot detach while open");
-		return (DDI_FAILURE);
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		if (uf->uf_if[i]->ui_state != UFTDI_ST_CLOSED) {
+			mutex_exit(&uf->uf_mutex);
+			dev_err(dip, CE_WARN, "cannot detach while open");
+			return (DDI_FAILURE);
+		}
 	}
 
 	/*
@@ -1512,13 +1604,16 @@ uftdi_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	 * immediately because we are detaching, and then wait for them to be
 	 * over.
 	 */
-	uf->uf_state = UFTDI_ST_DETACHING;
+	uf->uf_flags |= UFTDI_FL_DETACHING;
 	uftdi_usb_change_start(uf, false);
 	mutex_exit(&uf->uf_mutex);
 
-	if (serdev_handle_detach(uf->uf_serdev) != DDI_SUCCESS) {
-		dev_err(dip, CE_WARN, "serdev detach failure");
-		return (DDI_FAILURE);
+	for (uint_t i = 0; i < uf->uf_nif; i++) {
+		if (serdev_handle_detach(uf->uf_if[i]->ui_serdev) !=
+		    DDI_SUCCESS) {
+			dev_err(dip, CE_WARN, "serdev detach failure");
+			return (DDI_FAILURE);
+		}
 	}
 
 	uftdi_teardown(uf);

@@ -45,6 +45,7 @@ dir  path=usr/share/man/man7d
 file path=usr/share/man/man7d/usbftdi.7d
 driver name=usbftdi perms="* 0666 root sys" \
     alias=usb403,6001 \
+    alias=usb403,6011 \
     alias=usb403,6014 \
     alias=usb403,6015 \
     alias=usb403,cc48 \

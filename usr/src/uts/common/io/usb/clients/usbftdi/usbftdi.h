@@ -27,17 +27,19 @@
 extern "C" {
 #endif
 
+#define	UFTDI_MAX_PORTS			4
+
 typedef enum uftdi_state {
 	UFTDI_ST_ATTACHING = 0,
 	UFTDI_ST_CLOSED,
 	UFTDI_ST_OPENING,
 	UFTDI_ST_OPEN,
 	UFTDI_ST_CLOSING,
-	UFTDI_ST_DETACHING,
 } uftdi_state_t;
 
 typedef enum uftdi_flags {
 	UFTDI_FL_USB_CONNECTED =	(1 << 0),
+	UFTDI_FL_DETACHING =		(1 << 1),
 } uftdi_flags_t;
 
 typedef enum uftdi_modem_control {
@@ -89,27 +91,25 @@ typedef struct uftdi_pipe {
 	size_t				up_bufsz;
 } uftdi_pipe_t;
 
+typedef struct uftdi_if uftdi_if_t;
+
 /*
- * per device state structure
+ * Per-device state:
  */
 typedef struct uftdi {
 	kmutex_t			uf_mutex;
 	kcondvar_t			uf_cv;
 
 	dev_info_t			*uf_dip;
-	serdev_handle_t			*uf_serdev;
 
 	uftdi_setup_t			uf_setup;
-	uftdi_state_t			uf_state;
 	uftdi_flags_t			uf_flags;
 
-	/*
-	 * FTDI port number, as passed in control messages, and other device
-	 * identification information:
-	 */
-	uint8_t				uf_port;
 	uint16_t			uf_device_version;
 	utfdi_device_type_t		uf_device_type;
+
+	uint_t				uf_nif;
+	uftdi_if_t			*uf_if[UFTDI_MAX_PORTS];
 
 	/*
 	 * To modify USB device state, you must uftdi_usb_change_start() to
@@ -118,22 +118,38 @@ typedef struct uftdi {
 	 */
 	kthread_t			*uf_usb_thread;
 	usb_client_dev_data_t		*uf_usb_dev;
-	uftdi_pipe_t			uf_pipe_in;
-	uftdi_pipe_t			uf_pipe_out;
+} uftdi_t;
 
-	mblk_t				*uf_rx_mp;
-	mblk_t				*uf_tx_mp;
+struct uftdi_if {
+	uftdi_t				*ui_parent;
+
+	serdev_handle_t			*ui_serdev;
+
+	uftdi_state_t			ui_state;
+
+	/*
+	 * FTDI port number, as passed in control messages, and other device
+	 * identification information:
+	 */
+	uint8_t				ui_port;
+
+	uint_t				ui_usb_if;
+	uftdi_pipe_t			ui_pipe_in;
+	uftdi_pipe_t			ui_pipe_out;
+
+	mblk_t				*ui_rx_mp;
+	mblk_t				*ui_tx_mp;
 
 	/*
 	 * Cached values of parameters sent to, and status received from, the
 	 * device:
 	 */
-	uftdi_regs_t			uf_last_regs;
-	uftdi_modem_control_t		uf_last_mctl;
-	uint8_t				uf_last_msr; /* Modem Status Register */
-	uint8_t				uf_last_lsr; /* Line Status Register */
-	uint8_t				uf_last_rxerr; /* LSR RX errors */
-} uftdi_t;
+	uftdi_regs_t			ui_last_regs;
+	uftdi_modem_control_t		ui_last_mctl;
+	uint8_t				ui_last_msr; /* Modem Status Register */
+	uint8_t				ui_last_lsr; /* Line Status Register */
+	uint8_t				ui_last_rxerr; /* LSR RX errors */
+};
 
 #ifdef	__cplusplus
 }
