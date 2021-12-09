@@ -19,7 +19,7 @@ static int
 serdev_bus_ctl(dev_info_t *dip, dev_info_t *rdip, ddi_ctl_enum_t ctlop,
     void *arg, void *result)
 {
-	const serdev_handle_t *srdh;
+	serdev_handle_t *srdh;
 	dev_info_t *child;
 	char buf[32];
 
@@ -69,6 +69,16 @@ serdev_bus_ctl(dev_info_t *dip, dev_info_t *rdip, ddi_ctl_enum_t ctlop,
 			return (DDI_FAILURE);
 		}
 
+		if ((srdh = ddi_get_parent_data(child)) != NULL) {
+			/*
+			 * Destruction of the child node may race with handle
+			 * detach.  Clear out the handle's reference to this
+			 * node before we are freed.
+			 */
+			VERIFY(DEVI_BUSY_OWNED(dip));
+			srdh->srdh_child = NULL;
+		}
+
 		ddi_set_name_addr(child, NULL);
 		return (DDI_SUCCESS);
 
@@ -88,8 +98,8 @@ serdev_bus_ctl(dev_info_t *dip, dev_info_t *rdip, ddi_ctl_enum_t ctlop,
 
 static struct bus_ops serdev_bus_ops = {
 	.busops_rev =		BUSO_REV,
-	.bus_prop_op =		ddi_bus_prop_op,
 	.bus_ctl =		serdev_bus_ctl,
+	.bus_prop_op =		ddi_bus_prop_op,
 
 	/*
 	 * We do not map any memory nor do any DMA:
@@ -238,11 +248,11 @@ int
 serdev_handle_attach(dev_info_t *dip, serdev_handle_t *srdh)
 {
 	int r;
-	dev_info_t *child;
 
-	if (srdh->srdh_child != NULL) {
+	if (srdh->srdh_parent != NULL) {
 		return (DDI_SUCCESS);
 	}
+	srdh->srdh_parent = dip;
 
 	/*
 	 * In the distant past, it was common for serial lines to be used with
@@ -271,24 +281,28 @@ serdev_handle_attach(dev_info_t *dip, serdev_handle_t *srdh)
 	}
 
 	if (ndi_devi_alloc(dip, "serdev", (pnode_t)DEVI_SID_NODEID,
-	    &child) != NDI_SUCCESS) {
+	    &srdh->srdh_child) != NDI_SUCCESS) {
 		dev_err(dip, CE_WARN, "!failed to allocate child dip for "
 		    "port %u", srdh->srdh_port);
-		return (DDI_FAILURE);
+		goto bail;
 	}
 
-	ddi_set_parent_data(child, srdh);
-	srdh->srdh_child = child;
+	ddi_set_parent_data(srdh->srdh_child, srdh);
 
-	if ((r = ndi_devi_online(child, 0)) != NDI_SUCCESS) {
+	if ((r = ndi_devi_online(srdh->srdh_child, 0)) != NDI_SUCCESS) {
 		dev_err(dip, CE_WARN, "!failed to online child dip for "
 		    "port %u: %d", srdh->srdh_port, r);
-		(void) ndi_devi_free(child);
-		srdh->srdh_child = NULL;
-		return (DDI_FAILURE);
+		(void) ndi_devi_free(srdh->srdh_child);
+		goto bail;
 	}
 
 	return (DDI_SUCCESS);
+
+bail:
+	srdh->srdh_child = NULL;
+	srdh->srdh_parent = NULL;
+	srdh->srdh_ignore_cd = false;
+	return (DDI_FAILURE);
 }
 
 int
@@ -296,33 +310,40 @@ serdev_handle_detach(serdev_handle_t *srdh)
 {
 	int r = DDI_FAILURE;
 
-	if (srdh->srdh_child == NULL) {
+	if (srdh->srdh_parent == NULL) {
 		return (DDI_SUCCESS);
 	}
 
 	int circular;
-	dev_info_t *parent = ddi_get_parent(srdh->srdh_child);
-	ndi_devi_enter(parent, &circular);
+	ndi_devi_enter(srdh->srdh_parent, &circular);
 
-	if (i_ddi_node_state(srdh->srdh_child) < DS_INITIALIZED) {
+	if (srdh->srdh_child == NULL) {
+		/*
+		 * The node was already removed by another thread.
+		 */
+		r = DDI_SUCCESS;
+	} else if (i_ddi_node_state(srdh->srdh_child) < DS_INITIALIZED) {
 		if (ddi_remove_child(srdh->srdh_child, 0) == DDI_SUCCESS) {
 			r = DDI_SUCCESS;
 		}
 	} else {
 		char *name = kmem_alloc(MAXNAMELEN + 1, KM_SLEEP);
 		(void) ddi_deviname(srdh->srdh_child, name);
-		(void) devfs_clean(parent, name + 1, DV_CLEAN_FORCE);
-		if (ndi_devi_unconfig_one(parent, name + 1, NULL,
+		(void) devfs_clean(srdh->srdh_parent, name + 1, DV_CLEAN_FORCE);
+		if (ndi_devi_unconfig_one(srdh->srdh_parent, name + 1, NULL,
 		    NDI_DEVI_REMOVE | NDI_UNCONFIG) == NDI_SUCCESS) {
 			r = DDI_SUCCESS;
 		}
 	}
 
+	ndi_devi_exit(srdh->srdh_parent, circular);
+
 	if (r == DDI_SUCCESS) {
 		srdh->srdh_child = NULL;
+		srdh->srdh_parent = NULL;
+		srdh->srdh_ignore_cd = false;
 	}
 
-	ndi_devi_exit(parent, circular);
 	return (r);
 }
 
@@ -455,6 +476,7 @@ void
 serdev_handle_free(serdev_handle_t *srdh)
 {
 	VERIFY3P(srdh->srdh_child, ==, NULL);
+	VERIFY3P(srdh->srdh_parent, ==, NULL);
 
 	kmem_free(srdh, sizeof (*srdh));
 }

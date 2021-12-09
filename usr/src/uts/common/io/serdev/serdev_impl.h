@@ -99,6 +99,7 @@ struct serdev_handle {
 	uint_t				srdh_port;
 	bool				srdh_ignore_cd;
 	void				*srdh_private;
+	dev_info_t			*srdh_parent;
 	dev_info_t			*srdh_child;
 	serdev_ops_t			srdh_ops;
 };

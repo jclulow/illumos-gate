@@ -127,14 +127,28 @@ uftdi_pipe_hold(uftdi_t *uf, uftdi_if_t *ui, uftdi_pipe_t *up)
 static void
 uftdi_pipe_release(uftdi_t *uf, uftdi_if_t *ui, uftdi_pipe_t *up)
 {
+	VERIFY(MUTEX_HELD(&uf->uf_mutex));
+
 	VERIFY3U(up->up_state, ==, UFTDI_PIPE_BUSY);
-	up->up_state = UFTDI_PIPE_IDLE;
+
+	if (up->up_pipe == 0) {
+		/*
+		 * uftdi_pipe_remove() was called to tear down the pipe while
+		 * the pipe was in use.
+		 */
+		up->up_state = UFTDI_PIPE_CLOSED;
+	} else {
+		up->up_state = UFTDI_PIPE_IDLE;
+	}
+
 	cv_broadcast(&uf->uf_cv);
 }
 
 static void
 uftdi_pipe_wait(uftdi_t *uf, uftdi_if_t *ui, uftdi_pipe_t *up)
 {
+	VERIFY(MUTEX_HELD(&uf->uf_mutex));
+
 	while (up->up_state == UFTDI_PIPE_BUSY) {
 		cv_wait(&uf->uf_cv, &uf->uf_mutex);
 	}
@@ -155,7 +169,14 @@ static usb_pipe_handle_t
 uftdi_pipe_remove(uftdi_pipe_t *up)
 {
 	VERIFY3U(up->up_state, !=, UFTDI_PIPE_CLOSED);
-	up->up_state = UFTDI_PIPE_CLOSED;
+	if (up->up_state == UFTDI_PIPE_IDLE) {
+		/*
+		 * If the pipe is idle, mark it closed immediately.  Otherwise
+		 * we want to wait until the in flight request has released it
+		 * before continuing.
+		 */
+		up->up_state = UFTDI_PIPE_CLOSED;
+	}
 
 	VERIFY3U(up->up_pipe, !=, 0);
 	usb_pipe_handle_t pipe = up->up_pipe;
@@ -270,6 +291,13 @@ uftdi_close_pipes(uftdi_t *uf)
 		usb_pipe_close(dip, pin, USB_FLAGS_SLEEP, NULL, NULL);
 		usb_pipe_close(dip, pout, USB_FLAGS_SLEEP, NULL, NULL);
 		mutex_enter(&uf->uf_mutex);
+
+		/*
+		 * If a pipe was in use while we were trying to close it down,
+		 * wait for it to be released by the callback:
+		 */
+		uftdi_pipe_wait(uf, ui, &ui->ui_pipe_in);
+		uftdi_pipe_wait(uf, ui, &ui->ui_pipe_out);
 	}
 }
 
