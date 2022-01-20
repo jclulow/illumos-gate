@@ -2112,7 +2112,6 @@ post_startup(void)
 	{
 		/*
 		 * Startup the memory scrubber.
-		 * XXPV	This should be running somewhere ..
 		 */
 		if ((get_hwenv() & HW_VIRTUAL) == 0)
 			memscrub_init();
@@ -2260,7 +2259,6 @@ release_bootstrap(void)
 
 	kmem_free(modranges, sizeof (rd_existing_t) * 99);
 
-/* XXPV -- note this following bunch of code needs to be revisited in Xen 3.0 */
 	/*
 	 * Find 1 page below 1 MB so that other processors can boot up or
 	 * so that any processor can resume.
@@ -2280,9 +2278,10 @@ release_bootstrap(void)
 		rm_platter_pa = ptob(pfn);
 		break;
 	}
-	if (pfn == btop(1*1024*1024) && use_mp)
+	if (pfn == btop(1*1024*1024) && use_mp) {
 		panic("No page below 1M available for starting "
 		    "other processors or for resuming from system-suspend");
+	}
 }
 
 /*

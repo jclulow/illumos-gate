@@ -1167,7 +1167,6 @@ nopop_syscall_int:
 	 * and use a faster return mechanism.
 	 */
 	movb	$1, T_POST_SYS(%r15)
-	CLEAN_CS
 	jmp	_syscall32_save
 	/*
 	 * There should be no instructions between this label and SWAPGS/IRET

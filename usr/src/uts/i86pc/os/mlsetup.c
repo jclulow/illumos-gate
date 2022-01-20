@@ -257,10 +257,7 @@ mlsetup(struct regs *rp)
 		patch_tsc_read(TSC_RDTSC_LFENCE);
 	}
 
-
 	patch_memops(cpuid_getvendor(CPU));
-
-	/* XXPV	what, if anything, should be dorked with here under xen? */
 
 	/*
 	 * While we're thinking about the TSC, let's set up %cr4 so that

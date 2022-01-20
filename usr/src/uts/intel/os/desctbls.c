@@ -840,8 +840,6 @@ reset_gdtr_limit(void)
 
 /*
  * In the early kernel, we need to set up a simple GDT to run on.
- *
- * XXPV	Can dboot use this too?  See dboot_gdt.s
  */
 void
 init_boot_gdt(user_desc_t *bgdt)

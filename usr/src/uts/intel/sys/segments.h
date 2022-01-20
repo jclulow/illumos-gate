@@ -549,20 +549,6 @@ void init_boot_gdt(user_desc_t *);
 /*
  * Convenient selector definitions.
  */
-
-/*
- * XXPV	64 bit Xen only allows the guest %cs/%ss be the private ones it
- * provides, not the ones we create for ourselves.  See FLAT_RING3_CS64 in
- * public/arch-x86_64.h
- *
- * 64-bit Xen runs paravirtual guests in ring 3 but emulates them running in
- * ring 0 by clearing CPL in %cs value pushed on guest exception stacks.
- * Therefore we will have KCS_SEL value indicate ring 0 and use that everywhere
- * in the kernel. But in the few files where we initialize segment registers or
- * create and update descriptors we will explicity OR in SEL_KPL (ring 3) for
- * kernel %cs. See desctbls.c for an example.
- */
-
 #define	KCS_SEL		SEL_GDT(GDT_KCODE, SEL_KPL)
 #define	KDS_SEL		SEL_GDT(GDT_KDATA, SEL_KPL)
 

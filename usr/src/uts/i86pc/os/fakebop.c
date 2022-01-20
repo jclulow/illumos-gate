@@ -1596,20 +1596,6 @@ build_boot_properties(struct xboot_info *xbp)
 	 * Build firmware-provided system properties
 	 */
 	build_firmware_properties(xbp);
-
-	/*
-	 * XXPV
-	 *
-	 * Find out what these are:
-	 * - cpuid_feature_ecx_include
-	 * - cpuid_feature_ecx_exclude
-	 * - cpuid_feature_edx_include
-	 * - cpuid_feature_edx_exclude
-	 *
-	 * Find out what these are in multiboot:
-	 * - netdev-path
-	 * - fstype
-	 */
 }
 
 /*

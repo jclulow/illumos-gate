@@ -159,7 +159,7 @@ struct regs {
 	je	8f;			\
 	movl	$0, REGOFF_SAVFP(%esp);	\
 	__SEGREGS_LOAD_KERNEL		\
-8:	CLEAN_CS
+8:
 
 #define	__INTR_POP			\
 	popa;				\

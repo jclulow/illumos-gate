@@ -96,11 +96,6 @@ extern "C" {
 
 #endif	/* __i386 */
 
-#define	XPV_TRAP_POP	/* empty */
-#define	XPV_TRAP_PUSH	/* empty */
-#define	CLEAN_CS	/* empty */
-
-
 /*
  * Macros for saving the original segment registers and restoring them
  * for fast traps.

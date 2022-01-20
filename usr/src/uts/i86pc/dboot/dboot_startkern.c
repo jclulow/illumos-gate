@@ -1631,8 +1631,6 @@ do_mem_alloc(uint32_t size, uint32_t align)
 	next_avail_addr = RNDUP(next_avail_addr, align);
 
 	/*
-	 * XXPV fixme joe
-	 *
 	 * a really large bootarchive that causes you to run out of memory
 	 * may cause this to blow up
 	 */

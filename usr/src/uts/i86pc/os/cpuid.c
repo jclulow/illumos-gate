@@ -5619,11 +5619,7 @@ cpuid_is_cmt(cpu_t *cpu)
  * However, Intel decided to -not- implement the 32-bit variant of the
  * syscall instruction, so we provide a predicate to allow our caller
  * to test that subtlety here.
- *
- * XXPV	Currently, 32-bit syscall instructions don't work via the hypervisor,
- *	even in the case where the hardware would in fact support it.
  */
-/*ARGSUSED*/
 int
 cpuid_syscall32_insn(cpu_t *cpu)
 {

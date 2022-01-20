@@ -125,7 +125,6 @@
 
 #define	MKIVCT(n) \
 	ENTRY_NP(kdi_ivct/**/n/**/);	\
-	XPV_TRAP_POP;			\
 	push	$0; /* err */		\
 	INTERRUPT_TRAMPOLINE;		\
 	push	$n;			\
@@ -134,7 +133,6 @@
 
 #define	MKTRAPHDLR(n) \
 	ENTRY_NP(kdi_trap/**/n);	\
-	XPV_TRAP_POP;			\
 	push	$0; /* err */		\
 	INTERRUPT_TRAMPOLINE;		\
 	push	$n;			\
@@ -143,7 +141,6 @@
 
 #define	MKTRAPERRHDLR(n) \
 	ENTRY_NP(kdi_traperr/**/n);	\
-	XPV_TRAP_POP;			\
 	INTERRUPT_TRAMPOLINE;		\
 	push	$n;			\
 	jmp	kdi_cmnint;		\
@@ -177,7 +174,6 @@
  */
 #define	MKINVALHDLR \
 	ENTRY_NP(kdi_invaltrap);	\
-	XPV_TRAP_POP;			\
 	push	$0; /* err */		\
 	INTERRUPT_TRAMPOLINE;		\
 	push	$255;			\

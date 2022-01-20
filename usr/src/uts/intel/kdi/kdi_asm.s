@@ -550,8 +550,7 @@
 	 * Note that we handle T_DBGENTR since userspace might have tried it.
 	 *
 	 * The trap handler will expect the stack to be in trap order, with %rip
-	 * being the last entry, so we'll need to restore all our regs.  On
-	 * i86xpv we'll need to compensate for XPV_TRAP_POP.
+	 * being the last entry, so we'll need to restore all our regs.
 	 *
 	 * %rax on entry is either 1 or 2, which is from kdi_trap_pass().
 	 * kdi_cmnint stashed the original %cr3 into KDIREG_CR3, then (probably)
@@ -605,7 +604,6 @@ no_restore_cr3:
 	KDI_RESTORE_REGS(%rsp); \
 	/* Discard state, trapno, err */ \
 	addq	$REG_OFF(KDIREG_RIP), %rsp; \
-	XPV_TRAP_PUSH; \
 	jmp	%cs:name
 
 kdi_pass_dbgtrap:

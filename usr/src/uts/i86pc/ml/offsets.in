@@ -220,9 +220,6 @@ cpu
 	cpu_m.mcpu_tss		CPU_TSS
 	cpu_m.mcpu_softinfo	CPU_SOFTINFO
 	cpu_m.mcpu_pri		CPU_PRI
-#if defined(__xpv)
-	cpu_m.mcpu_vcpu_info	CPU_VCPU_INFO
-#endif
 
 cpu
 	cpu_m.mcpu_kpti.kf_kernel_cr3	CPU_KPTI_KCR3

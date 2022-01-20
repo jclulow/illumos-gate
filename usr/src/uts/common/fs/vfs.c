@@ -4647,14 +4647,9 @@ getrootfs(char **fstypp, char **fsmodp)
 		(void) strcpy(rootfs.bo_fstype, "nfsdyn");
 
 	/*
-	 * check if path to network interface is specified in bootpath
-	 * or by a hypervisor domain configuration file.
-	 * XXPV - enable strlumb_get_netdev_path()
+	 * Check if path to network interface is specified in bootpath:
 	 */
-	if (ddi_prop_exists(DDI_DEV_T_ANY, ddi_root_node(), DDI_PROP_DONTPASS,
-	    "xpv-nfsroot")) {
-		(void) strcpy(rootfs.bo_name, "/xpvd/xnf@0");
-	} else if (ddi_prop_lookup_string(DDI_DEV_T_ANY, ddi_root_node(),
+	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, ddi_root_node(),
 	    DDI_PROP_DONTPASS, "bootpath", &propstr)
 	    == DDI_SUCCESS) {
 		(void) strncpy(rootfs.bo_name, propstr, BO_MAXOBJNAME);
