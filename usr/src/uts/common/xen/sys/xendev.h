@@ -30,11 +30,9 @@
 
 #include <sys/hypervisor.h>
 #include <sys/taskq.h>
-#ifndef	__xpv
 #include <public/io/ring.h>
 #include <public/event_channel.h>
 #include <public/grant_table.h>
-#endif
 #include <xen/sys/xenbus_impl.h>
 
 #ifdef	__cplusplus

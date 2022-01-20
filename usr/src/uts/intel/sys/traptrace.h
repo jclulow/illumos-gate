@@ -159,14 +159,8 @@ extern trap_trace_rec_t	trap_trace_postmort;	/* Entry used after death */
  * Note that this macro defines label "9".
  * Also captures curthread on exit of loop.
  */
-#if defined(__xpv)
-#define	__GETCR2(_mov, reg)			\
-	_mov	%gs:CPU_VCPU_INFO, reg;		\
-	_mov	VCPU_INFO_ARCH_CR2(reg), reg
-#else
 #define	__GETCR2(_mov, reg)			\
 	_mov	%cr2, reg
-#endif
 
 #if defined(__amd64)
 

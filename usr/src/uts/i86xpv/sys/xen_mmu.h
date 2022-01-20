@@ -45,31 +45,6 @@ extern "C" {
 typedef uint64_t maddr_t;
 #define	mfn_to_ma(mfn)	((maddr_t)(mfn) << MMU_PAGESHIFT)
 
-#ifdef __xpv
-
-#ifdef __target_amd64
-
-#define	IN_HYPERVISOR_VA(va) \
-	((va) >= HYPERVISOR_VIRT_START && (va) < HYPERVISOR_VIRT_END)
-
-#else /* __target_amd64 */
-
-#define	IN_HYPERVISOR_VA(va) ((va) >= xen_virt_start)
-
-/*
- * Do this to help catch any uses.
- */
-#undef	HYPERVISOR_VIRT_START
-#undef	machine_to_phys_mapping
-
-#endif /* __target_amd64 */
-
-#undef __target_amd64
-
-paddr_t ma_to_pa(maddr_t);
-maddr_t pa_to_ma(paddr_t);
-#endif /* __xpv */
-
 extern uintptr_t xen_virt_start;
 extern pfn_t *mfn_to_pfn_mapping;
 
@@ -102,10 +77,6 @@ extern void xen_end_migrate(void);
  * Conversion between machine (hardware) addresses and pseudo-physical
  * addresses.
  */
-#ifdef __xpv
-pfn_t mfn_to_pfn(mfn_t);
-mfn_t pfn_to_mfn(pfn_t);
-#endif
 
 struct page;
 

@@ -40,9 +40,6 @@
 #include <sys/ctype.h>
 #include <sys/ascii.h>
 #include <sys/vgareg.h>
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#endif /* __xpv */
 
 #include "boot_console_impl.h"
 #include "boot_serial.h"
@@ -52,19 +49,9 @@
 #include <dboot/dboot_xboot.h>
 #else /* _BOOT */
 #include <sys/bootconf.h>
-#if defined(__xpv)
-#include <sys/evtchn_impl.h>
-#endif /* __xpv */
 static char *defcons_buf;
 static char *defcons_cur;
 #endif /* _BOOT */
-
-#if defined(__xpv)
-extern void bcons_init_xen(char *);
-extern void bcons_putchar_xen(int);
-extern int bcons_getchar_xen(void);
-extern int bcons_ischar_xen(void);
-#endif /* __xpv */
 
 fb_info_t fb_info;
 static bcons_dev_t bcons_dev;				/* Device callbacks */
@@ -112,21 +99,6 @@ static void defcons_putchar(int);
 #if !defined(_BOOT)
 static boolean_t bootprop_set_tty_mode;
 #endif
-
-#if defined(__xpv)
-static int console_hypervisor_redirect = B_FALSE;
-static int console_hypervisor_device = CONS_INVALID;
-static int console_hypervisor_tty_num = 0;
-
-/* Obtain the hypervisor console type */
-int
-console_hypervisor_dev_type(int *tnum)
-{
-	if (tnum != NULL)
-		*tnum = console_hypervisor_tty_num;
-	return (console_hypervisor_device);
-}
-#endif /* __xpv */
 
 static int port;
 
@@ -546,9 +518,6 @@ console_value_t console_devices[] = {
 	{ "ttyd", CONS_TTY },	/* 3 */
 	{ "text", CONS_SCREEN_TEXT },
 	{ "graphics", CONS_SCREEN_GRAPHICS },
-#if defined(__xpv)
-	{ "hypervisor", CONS_HYPERVISOR },
-#endif
 #if !defined(_BOOT)
 	{ "usb-serial", CONS_USBSER },
 #endif
@@ -745,10 +714,6 @@ bcons_init(struct xboot_info *xbi)
 	/* set up initial fb_info */
 	bcons_init_fb();
 
-#if defined(__xpv)
-	bcons_init_xen(boot_line);
-#endif /* __xpv */
-
 	/*
 	 * First check for diag-device.
 	 */
@@ -768,54 +733,8 @@ bcons_init(struct xboot_info *xbi)
 	if (cons_str != NULL)
 		console = lookup_console_device(cons_str, &tty_num);
 
-#if defined(__xpv)
-	/*
-	 * domU's always use the hypervisor regardless of what
-	 * the console variable may be set to.
-	 */
-	if (!DOMAIN_IS_INITDOMAIN(xen_info)) {
-		console = CONS_HYPERVISOR;
-		console_hypervisor_redirect = B_TRUE;
-	}
-#endif /* __xpv */
-
 	if (console == CONS_INVALID)
 		console = CONS_SCREEN_TEXT;
-
-#if defined(__xpv)
-	if (DOMAIN_IS_INITDOMAIN(xen_info)) {
-		switch (HYPERVISOR_console_io(CONSOLEIO_get_device, 0, NULL)) {
-			case XEN_CONSOLE_COM1:
-			case XEN_CONSOLE_COM2:
-				console_hypervisor_device = CONS_TTY;
-				console_hypervisor_tty_num = tty_num;
-				break;
-			case XEN_CONSOLE_VGA:
-				/*
-				 * Currently xen doesn't really support
-				 * keyboard/display console devices.
-				 * What this setting means is that
-				 * "vga=keep" has been enabled, which is
-				 * more of a xen debugging tool that a
-				 * true console mode.  Hence, we're going
-				 * to ignore this xen "console" setting.
-				 */
-				/*FALLTHROUGH*/
-			default:
-				console_hypervisor_device = CONS_INVALID;
-		}
-	}
-
-	/*
-	 * if the hypervisor is using the currently selected serial
-	 * port then default to using the hypervisor as the console
-	 * device.
-	 */
-	if (console == console_hypervisor_device) {
-		console = CONS_HYPERVISOR;
-		console_hypervisor_redirect = B_TRUE;
-	}
-#endif /* __xpv */
 
 	/* make sure the FB is set up if present */
 	console = boot_fb(xbi, console);
@@ -1105,13 +1024,6 @@ _doputchar(int device, int c)
 void
 bcons_putchar(int c)
 {
-#if defined(__xpv)
-	if (!DOMAIN_IS_INITDOMAIN(xen_info) ||
-	    console == CONS_HYPERVISOR) {
-		bcons_putchar_xen(c);
-		return;
-	}
-#endif /* __xpv */
 
 	if (c == '\n') {
 		_doputchar(console, '\r');
@@ -1129,11 +1041,6 @@ bcons_putchar(int c)
 int
 bcons_getchar(void)
 {
-#if defined(__xpv)
-	if (!DOMAIN_IS_INITDOMAIN(xen_info) ||
-	    console == CONS_HYPERVISOR)
-		return (bcons_getchar_xen());
-#endif /* __xpv */
 
 	for (;;) {
 		if (console == CONS_TTY || diag == CONS_TTY) {
@@ -1156,12 +1063,6 @@ int
 bcons_ischar(void)
 {
 	int c = 0;
-
-#if defined(__xpv)
-	if (!DOMAIN_IS_INITDOMAIN(xen_info) ||
-	    console == CONS_HYPERVISOR)
-		return (bcons_ischar_xen());
-#endif /* __xpv */
 
 	switch (console) {
 	case CONS_TTY:
@@ -1236,17 +1137,6 @@ bcons_post_bootenvrc(char *inputdev, char *outputdev, char *consoledev)
 		return;
 	}
 
-#if defined(__xpv)
-	/*
-	 * if the hypervisor is using the currently selected console device then
-	 * default to using the hypervisor as the console device.
-	 */
-	if (cons == console_hypervisor_device) {
-		cons = CONS_HYPERVISOR;
-		console_hypervisor_redirect = B_TRUE;
-	}
-#endif /* __xpv */
-
 	console = cons;
 
 	if (console == CONS_TTY) {
@@ -1254,36 +1144,6 @@ bcons_post_bootenvrc(char *inputdev, char *outputdev, char *consoledev)
 		serial_init();
 	}
 }
-
-#if defined(__xpv)
-boolean_t
-bcons_hypervisor_redirect(void)
-{
-	return (console_hypervisor_redirect);
-}
-
-void
-bcons_device_change(int new_console)
-{
-	if (new_console < CONS_MIN || new_console > CONS_MAX)
-		return;
-
-	/*
-	 * If we are asked to switch the console to the hypervisor, that
-	 * really means to switch the console to whichever device the
-	 * hypervisor is/was using.
-	 */
-	if (new_console == CONS_HYPERVISOR)
-		new_console = console_hypervisor_device;
-
-	console = new_console;
-
-	if (new_console == CONS_TTY) {
-		tty_num = console_hypervisor_tty_num;
-		serial_init();
-	}
-}
-#endif /* __xpv */
 
 static void
 defcons_putchar(int c)

@@ -119,11 +119,6 @@ _interrupt_size:
 	pushq	$KDS_SEL	/* %ss */
 	pushq	%r11		/* %rsp */
 	pushf			/* rflags */
-#if defined(__xpv)
-	popq	%r11
-	EVENT_MASK_TO_IE(%rdi, %r11)
-	pushq	%r11
-#endif
 	pushq	$KCS_SEL	/* %cs */
 	leaq	fakesoftint_return(%rip), %r11
 	pushq	%r11		/* %rip */

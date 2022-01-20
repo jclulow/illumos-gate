@@ -468,12 +468,8 @@
 #include <sys/promif.h>
 #include <sys/smt.h>
 #include <vm/hat_i86.h>
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#endif
 
 /* If these fail, then the padding numbers in machcpuvar.h are wrong. */
-#if !defined(__xpv)
 #define	MCOFF(member)	\
 	(offsetof(cpu_t, cpu_m) + offsetof(struct machcpu, member))
 CTASSERT(MCOFF(mcpu_pad) == MACHCPU_SIZE);
@@ -482,31 +478,6 @@ CTASSERT((MCOFF(mcpu_kpti) & 0xF) == 0);
 CTASSERT(((sizeof (struct kpti_frame)) & 0xF) == 0);
 CTASSERT((offsetof(struct kpti_frame, kf_tr_rsp) & 0xF) == 0);
 CTASSERT(MCOFF(mcpu_pad3) < 2 * MMU_PAGESIZE);
-#endif
-
-#if defined(__xpv) && defined(DEBUG)
-
-/*
- * This panic message is intended as an aid to interrupt debugging.
- *
- * The associated assertion tests the condition of enabling
- * events when events are already enabled.  The implication
- * being that whatever code the programmer thought was
- * protected by having events disabled until the second
- * enable happened really wasn't protected at all ..
- */
-
-int stistipanic = 1;	/* controls the debug panic check */
-const char *stistimsg = "stisti";
-ulong_t laststi[NCPU];
-
-/*
- * This variable tracks the last place events were disabled on each cpu
- * it assists in debugging when asserts that interrupts are enabled trip.
- */
-ulong_t lastcli[NCPU];
-
-#endif
 
 void do_interrupt(struct regs *rp, trap_trace_rec_t *ttp);
 
@@ -1423,13 +1394,11 @@ do_interrupt(struct regs *rp, trap_trace_rec_t *ttp)
 		switch_sp_and_call(newsp, dispatch_hardint, vector, oldipl);
 	}
 
-#if !defined(__xpv)
 	/*
 	 * Deliver any pending soft interrupts.
 	 */
 	if (cpu->cpu_softinfo.st_pending)
 		dosoftint(rp);
-#endif	/* !__xpv */
 }
 
 
@@ -1518,7 +1487,6 @@ loop:
 		return (1);
 	}
 
-#if !defined(__xpv)
 	/*
 	 * Assert that we're not trying to return into the syscall return
 	 * trampolines. Things will go baaaaad if we try to do that.
@@ -1531,7 +1499,6 @@ loop:
 	extern void tr_sysc_ret_end();
 	ASSERT(!(rp->r_pc >= (uintptr_t)tr_sysc_ret_start &&
 	    rp->r_pc <= (uintptr_t)tr_sysc_ret_end));
-#endif
 
 	/*
 	 * Here if we are returning to supervisor mode.

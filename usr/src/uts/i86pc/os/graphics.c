@@ -152,7 +152,6 @@ progressbar_thread(void *arg)
 void
 progressbar_start(void)
 {
-#if !defined(__xpv)
 	extern pri_t minclsyspri;
 
 	if (graphics_mode == 0)
@@ -172,13 +171,11 @@ progressbar_start(void)
 
 	progressbar_tid = thread_create(NULL, 0, progressbar_thread,
 	    NULL, 0, &p0, TS_RUN, minclsyspri);
-#endif
 }
 
 void
 progressbar_stop(void)
 {
-#if !defined(__xpv)
 	if (graphics_mode == 0)
 		return;
 
@@ -192,14 +189,12 @@ progressbar_stop(void)
 	/* unmap video memory */
 	hat_unload(kas.a_hat, videomem, videomem_size, HAT_UNLOAD_UNLOCK);
 	vmem_free(heap_arena, videomem, videomem_size);
-#endif
 }
 
 /*ARGSUSED*/
 void
 progressbar_key_abort(ldi_ident_t li)
 {
-#if !defined(__xpv)
 	char *fbpath;
 	int ret;
 	ldi_handle_t hdl;
@@ -221,5 +216,4 @@ progressbar_key_abort(ldi_ident_t li)
 				    "!ldi_ioctl for KD_RESETTEXT failed");
 		(void) ldi_close(hdl, 0, kcred);
 	}
-#endif
 }

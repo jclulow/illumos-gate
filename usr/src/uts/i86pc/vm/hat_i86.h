@@ -67,19 +67,10 @@ extern "C" {
  * HAT. See the big theory statement in uts/i86pc/vm/hat_i86.c for more
  * information.
  */
-#if defined(__xpv)
-/*
- * The Xen hypervisor does not use per-CPU pagetables (PCP). Define a single
- * struct member for it at least to make life easier and not make the member
- * conditional.
- */
-#define	MAX_COPIED_PTES	1
-#else
 /*
  * The 64-bit kernel may have up to 512 PTEs present in it for a given process.
  */
 #define	MAX_COPIED_PTES	512
-#endif	/* __xpv */
 
 #define	TOP_LEVEL(h)	(((h)->hat_max_level))
 
@@ -103,9 +94,6 @@ struct hat {
 	htable_t	**hat_ht_hash;	/* htable hash buckets */
 	htable_t	*hat_ht_cached;	/* cached free htables */
 	x86pte_t	hat_copied_ptes[MAX_COPIED_PTES];
-#if defined(__amd64) && defined(__xpv)
-	pfn_t		hat_user_ptable; /* alt top ptable for user mode */
-#endif
 };
 typedef struct hat hat_t;
 
@@ -273,22 +261,6 @@ typedef struct tlb_range {
 	int8_t	tr_level; 	/* page table level */
 } tlb_range_t;
 
-#if defined(__xpv)
-
-#define	XPV_DISALLOW_MIGRATE()	xen_block_migrate()
-#define	XPV_ALLOW_MIGRATE()	xen_allow_migrate()
-
-#define	mmu_flush_tlb_page(va)	mmu_invlpg((caddr_t)va)
-#define	mmu_flush_tlb_kpage(va)	mmu_invlpg((caddr_t)va)
-
-/*
- * Interfaces to use around code that maps/unmaps grant table references.
- */
-extern void hat_prepare_mapping(hat_t *, caddr_t, uint64_t *);
-extern void hat_release_mapping(hat_t *, caddr_t);
-
-#else
-
 #define	XPV_DISALLOW_MIGRATE()	/* nothing */
 #define	XPV_ALLOW_MIGRATE()	/* nothing */
 
@@ -311,8 +283,6 @@ extern void hati_cpu_punchin(cpu_t *cpu, uintptr_t va, uint_t attrs);
  */
 extern void tlb_going_idle(void);
 extern void tlb_service(void);
-
-#endif /* !__xpv */
 
 #endif	/* _KERNEL */
 

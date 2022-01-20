@@ -101,8 +101,6 @@ prefetch_write_once(void *addr)
 #endif	/* __amd64 */
 }
 
-#if !defined(__xpv)
-
 extern __GNU_INLINE void
 cli(void)
 {
@@ -129,8 +127,6 @@ i86_halt(void)
 	__asm__ __volatile__(
 	    "sti; hlt");
 }
-
-#endif /* !__xpv */
 
 #endif	/* __i386 || defined(__amd64) */
 

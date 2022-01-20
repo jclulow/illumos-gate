@@ -24,9 +24,7 @@
  * Use is subject to license terms.
  */
 
-#ifndef __xpv
 #error "This file is for i86xpv only"
-#endif
 
 #include <sys/types.h>
 #include <sys/mca_x86.h>

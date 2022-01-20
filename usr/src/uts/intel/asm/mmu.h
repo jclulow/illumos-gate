@@ -37,8 +37,6 @@ extern "C" {
 
 #if defined(__GNUC__)
 
-#if !defined(__xpv)
-
 extern __GNU_INLINE ulong_t
 getcr3(void)
 {
@@ -99,8 +97,6 @@ invpcid_insn(uint64_t type, uint64_t pcid, uintptr_t addr)
 	    : "m" (*pcid_desc), "r" (type)
 	    : "memory");
 }
-
-#endif /* !__xpv */
 
 extern __GNU_INLINE void
 mmu_invlpg(caddr_t addr)

@@ -64,8 +64,6 @@ int gcpu_id_disable = 0;
 static const char *gcpu_id_override[GCPU_MAX_CHIPID] = { NULL };
 #endif
 
-#ifndef	__xpv
-
 /*
  * The purpose of this is to construct a unique identifier for a given processor
  * that can be used by things like FMA to determine when a FRU has been
@@ -158,7 +156,6 @@ gcpu_init_ident_ppin(cmi_hdl_t hdl)
 	return (kmem_asprintf("iv0-%s-%x-%llx", vendor, cmi_hdl_chipsig(hdl),
 	    value));
 }
-#endif	/* __xpv */
 
 static void
 gcpu_init_ident(cmi_hdl_t hdl, struct gcpu_chipshared *sp)
@@ -182,11 +179,9 @@ gcpu_init_ident(cmi_hdl_t hdl, struct gcpu_chipshared *sp)
 	}
 #endif
 
-#ifndef __xpv
 	if (is_x86_feature(x86_featureset, X86FSET_PPIN)) {
 		sp->gcpus_ident = gcpu_init_ident_ppin(hdl);
 	}
-#endif	/* __xpv */
 }
 
 /*
@@ -276,14 +271,6 @@ gcpu_post_startup(cmi_hdl_t hdl)
 
 	if (gcpu != NULL)
 		cms_post_startup(hdl);
-#ifdef __xpv
-	/*
-	 * All cpu handles are initialized so we can begin polling now.
-	 * Furthermore, our virq mechanism requires that everything
-	 * be run on cpu 0 so we can assure that by starting from here.
-	 */
-	gcpu_mca_poll_start(hdl);
-#else
 	/*
 	 * The boot CPU has a bit of a chicken and egg problem for CMCI. Its MCA
 	 * initialization is run before we have initialized the PSM module that
@@ -292,7 +279,6 @@ gcpu_post_startup(cmi_hdl_t hdl)
 	 * egg problem will have already been solved.
 	 */
 	gcpu_mca_cmci_enable(hdl);
-#endif
 }
 
 void
@@ -303,13 +289,11 @@ gcpu_post_mpstartup(cmi_hdl_t hdl)
 
 	cms_post_mpstartup(hdl);
 
-#ifndef __xpv
 	/*
 	 * All cpu handles are initialized only once all cpus are started, so we
 	 * can begin polling post mp startup.
 	 */
 	gcpu_mca_poll_start(hdl);
-#endif
 }
 
 const char *
@@ -332,11 +316,7 @@ gcpu_ident(cmi_hdl_t hdl)
 	return (sp->gcpus_ident);
 }
 
-#ifdef __xpv
-#define	GCPU_OP(ntvop, xpvop)	xpvop
-#else
 #define	GCPU_OP(ntvop, xpvop)	ntvop
-#endif
 
 cmi_api_ver_t _cmi_api_version = CMI_API_VERSION_3;
 

@@ -35,10 +35,6 @@
 
 #include <sys/types.h>
 
-#if defined(__xpv)
-#include <sys/xpv_impl.h>
-#endif
-
 #endif /* !_ASM */
 
 #ifdef	__cplusplus
@@ -227,11 +223,7 @@ extern "C" {
  * On the hypervisor, we limit the user to memory below the VA hole.
  * Subtract 1 large page for a red zone.
  */
-#if defined(__xpv)
-#define	USERLIMIT	ADDRESS_C(0x00007fffffe00000)
-#else
 #define	USERLIMIT	ADDRESS_C(0xfffffc7fffe00000)
-#endif
 
 #ifdef bug_5074717_is_fixed
 #define	USERLIMIT32	ADDRESS_C(0xfffff000)

@@ -303,41 +303,8 @@ extern void x86pte_mapout(void);
 #define	HTABLE_LOCK_INC(ht)	atomic_inc_32(&(ht)->ht_lock_cnt)
 #define	HTABLE_LOCK_DEC(ht)	atomic_dec_32(&(ht)->ht_lock_cnt)
 
-#ifdef __xpv
-extern void xen_flush_va(caddr_t va);
-extern void xen_gflush_va(caddr_t va, cpuset_t);
-extern void xen_flush_tlb(void);
-extern void xen_gflush_tlb(cpuset_t);
-extern void xen_pin(pfn_t, level_t);
-extern void xen_unpin(pfn_t);
-extern int xen_kpm_page(pfn_t, uint_t);
-
-/*
- * The hypervisor maps all page tables into our address space read-only.
- * Under normal circumstances, the hypervisor then handles all updates to
- * the page tables underneath the covers for us.  However, when we are
- * trying to dump core after a hypervisor panic, the hypervisor is no
- * longer available to do these updates.  To work around the protection
- * problem, we simply disable write-protect checking for the duration of a
- * pagetable update operation.
- */
-#define	XPV_ALLOW_PAGETABLE_UPDATES()					\
-	{								\
-		if (IN_XPV_PANIC())					\
-			setcr0((getcr0() & ~CR0_WP) & 0xffffffff); 	\
-	}
-#define	XPV_DISALLOW_PAGETABLE_UPDATES()				\
-	{								\
-		if (IN_XPV_PANIC() > 0)					\
-			setcr0((getcr0() | CR0_WP) & 0xffffffff);	\
-	}
-
-#else /* __xpv */
-
 #define	XPV_ALLOW_PAGETABLE_UPDATES()
 #define	XPV_DISALLOW_PAGETABLE_UPDATES()
-
-#endif
 
 #endif	/* _KERNEL */
 

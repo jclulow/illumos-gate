@@ -197,14 +197,6 @@ extern void *plat_traceback(void *);
 extern void smap_disable(void);
 extern void smap_enable(void);
 
-#if defined(__xpv)
-extern void xen_init_callbacks(void);
-extern void xen_set_callback(void (*)(void), uint_t, uint_t);
-extern void xen_printf(const char *, ...);
-#define	cpr_dprintf xen_printf
-extern int xpv_panicking;
-#define	IN_XPV_PANIC() (xpv_panicking > 0)
-#else
 extern void setup_mca(void);
 extern void pat_sync(void);
 extern void patch_tsc_read(int);
@@ -214,7 +206,6 @@ extern void patch_memops(uint_t);
 extern void setup_xfem(void);
 #define	cpr_dprintf prom_printf
 #define	IN_XPV_PANIC() (__lintzero)
-#endif
 
 #endif /* _KERNEL */
 

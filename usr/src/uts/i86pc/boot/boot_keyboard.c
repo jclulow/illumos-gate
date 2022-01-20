@@ -62,29 +62,10 @@
 #define	BIOS_CAPS_SHIFT		0x40
 #define	BIOS_INS_SHIFT		0x80
 
-#if defined(__xpv) && defined(_BOOT)
-
-/*
- * Device memory addresses
- *
- * In dboot under the hypervisor we don't have any memory mappings
- * for the first meg of low memory so we can't access devices there.
- * Intead we've mapped the device memory that we need to access into
- * a local variable within dboot so we can access the device memory
- * there.
- */
-extern unsigned short *kb_status;
-#define	kb_flag		((unsigned char *)&kb_status[BIOS_KB_FLAG])
-#define	kb_flag_1	((unsigned char *)&kb_status[BIOS_KB_FLAG_1])
-
-#else /* __xpv && _BOOT */
-
 /* Device memory addresses */
 static unsigned char *kb_status = ((unsigned char *)BIOS_KB_FLAG);
 #define	kb_flag		(&kb_status[0])
 #define	kb_flag_1	(&kb_status[1])
-
-#endif /* __xpv && _BOOT */
 
 /*
  * Keyboard controller registers

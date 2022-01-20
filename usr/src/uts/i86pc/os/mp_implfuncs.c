@@ -34,11 +34,6 @@
 #include <sys/smp_impldefs.h>
 #include <sys/reboot.h>
 #include <sys/prom_debug.h>
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#include <vm/kboot_mmu.h>
-#include <vm/hat_pte.h>
-#endif
 
 /*
  *	External reference functions
@@ -215,20 +210,7 @@ psm_map_phys_new(paddr_t addr, size_t len, int prot)
 		return (0);
 
 	pgoffset = addr & MMU_PAGEOFFSET;
-#ifdef __xpv
-	/*
-	 * If we're dom0, we're starting from a MA. translate that to a PA
-	 * XXPV - what about driver domains???
-	 */
-	if (DOMAIN_IS_INITDOMAIN(xen_info)) {
-		base = pfn_to_pa(xen_assign_pfn(mmu_btop(addr))) |
-		    (addr & MMU_PAGEOFFSET);
-	} else {
-		base = addr;
-	}
-#else
 	base = addr;
-#endif
 	npages = mmu_btopr(len + pgoffset);
 	cvaddr = device_arena_alloc(ptob(npages), VM_NOSLEEP);
 	if (cvaddr == NULL)
@@ -347,11 +329,7 @@ mod_infopsm(struct modlpsm *modl, struct modlinkage *modlp, int *p0)
 	return (0);
 }
 
-#if defined(__xpv)
-#define	DEFAULT_PSM_MODULE	"xpv_uppc"
-#else
 #define	DEFAULT_PSM_MODULE	"uppc"
-#endif
 
 static char *
 psm_get_impl_module(int first)

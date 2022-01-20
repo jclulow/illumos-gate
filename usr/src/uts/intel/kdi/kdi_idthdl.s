@@ -55,12 +55,6 @@
  * Generic trap and interrupt handlers.
  */
 
-#if defined(__xpv)
-
-#define	INTERRUPT_TRAMPOLINE
-
-#else
-
 /*
  * If we're !xpv, then we will need to support KPTI (kernel page table
  * isolation), where we have separate page tables for user and kernel modes.
@@ -128,8 +122,6 @@
 	movq	$0, KPTI_FLAG(%r13);		\
 	mov	KPTI_R13(%r13), %r13
 
-#endif	/* !__xpv */
-
 
 #define	MKIVCT(n) \
 	ENTRY_NP(kdi_ivct/**/n/**/);	\
@@ -157,7 +149,6 @@
 	jmp	kdi_cmnint;		\
 	SET_SIZE(kdi_traperr/**/n)
 
-#if !defined(__xpv)
 #define	MKNMIHDLR \
 	ENTRY_NP(kdi_int2);		\
 	push	$0;			\
@@ -179,21 +170,6 @@
 	popq	%r13;			\
 	jmp	kdi_cmnint;		\
 	SET_SIZE(kdi_trap18)
-#else
-#define	MKNMIHDLR \
-	ENTRY_NP(kdi_int2);		\
-	push	$0;			\
-	push	$2;			\
-	jmp	kdi_nmiint;		\
-	SET_SIZE(kdi_int2)
-
-#define	MKMCEHDLR \
-	ENTRY_NP(kdi_trap18);		\
-	push	$0;			\
-	push	$18;			\
-	jmp	kdi_cmnint;		\
-	SET_SIZE(kdi_trap18)
-#endif
 
 /*
  * The only way we should reach here is by an explicit "int 0x.." which is
@@ -212,7 +188,6 @@
 	DGDEF3(kdi_idt, 16 * NIDT, MMU_PAGESIZE)
 	.fill	MMU_PAGESIZE, 1, 0
 
-#if !defined(__xpv)
 .section ".text"
 .align MMU_PAGESIZE
 .global kdi_isr_start
@@ -221,7 +196,6 @@ kdi_isr_start:
 
 .global kpti_safe_cr3
 .global kpti_kbase
-#endif
 
 /*
  * The handlers themselves
@@ -314,11 +288,9 @@ kdi_ivct_base:
 	MKIVCT(248);	MKIVCT(249);	MKIVCT(250);	MKIVCT(251);
 	MKIVCT(252);	MKIVCT(253);	MKIVCT(254);	MKIVCT(255);
 
-#if !defined(__xpv)
 .section ".text"
 .align MMU_PAGESIZE
 .global kdi_isr_end
 kdi_isr_end:
 	nop
-#endif
 

@@ -49,19 +49,9 @@
  */
 int dboot_debug = 0;
 
-#if defined(__xpv)
-
-#include <sys/hypervisor.h>
-uintptr_t xen_virt_start;
-pfn_t *mfn_to_pfn_mapping;
-
-#else /* !__xpv */
-
 extern multiboot_header_t mb_header;
 extern uint32_t mb2_load_addr;
 extern int have_cpuid(void);
-
-#endif /* !__xpv */
 
 #include <sys/inttypes.h>
 #include <sys/bootinfo.h>
@@ -119,20 +109,6 @@ char stack_space[STACK_SIZE];
  */
 static paddr_t next_avail_addr = 0;
 
-#if defined(__xpv)
-/*
- * Additional information needed for hypervisor memory allocation.
- * Only memory up to scratch_end is mapped by page tables.
- * mfn_base is the start of the hypervisor virtual image. It's ONE_GIG, so
- * to derive a pfn from a pointer, you subtract mfn_base.
- */
-
-static paddr_t scratch_end = 0;	/* we can't write all of mem here */
-static paddr_t mfn_base;		/* addr corresponding to mfn_list[0] */
-start_info_t *xen_info;
-
-#else	/* __xpv */
-
 /*
  * If on the metal, then we have a multiboot loader.
  */
@@ -153,7 +129,6 @@ static efi_guid_t smbios3 = SMBIOS3_TABLE_GUID;
 static efi_guid_t smbios = SMBIOS_TABLE_GUID;
 static efi_guid_t acpi2 = EFI_ACPI_TABLE_GUID;
 static efi_guid_t acpi1 = ACPI_10_TABLE_GUID;
-#endif	/* __xpv */
 
 /*
  * This contains information passed to the kernel
@@ -201,29 +176,7 @@ uint_t rsvdmemlists_used = 0;
 struct boot_modules modules[MAX_BOOT_MODULES];
 uint_t modules_used = 0;
 
-#ifdef __xpv
-/*
- * Xen strips the size field out of the mb_memory_map_t, see struct e820entry
- * definition in Xen source.
- */
-typedef struct {
-	uint32_t	base_addr_low;
-	uint32_t	base_addr_high;
-	uint32_t	length_low;
-	uint32_t	length_high;
-	uint32_t	type;
-} mmap_t;
-
-/*
- * There is 512KB of scratch area after the boot stack page.
- * We'll use that for everything except the kernel nucleus pages which are too
- * big to fit there and are allocated last anyway.
- */
-#define	MAXMAPS	100
-static mmap_t map_buffer[MAXMAPS];
-#else
 typedef mb_memory_map_t mmap_t;
-#endif
 
 /*
  * Debugging macros
@@ -241,7 +194,6 @@ static void
 sort_physinstall(void)
 {
 	int i;
-#if !defined(__xpv)
 	int j;
 	struct boot_memlist tmp;
 
@@ -283,7 +235,6 @@ sort_physinstall(void)
 		DBG(memlists_used);
 		--i;	/* after merging we need to reexamine, so do this */
 	}
-#endif	/* __xpv */
 
 	if (prom_debug) {
 		dboot_printf("\nFinal memlists:\n");
@@ -328,69 +279,6 @@ build_rsvdmemlists(void)
 	DBG(bi->bi_rsvdmem);
 }
 
-#if defined(__xpv)
-
-/*
- * halt on the hypervisor after a delay to drain console output
- */
-void
-dboot_halt(void)
-{
-	uint_t i = 10000;
-
-	while (--i)
-		(void) HYPERVISOR_yield();
-	(void) HYPERVISOR_shutdown(SHUTDOWN_poweroff);
-}
-
-/*
- * From a machine address, find the corresponding pseudo-physical address.
- * Pseudo-physical address are contiguous and run from mfn_base in each VM.
- * Machine addresses are the real underlying hardware addresses.
- * These are needed for page table entries. Note that this routine is
- * poorly protected. A bad value of "ma" will cause a page fault.
- */
-paddr_t
-ma_to_pa(maddr_t ma)
-{
-	ulong_t pgoff = ma & MMU_PAGEOFFSET;
-	ulong_t pfn = mfn_to_pfn_mapping[mmu_btop(ma)];
-	paddr_t pa;
-
-	if (pfn >= xen_info->nr_pages)
-		return (-(paddr_t)1);
-	pa = mfn_base + mmu_ptob((paddr_t)pfn) + pgoff;
-#ifdef DEBUG
-	if (ma != pa_to_ma(pa))
-		dboot_printf("ma_to_pa(%" PRIx64 ") got %" PRIx64 ", "
-		    "pa_to_ma() says %" PRIx64 "\n", ma, pa, pa_to_ma(pa));
-#endif
-	return (pa);
-}
-
-/*
- * From a pseudo-physical address, find the corresponding machine address.
- */
-maddr_t
-pa_to_ma(paddr_t pa)
-{
-	pfn_t pfn;
-	ulong_t mfn;
-
-	pfn = mmu_btop(pa - mfn_base);
-	if (pa < mfn_base || pfn >= xen_info->nr_pages)
-		dboot_panic("pa_to_ma(): illegal address 0x%lx", (ulong_t)pa);
-	mfn = ((ulong_t *)xen_info->mfn_list)[pfn];
-#ifdef DEBUG
-	if (mfn_to_pfn_mapping[mfn] != pfn)
-		dboot_printf("pa_to_ma(pfn=%lx) got %lx ma_to_pa() says %lx\n",
-		    pfn, mfn, mfn_to_pfn_mapping[mfn]);
-#endif
-	return (mfn_to_ma(mfn) | (pa & MMU_PAGEOFFSET));
-}
-
-#endif	/* __xpv */
-
 x86pte_t
 get_pteval(paddr_t table, uint_t index)
 {
@@ -403,16 +291,6 @@ get_pteval(paddr_t table, uint_t index)
 void
 set_pteval(paddr_t table, uint_t index, uint_t level, x86pte_t pteval)
 {
-#ifdef __xpv
-	mmu_update_t t;
-	maddr_t mtable = pa_to_ma(table);
-	int retcnt;
-
-	t.ptr = (mtable + index * pte_size) | MMU_NORMAL_PT_UPDATE;
-	t.val = pteval;
-	if (HYPERVISOR_mmu_update(&t, 1, &retcnt, DOMID_SELF) || retcnt != 1)
-		dboot_panic("HYPERVISOR_mmu_update() failed");
-#else /* __xpv */
 	uintptr_t tab_addr = (uintptr_t)table;
 
 	if (pae_support)
@@ -421,7 +299,6 @@ set_pteval(paddr_t table, uint_t index, uint_t level, x86pte_t pteval)
 		((x86pte32_t *)tab_addr)[index] = (x86pte32_t)pteval;
 	if (level == top_level && level == 2)
 		reload_cr3();
-#endif /* __xpv */
 }
 
 paddr_t
@@ -433,13 +310,6 @@ make_ptable(x86pte_t *pteval, uint_t level)
 		*pteval = pa_to_ma((uintptr_t)new_table) | PT_VALID;
 	else
 		*pteval = pa_to_ma((uintptr_t)new_table) | ptp_bits;
-
-#ifdef __xpv
-	/* Remove write permission to the new page table. */
-	if (HYPERVISOR_update_va_mapping(new_table,
-	    *pteval & ~(x86pte_t)PT_WRITABLE, UVMF_INVLPG | UVMF_LOCAL))
-		dboot_panic("HYP_update_va_mapping error");
-#endif
 
 	if (map_debug)
 		dboot_printf("new page table lvl=%d paddr=0x%lx ptp=0x%"
@@ -471,9 +341,7 @@ dump_tables(void)
 	static char *tablist = "\t\t\t";
 	char *tabs = tablist + 3 - top_level;
 	uint_t pa, pa1;
-#if !defined(__xpv)
 #define	maddr_t paddr_t
-#endif /* !__xpv */
 
 	dboot_printf("Finished pagetables:\n");
 	table = (char *)(uintptr_t)top_page_table;
@@ -560,15 +428,6 @@ map_ma_at_va(maddr_t ma, native_ptr_t va, uint_t level)
 		    " pte=0x%" PRIx64 " l=%d\n",
 		    (uint64_t)ma, (uint64_t)va, pteval, level);
 
-#if defined(__xpv)
-	/*
-	 * see if we can avoid find_pte() on the hypervisor
-	 */
-	if (HYPERVISOR_update_va_mapping(va, pteval,
-	    UVMF_INVLPG | UVMF_LOCAL) == 0)
-		return;
-#endif
-
 	/*
 	 * Find the pte that will map this address. This creates any
 	 * missing intermediate level page tables
@@ -580,20 +439,12 @@ map_ma_at_va(maddr_t ma, native_ptr_t va, uint_t level)
 	 * PTE, since paging is active. On real hardware we just write to
 	 * the pagetables which aren't in use yet.
 	 */
-#if defined(__xpv)
-	ptep = ptep;	/* shut lint up */
-	if (HYPERVISOR_update_va_mapping(va, pteval, UVMF_INVLPG | UVMF_LOCAL))
-		dboot_panic("mmu_update failed-map_pa_at_va va=0x%" PRIx64
-		    " l=%d ma=0x%" PRIx64 ", pte=0x%" PRIx64 "",
-		    (uint64_t)va, level, (uint64_t)ma, pteval);
-#else
 	if (va < 1024 * 1024)
 		pteval |= PT_NOCACHE;		/* for video RAM */
 	if (pae_support)
 		*ptep = pteval;
 	else
 		*((x86pte32_t *)ptep) = (x86pte32_t)pteval;
-#endif
 }
 
 /*
@@ -674,7 +525,6 @@ check_higher(paddr_t a)
 static int
 dboot_loader_mmap_entries(void)
 {
-#if !defined(__xpv)
 	if (num_entries_set == B_TRUE)
 		return (num_entries);
 
@@ -711,15 +561,11 @@ dboot_loader_mmap_entries(void)
 		break;
 	}
 	return (num_entries);
-#else
-	return (MAXMAPS);
-#endif
 }
 
 static uint32_t
 dboot_loader_mmap_get_type(int index)
 {
-#if !defined(__xpv)
 	mb_memory_map_t *mp, *mpend;
 	caddr32_t mmap_addr;
 	int i;
@@ -749,15 +595,11 @@ dboot_loader_mmap_get_type(int index)
 		break;
 	}
 	return (0);
-#else
-	return (map_buffer[index].type);
-#endif
 }
 
 static uint64_t
 dboot_loader_mmap_get_base(int index)
 {
-#if !defined(__xpv)
 	mb_memory_map_t *mp, *mpend;
 	int i;
 
@@ -787,16 +629,11 @@ dboot_loader_mmap_get_base(int index)
 		break;
 	}
 	return (0);
-#else
-	return (((uint64_t)map_buffer[index].base_addr_high << 32) +
-	    (uint64_t)map_buffer[index].base_addr_low);
-#endif
 }
 
 static uint64_t
 dboot_loader_mmap_get_length(int index)
 {
-#if !defined(__xpv)
 	mb_memory_map_t *mp, *mpend;
 	int i;
 
@@ -826,10 +663,6 @@ dboot_loader_mmap_get_length(int index)
 		break;
 	}
 	return (0);
-#else
-	return (((uint64_t)map_buffer[index].length_high << 32) +
-	    (uint64_t)map_buffer[index].length_low);
-#endif
 }
 
 static void
@@ -893,96 +726,6 @@ build_pcimemlists(void)
 	bi->bi_pcimem = (native_ptr_t)(uintptr_t)pcimemlists;
 	DBG(bi->bi_pcimem);
 }
-
-#if defined(__xpv)
-/*
- * Initialize memory allocator stuff from hypervisor-supplied start info.
- */
-static void
-init_mem_alloc(void)
-{
-	int	local;	/* variables needed to find start region */
-	paddr_t	scratch_start;
-	xen_memory_map_t map;
-
-	DBG_MSG("Entered init_mem_alloc()\n");
-
-	/*
-	 * Free memory follows the stack. There's at least 512KB of scratch
-	 * space, rounded up to at least 2Mb alignment.  That should be enough
-	 * for the page tables we'll need to build.  The nucleus memory is
-	 * allocated last and will be outside the addressible range.  We'll
-	 * switch to new page tables before we unpack the kernel
-	 */
-	scratch_start = RNDUP((paddr_t)(uintptr_t)&local, MMU_PAGESIZE);
-	DBG(scratch_start);
-	scratch_end = RNDUP((paddr_t)scratch_start + 512 * 1024, TWO_MEG);
-	DBG(scratch_end);
-
-	/*
-	 * For paranoia, leave some space between hypervisor data and ours.
-	 * Use 500 instead of 512.
-	 */
-	next_avail_addr = scratch_end - 500 * 1024;
-	DBG(next_avail_addr);
-
-	/*
-	 * The domain builder gives us at most 1 module
-	 */
-	DBG(xen_info->mod_len);
-	if (xen_info->mod_len > 0) {
-		DBG(xen_info->mod_start);
-		modules[0].bm_addr =
-		    (native_ptr_t)(uintptr_t)xen_info->mod_start;
-		modules[0].bm_size = xen_info->mod_len;
-		bi->bi_module_cnt = 1;
-		bi->bi_modules = (native_ptr_t)(uintptr_t)modules;
-	} else {
-		bi->bi_module_cnt = 0;
-		bi->bi_modules = (native_ptr_t)(uintptr_t)NULL;
-	}
-	DBG(bi->bi_module_cnt);
-	DBG(bi->bi_modules);
-
-	DBG(xen_info->mfn_list);
-	DBG(xen_info->nr_pages);
-	max_mem = (paddr_t)xen_info->nr_pages << MMU_PAGESHIFT;
-	DBG(max_mem);
-
-	/*
-	 * Using pseudo-physical addresses, so only 1 memlist element
-	 */
-	memlists[0].addr = 0;
-	DBG(memlists[0].addr);
-	memlists[0].size = max_mem;
-	DBG(memlists[0].size);
-	memlists_used = 1;
-	DBG(memlists_used);
-
-	/*
-	 * finish building physinstall list
-	 */
-	sort_physinstall();
-
-	/*
-	 * build bios reserved memlists
-	 */
-	build_rsvdmemlists();
-
-	if (DOMAIN_IS_INITDOMAIN(xen_info)) {
-		/*
-		 * build PCI Memory list
-		 */
-		map.nr_entries = MAXMAPS;
-		/*LINTED: constant in conditional context*/
-		set_xen_guest_handle(map.buffer, map_buffer);
-		if (HYPERVISOR_memory_op(XENMEM_machine_memory_map, &map) != 0)
-			dboot_panic("getting XENMEM_machine_memory_map failed");
-		build_pcimemlists();
-	}
-}
-
-#else	/* !__xpv */
 
 static void
 dboot_multiboot1_xboot_consinfo(void)
@@ -1867,7 +1610,6 @@ print_efi64(EFI_SYSTEM_TABLE64 *efi)
 		    conf[i].VendorGuid.node_addr[5]);
 	}
 }
-#endif /* !__xpv */
 
 /*
  * Simple memory allocator, allocates aligned physical memory.
@@ -1898,9 +1640,6 @@ do_mem_alloc(uint32_t size, uint32_t align)
 	best = (uint64_t)-size;
 	for (i = 0; i < memlists_used; ++i) {
 		start = memlists[i].addr;
-#if defined(__xpv)
-		start += mfn_base;
-#endif
 		end = start + memlists[i].size;
 
 		/*
@@ -1925,12 +1664,6 @@ do_mem_alloc(uint32_t size, uint32_t align)
 	 */
 done:
 	next_avail_addr = best + size;
-#if defined(__xpv)
-	if (next_avail_addr > scratch_end)
-		dboot_panic("Out of mem next_avail: 0x%lx, scratch_end: "
-		    "0x%lx", (ulong_t)next_avail_addr,
-		    (ulong_t)scratch_end);
-#endif
 	(void) memset((void *)(uintptr_t)best, 0, size);
 	return ((void *)(uintptr_t)best);
 }
@@ -1952,19 +1685,13 @@ build_page_tables(void)
 	uint32_t level;
 	uint32_t off;
 	uint64_t start;
-#if !defined(__xpv)
 	uint32_t i;
 	uint64_t end;
-#endif	/* __xpv */
 
 	/*
 	 * If we're on metal, we need to create the top level pagetable.
 	 */
-#if defined(__xpv)
-	top_page_table = (paddr_t)(uintptr_t)xen_info->pt_base;
-#else /* __xpv */
 	top_page_table = (paddr_t)(uintptr_t)mem_alloc(MMU_PAGESIZE);
-#endif /* __xpv */
 	DBG((uintptr_t)top_page_table);
 
 	/*
@@ -1995,14 +1722,6 @@ build_page_tables(void)
 	    (native_ptr_t)(uintptr_t)find_pte(bi->bi_pt_window, NULL, 0, 0);
 	DBG(bi->bi_pte_to_pt_window);
 
-#if defined(__xpv)
-	if (!DOMAIN_IS_INITDOMAIN(xen_info)) {
-		/* If this is a domU we're done. */
-		DBG_MSG("\nPage tables constructed\n");
-		return;
-	}
-#endif /* __xpv */
-
 	/*
 	 * We need 1:1 mappings for the lower 1M of memory to access
 	 * BIOS tables used by a couple of drivers during boot.
@@ -2021,14 +1740,8 @@ build_page_tables(void)
 	if (map_debug)
 		dboot_printf("1:1 map pa=0..1Meg\n");
 	for (start = 0; start < 1024 * 1024; start += MMU_PAGESIZE) {
-#if defined(__xpv)
-		map_ma_at_va(start, start, 0);
-#else /* __xpv */
 		map_pa_at_va(start, start, 0);
-#endif /* __xpv */
 	}
-
-#if !defined(__xpv)
 
 	for (i = 0; i < memlists_used; ++i) {
 		start = memlists[i].addr;
@@ -2073,7 +1786,6 @@ build_page_tables(void)
 		if (PAT_support != 0)
 			pte_bits &= ~PT_PAT_4K;
 	}
-#endif /* !__xpv */
 
 	DBG_MSG("\nPage tables constructed\n");
 }
@@ -2090,7 +1802,6 @@ dboot_init_xboot_consinfo(void)
 {
 	bi = &boot_info;
 
-#if !defined(__xpv)
 	fb = &framebuffer;
 	bi->bi_framebuffer = (native_ptr_t)(uintptr_t)fb;
 
@@ -2107,7 +1818,6 @@ dboot_init_xboot_consinfo(void)
 		break;
 	}
 	dboot_find_console_modules();
-#endif
 }
 
 /*
@@ -2120,7 +1830,6 @@ dboot_init_xboot_consinfo(void)
 static void
 dboot_loader_init(void)
 {
-#if !defined(__xpv)
 	mb_info = NULL;
 	mb2_info = NULL;
 
@@ -2146,7 +1855,6 @@ dboot_loader_init(void)
 		dboot_panic("Unknown bootloader magic: 0x%x\n", mb_magic);
 		break;
 	}
-#endif	/* !defined(__xpv) */
 }
 
 /* Extract the kernel command line from [multi]boot information. */
@@ -2154,10 +1862,6 @@ static char *
 dboot_loader_cmdline(void)
 {
 	char *line = NULL;
-
-#if defined(__xpv)
-	line = (char *)xen_info->cmd_line;
-#else /* __xpv */
 
 	switch (multiboot_version) {
 	case 1:
@@ -2175,8 +1879,6 @@ dboot_loader_cmdline(void)
 		break;
 	}
 
-#endif /* __xpv */
-
 	/*
 	 * Make sure we have valid pointer so the string operations
 	 * will not crash us.
@@ -2190,9 +1892,6 @@ dboot_loader_cmdline(void)
 static char *
 dboot_loader_name(void)
 {
-#if defined(__xpv)
-	return (NULL);
-#else /* __xpv */
 	multiboot_tag_string_t *tag;
 
 	switch (multiboot_version) {
@@ -2210,7 +1909,6 @@ dboot_loader_name(void)
 	}
 
 	return (NULL);
-#endif /* __xpv */
 }
 
 /*
@@ -2226,9 +1924,6 @@ startup_kernel(void)
 {
 	char *cmdline;
 	char *bootloader;
-#if defined(__xpv)
-	physdev_set_iopl_t set_iopl;
-#endif /* __xpv */
 
 	if (dboot_debug == 1)
 		bcons_init(NULL);	/* Set very early console to ttya. */
@@ -2240,17 +1935,6 @@ startup_kernel(void)
 	bootloader = dboot_loader_name();
 	cmdline = dboot_loader_cmdline();
 
-#if defined(__xpv)
-	/*
-	 * For dom0, before we initialize the console subsystem we'll
-	 * need to enable io operations, so set I/O priveldge level to 1.
-	 */
-	if (DOMAIN_IS_INITDOMAIN(xen_info)) {
-		set_iopl.iopl = 1;
-		(void) HYPERVISOR_physdev_op(PHYSDEVOP_set_iopl, &set_iopl);
-	}
-#endif /* __xpv */
-
 	dboot_init_xboot_consinfo();
 	bi->bi_cmdline = (native_ptr_t)(uintptr_t)cmdline;
 	bcons_init(bi);		/* Now we can set the real console. */
@@ -2258,19 +1942,15 @@ startup_kernel(void)
 	prom_debug = (find_boot_prop("prom_debug") != NULL);
 	map_debug = (find_boot_prop("map_debug") != NULL);
 
-#if !defined(__xpv)
 	dboot_multiboot_get_fwtables();
-#endif
 	DBG_MSG("\n\nillumos prekernel set: ");
 	DBG_MSG(cmdline);
 	DBG_MSG("\n");
 
 	if (bootloader != NULL && prom_debug) {
 		dboot_printf("Kernel loaded by: %s\n", bootloader);
-#if !defined(__xpv)
 		dboot_printf("Using multiboot %d boot protocol.\n",
 		    multiboot_version);
-#endif
 	}
 
 	if (strstr(cmdline, "multiboot") != NULL) {
@@ -2278,7 +1958,6 @@ startup_kernel(void)
 	}
 
 	DBG((uintptr_t)bi);
-#if !defined(__xpv)
 	DBG((uintptr_t)mb_info);
 	DBG((uintptr_t)mb2_info);
 	if (mb2_info != NULL)
@@ -2298,118 +1977,12 @@ startup_kernel(void)
 			    bi->bi_uefi_systab);
 		}
 	}
-#endif
 
 	/*
 	 * Need correct target_kernel_text value
 	 */
 	target_kernel_text = KERNEL_TEXT;
 	DBG(target_kernel_text);
-
-#if defined(__xpv)
-
-	/*
-	 * XXPV	Derive this stuff from CPUID / what the hypervisor has enabled
-	 */
-
-#if defined(_BOOT_TARGET_amd64)
-	/*
-	 * 64-bit hypervisor.
-	 */
-	amd64_support = 1;
-	pae_support = 1;
-
-#else	/* _BOOT_TARGET_amd64 */
-
-	/*
-	 * See if we are running on a PAE Hypervisor
-	 */
-	{
-		xen_capabilities_info_t caps;
-
-		if (HYPERVISOR_xen_version(XENVER_capabilities, &caps) != 0)
-			dboot_panic("HYPERVISOR_xen_version(caps) failed");
-		caps[sizeof (caps) - 1] = 0;
-		if (prom_debug)
-			dboot_printf("xen capabilities %s\n", caps);
-		if (strstr(caps, "x86_32p") != NULL)
-			pae_support = 1;
-	}
-
-#endif	/* _BOOT_TARGET_amd64 */
-	{
-		xen_platform_parameters_t p;
-
-		if (HYPERVISOR_xen_version(XENVER_platform_parameters, &p) != 0)
-			dboot_panic("HYPERVISOR_xen_version(parms) failed");
-		DBG(p.virt_start);
-		mfn_to_pfn_mapping = (pfn_t *)(xen_virt_start = p.virt_start);
-	}
-
-	/*
-	 * The hypervisor loads stuff starting at 1Gig
-	 */
-	mfn_base = ONE_GIG;
-	DBG(mfn_base);
-
-	/*
-	 * enable writable page table mode for the hypervisor
-	 */
-	if (HYPERVISOR_vm_assist(VMASST_CMD_enable,
-	    VMASST_TYPE_writable_pagetables) < 0)
-		dboot_panic("HYPERVISOR_vm_assist(writable_pagetables) failed");
-
-	/*
-	 * check for NX support
-	 */
-	if (pae_support) {
-		uint32_t eax = 0x80000000;
-		uint32_t edx = get_cpuid_edx(&eax);
-
-		if (eax >= 0x80000001) {
-			eax = 0x80000001;
-			edx = get_cpuid_edx(&eax);
-			if (edx & CPUID_AMD_EDX_NX)
-				NX_support = 1;
-		}
-	}
-
-	/*
-	 * check for PAT support
-	 */
-	{
-		uint32_t eax = 1;
-		uint32_t edx = get_cpuid_edx(&eax);
-
-		if (edx & CPUID_INTC_EDX_PAT)
-			PAT_support = 1;
-	}
-#if !defined(_BOOT_TARGET_amd64)
-
-	/*
-	 * The 32-bit hypervisor uses segmentation to protect itself from
-	 * guests. This means when a guest attempts to install a flat 4GB
-	 * code or data descriptor the 32-bit hypervisor will protect itself
-	 * by silently shrinking the segment such that if the guest attempts
-	 * any access where the hypervisor lives a #gp fault is generated.
-	 * The problem is that some applications expect a full 4GB flat
-	 * segment for their current thread pointer and will use negative
-	 * offset segment wrap around to access data. TLS support in linux
-	 * brand is one example of this.
-	 *
-	 * The 32-bit hypervisor can catch the #gp fault in these cases
-	 * and emulate the access without passing the #gp fault to the guest
-	 * but only if VMASST_TYPE_4gb_segments is explicitly turned on.
-	 * Seems like this should have been the default.
-	 * Either way, we want the hypervisor -- and not Solaris -- to deal
-	 * to deal with emulating these accesses.
-	 */
-	if (HYPERVISOR_vm_assist(VMASST_CMD_enable,
-	    VMASST_TYPE_4gb_segments) < 0)
-		dboot_panic("HYPERVISOR_vm_assist(4gb_segments) failed");
-#endif	/* !_BOOT_TARGET_amd64 */
-
-#else	/* __xpv */
 
 	/*
 	 * use cpuid to enable MMU features
@@ -2441,7 +2014,6 @@ startup_kernel(void)
 	} else {
 		dboot_printf("cpuid not supported\n");
 	}
-#endif /* __xpv */
 
 
 #if defined(_BOOT_TARGET_amd64)
@@ -2506,11 +2078,7 @@ startup_kernel(void)
 	DBG(ptes_per_table);
 	DBG(lpagesize);
 
-#if defined(__xpv)
-	ktext_phys = ONE_GIG;		/* from UNIX Mapfile */
-#else
 	ktext_phys = FOUR_MEG;		/* from UNIX Mapfile */
-#endif
 
 #if !defined(__xpv) && defined(_BOOT_TARGET_amd64)
 	/*
@@ -2543,29 +2111,6 @@ startup_kernel(void)
 	bi->bi_use_pge = pge_support;
 	bi->bi_use_nx = NX_support;
 
-#if defined(__xpv)
-
-	bi->bi_next_paddr = next_avail_addr - mfn_base;
-	DBG(bi->bi_next_paddr);
-	bi->bi_next_vaddr = (native_ptr_t)(uintptr_t)next_avail_addr;
-	DBG(bi->bi_next_vaddr);
-
-	/*
-	 * unmap unused pages in start area to make them available for DMA
-	 */
-	while (next_avail_addr < scratch_end) {
-		(void) HYPERVISOR_update_va_mapping(next_avail_addr,
-		    0, UVMF_INVLPG | UVMF_LOCAL);
-		next_avail_addr += MMU_PAGESIZE;
-	}
-
-	bi->bi_xen_start_info = (native_ptr_t)(uintptr_t)xen_info;
-	DBG((uintptr_t)HYPERVISOR_shared_info);
-	bi->bi_shared_info = (native_ptr_t)HYPERVISOR_shared_info;
-	bi->bi_top_page_table = (uintptr_t)top_page_table - mfn_base;
-
-#else /* __xpv */
-
 	bi->bi_next_paddr = next_avail_addr;
 	DBG(bi->bi_next_paddr);
 	bi->bi_next_vaddr = (native_ptr_t)(uintptr_t)next_avail_addr;
@@ -2586,24 +2131,18 @@ startup_kernel(void)
 	}
 	bi->bi_top_page_table = (uintptr_t)top_page_table;
 
-#endif /* __xpv */
-
 	bi->bi_kseg_size = FOUR_MEG;
 	DBG(bi->bi_kseg_size);
 
-#ifndef __xpv
 	if (map_debug)
 		dump_tables();
-#endif
 
 	DBG_MSG("\n\n*** DBOOT DONE -- back to asm to jump to kernel\n\n");
 
-#ifndef __xpv
 	/* Update boot info with FB data */
 	fb->cursor.origin.x = fb_info.cursor.origin.x;
 	fb->cursor.origin.y = fb_info.cursor.origin.y;
 	fb->cursor.pos.x = fb_info.cursor.pos.x;
 	fb->cursor.pos.y = fb_info.cursor.pos.y;
 	fb->cursor.visible = fb_info.cursor.visible;
-#endif
 }

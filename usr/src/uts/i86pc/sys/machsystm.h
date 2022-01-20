@@ -140,9 +140,7 @@ extern void    (*non_deep_idle_cpu)();
 extern void    (*disp_enq_thread)(cpu_t *, int);
 extern void    (*non_deep_idle_disp_enq_thread)(cpu_t *, int);
 
-#ifndef __xpv
 extern unsigned int microdata;
-#endif
 
 extern int use_mp;
 
@@ -225,11 +223,6 @@ typedef struct {
 
 /* Maximum physical page number (PFN) for memory DR operations. */
 extern uint64_t plat_dr_physmax;
-
-#ifdef __xpv
-#include <sys/xen_mmu.h>
-extern page_t *page_get_high_mfn(mfn_t);
-#endif
 
 extern hrtime_t tsc_gethrtime_tick_delta(void);
 extern hrtime_t tsc_gethrtime_params(uint64_t *, uint32_t *, uint8_t *);

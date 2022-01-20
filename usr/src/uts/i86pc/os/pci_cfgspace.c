@@ -36,15 +36,8 @@
 #include <sys/pci_cfgspace.h>
 #include <sys/pci_cfgspace_impl.h>
 #include <sys/pci_cfgacc.h>
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#endif
 
-#if defined(__xpv)
-int pci_max_nbus = 0xFE;
-#else
 int pci_max_nbus = 0xFF;
-#endif
 int pci_bios_cfg_type = PCI_MECHANISM_UNKNOWN;
 int pci_bios_maxbus;
 int pci_bios_mech;
@@ -93,10 +86,8 @@ extern void (*pci_cfgacc_acc_p)(pci_cfgacc_req_t *req);
  */
 static int pci_check(void);
 
-#if !defined(__xpv)
 static int pci_check_bios(void);
 static int pci_get_cfg_type(void);
-#endif
 
 /* for legacy io-based config space access */
 kmutex_t pcicfg_mutex;
@@ -141,30 +132,6 @@ pci_check(void)
 	 */
 	if (pci_bios_cfg_type != PCI_MECHANISM_UNKNOWN)
 		return (TRUE);
-
-#if defined(__xpv)
-	/*
-	 * only support PCI config mechanism 1 in i86xpv. This should be fine
-	 * since the other ones are workarounds for old broken H/W which won't
-	 * be supported in i86xpv anyway.
-	 */
-	if (DOMAIN_IS_INITDOMAIN(xen_info)) {
-		pci_bios_cfg_type = PCI_MECHANISM_1;
-		pci_getb_func = pci_mech1_getb;
-		pci_getw_func = pci_mech1_getw;
-		pci_getl_func = pci_mech1_getl;
-		pci_putb_func = pci_mech1_putb;
-		pci_putw_func = pci_mech1_putw;
-		pci_putl_func = pci_mech1_putl;
-
-		/*
-		 * Since we can't get the BIOS info in i86xpv, we will do an
-		 * exhaustive search of all PCI buses. We have to do this until
-		 * we start using the PCI information in ACPI.
-		 */
-		pci_bios_maxbus = pci_max_nbus;
-	}
-#else /* !__xpv */
 
 	pci_bios_cfg_type = pci_check_bios();
 
@@ -227,7 +194,6 @@ pci_check(void)
 	default:
 		return (FALSE);
 	}
-#endif /* __xpv */
 
 	/*
 	 * Try to get a valid mcfg_mem_base in early boot
@@ -246,8 +212,6 @@ pci_check(void)
 
 	return (TRUE);
 }
-
-#if !defined(__xpv)
 
 static int
 pci_check_bios(void)
@@ -340,4 +304,3 @@ pci_get_cfg_type(void)
 	}
 }
 
-#endif	/* __xpv */

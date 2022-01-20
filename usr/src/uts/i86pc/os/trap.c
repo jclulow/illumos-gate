@@ -97,9 +97,6 @@
 #include <sys/bootinfo.h>
 #include <sys/promif.h>
 #include <sys/mach_mmu.h>
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#endif
 #include <sys/contract/process_impl.h>
 
 #define	USER	0x10000		/* user-mode flag added to trap type */
@@ -1015,7 +1012,6 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 
 	case T_SGLSTP: /* single step/hw breakpoint exception */
 
-#if !defined(__xpv)
 		/*
 		 * We'd never normally get here, as kmdb handles its own single
 		 * step traps.  There is one nasty exception though, as
@@ -1042,7 +1038,6 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 					showregs(type, rp, (caddr_t)0);
 			}
 		}
-#endif /* !__xpv */
 
 		if (boothowto & RB_DEBUG)
 			debug_enter((char *)NULL);
@@ -1640,10 +1635,8 @@ showregs(uint_t type, struct regs *rp, caddr_t addr)
 #endif	/* __lint */
 
 	printf("cr2: %lx  ", getcr2());
-#if !defined(__xpv)
 	printf("cr3: %lx  ", getcr3());
 	printf("cr8: %lx\n", getcr8());
-#endif
 	printf("\n");
 
 	dumpregs(rp);
@@ -1683,17 +1676,10 @@ static int
 instr_is_iret(caddr_t pc)
 {
 
-#if defined(__xpv)
-	extern void nopop_sys_rtt_syscall(void);
-	return ((pc == (caddr_t)nopop_sys_rtt_syscall) ? 1 : 0);
-
-#else
-
 	static const uint8_t iret_insn[2] = { 0x48, 0xcf };	/* iretq */
 
 	return (bcmp(pc, iret_insn, sizeof (iret_insn)) == 0);
 
-#endif	/* __xpv */
 }
 
 
@@ -1711,7 +1697,6 @@ instr_is_sys_rtt(caddr_t pc)
 {
 	extern void _sys_rtt(), _sys_rtt_end();
 
-#if !defined(__xpv)
 	extern void tr_sysc_ret_start(), tr_sysc_ret_end();
 	extern void tr_intr_ret_start(), tr_intr_ret_end();
 
@@ -1722,7 +1707,6 @@ instr_is_sys_rtt(caddr_t pc)
 	if ((uintptr_t)pc >= (uintptr_t)tr_intr_ret_start &&
 	    (uintptr_t)pc <= (uintptr_t)tr_intr_ret_end)
 		return (1);
-#endif
 
 	if ((uintptr_t)pc < (uintptr_t)_sys_rtt ||
 	    (uintptr_t)pc > (uintptr_t)_sys_rtt_end)
@@ -1880,8 +1864,6 @@ kern_gpfault(struct regs *rp)
  * dump_tss() - Display the TSS structure
  */
 
-#if !defined(__xpv)
-
 static void
 dump_tss(void)
 {
@@ -1900,8 +1882,6 @@ dump_tss(void)
 	printf(tss_fmt, "tss_ist6", (void *)tss->tss_ist6);
 	printf(tss_fmt, "tss_ist7", (void *)tss->tss_ist7);
 }
-
-#endif	/* !__xpv */
 
 #if defined(TRAPTRACE)
 
@@ -2141,10 +2121,8 @@ panic_showtrap(struct panic_trap_info *tip)
 	dump_ttrace();
 #endif
 
-#if !defined(__xpv)
 	if (tip->trap_type == T_DBLFLT)
 		dump_tss();
-#endif
 }
 
 void

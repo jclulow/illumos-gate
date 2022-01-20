@@ -89,9 +89,6 @@
 #include <sys/segments.h>
 #include <sys/ontrap.h>
 #include <sys/cpu.h>
-#ifdef __xpv
-#include <sys/hypervisor.h>
-#endif
 
 /*
  * Compare the version of boot that boot says it is against
@@ -483,12 +480,10 @@ lwp_segregs_save(klwp_t *lwp)
 		lwp->lwp_thread->t_post_sys = 1;
 	}
 
-#if !defined(__xpv)	/* XXPV not sure if we can re-read gdt? */
 	ASSERT(bcmp(&CPU->cpu_gdt[GDT_LWPFS], &lwp->lwp_pcb.pcb_fsdesc,
 	    sizeof (lwp->lwp_pcb.pcb_fsdesc)) == 0);
 	ASSERT(bcmp(&CPU->cpu_gdt[GDT_LWPGS], &lwp->lwp_pcb.pcb_gsdesc,
 	    sizeof (lwp->lwp_pcb.pcb_gsdesc)) == 0);
-#endif
 }
 
 /*
@@ -511,26 +506,6 @@ update_sregs(struct regs *rp,  klwp_t *lwp)
 	int rc = 0;
 
 	if (!on_trap(&otd, OT_SEGMENT_ACCESS)) {
-
-#if defined(__xpv)
-		/*
-		 * On the hyervisor this is easy. The hypercall below will
-		 * swapgs and load %gs with the user selector. If the user
-		 * selector is bad the hypervisor will catch the fault and
-		 * load %gs with the null selector instead. Either way the
-		 * kernel's gsbase is not damaged.
-		 */
-		kgsbase = (ulong_t)CPU;
-		if (HYPERVISOR_set_segment_base(SEGBASE_GS_USER_SEL,
-		    pcb->pcb_gs) != 0) {
-				no_trap();
-				return (1);
-		}
-
-		rp->r_gs = pcb->pcb_gs;
-		ASSERT((cpu_t *)kgsbase == CPU);
-
-#else	/* __xpv */
 
 		/*
 		 * A little more complicated running native.
@@ -561,8 +536,6 @@ update_sregs(struct regs *rp,  klwp_t *lwp)
 		 */
 		wrmsr(MSR_AMD_GSBASE, kgsbase);
 
-#endif	/* __xpv */
-
 		/*
 		 * Only override the descriptor base address if
 		 * r_gs == LWPGS_SEL or if r_gs == NULL. A note on
@@ -581,15 +554,7 @@ update_sregs(struct regs *rp,  klwp_t *lwp)
 		 * future.
 		 */
 		if (pcb->pcb_gs == LWPGS_SEL || pcb->pcb_gs == 0) {
-#if defined(__xpv)
-			if (HYPERVISOR_set_segment_base(SEGBASE_GS_USER,
-			    pcb->pcb_gsbase)) {
-				no_trap();
-				return (1);
-			}
-#else
 			wrmsr(MSR_AMD_KGSBASE, pcb->pcb_gsbase);
-#endif
 		}
 
 		__set_ds(pcb->pcb_ds);
@@ -605,15 +570,7 @@ update_sregs(struct regs *rp,  klwp_t *lwp)
 		 * Same as for %gs
 		 */
 		if (pcb->pcb_fs == LWPFS_SEL || pcb->pcb_fs == 0) {
-#if defined(__xpv)
-			if (HYPERVISOR_set_segment_base(SEGBASE_FS,
-			    pcb->pcb_fsbase)) {
-				no_trap();
-				return (1);
-			}
-#else
 			wrmsr(MSR_AMD_FSBASE, pcb->pcb_fsbase);
-#endif
 		}
 
 	} else {
@@ -656,11 +613,7 @@ reset_sregs(void)
 	/*
 	 * restore kernel gsbase
 	 */
-#if defined(__xpv)
-	xen_set_segment_base(SEGBASE_GS_KERNEL, kgsbase);
-#else
 	wrmsr(MSR_AMD_GSBASE, kgsbase);
-#endif
 
 	sti();
 

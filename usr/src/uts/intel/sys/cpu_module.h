@@ -170,13 +170,11 @@ extern const char *cmi_hdl_chipident(cmi_hdl_t);
 
 extern int cmi_hdl_online(cmi_hdl_t, int, int *);
 
-#ifndef	__xpv
 extern uint_t cmi_ntv_hwchipid(cpu_t *);
 extern uint_t cmi_ntv_hwprocnodeid(cpu_t *);
 extern uint_t cmi_ntv_hwcoreid(cpu_t *);
 extern uint_t cmi_ntv_hwstrandid(cpu_t *);
 extern void cmi_ntv_hwdisable_mce(cmi_hdl_t);
-#endif	/* __xpv */
 
 typedef struct cmi_mca_regs {
 	uint_t cmr_msrnum;

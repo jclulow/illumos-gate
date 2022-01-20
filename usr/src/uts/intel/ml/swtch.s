@@ -294,7 +294,6 @@
 	 * value at all (since all the interrupts have an IST set).
 	 */
 	movq	CPU_TSS(%r13), %r14
-#if !defined(__xpv)
 	cmpq	$1, kpti_enable
 	jne	1f
 	leaq	CPU_KPTI_TR_RSP(%r13), %rax
@@ -304,13 +303,6 @@
 	addq	$REGSIZE+MINFRAME, %rax	/* to the bottom of thread stack */
 2:
 	movq	%rax, TSS_RSP0(%r14)
-#else
-	movq	T_STACK(%r12), %rax
-	addq	$REGSIZE+MINFRAME, %rax	/* to the bottom of thread stack */
-	movl	$KDS_SEL, %edi
-	movq	%rax, %rsi
-	call	HYPERVISOR_stack_switch
-#endif	/* __xpv */
 
 	movq	%r12, CPU_THREAD(%r13)	/* set CPU's thread pointer */
 	mfence				/* synchronize with mutex_exit() */

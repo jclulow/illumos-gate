@@ -38,11 +38,7 @@
 
 #include <sys/types.h>
 #include <sys/errno.h>
-#ifndef __xpv
 #include <sys/xpv_support.h>
-#else
-#include <sys/xpv_user.h>
-#endif
 
 #include <sys/hypervisor.h>
 #include <xen/public/sched.h>
@@ -288,26 +284,6 @@ HYPERVISOR_hvm_op(int cmd, void *arg)
 {
 	return (__hypercall2(__HYPERVISOR_hvm_op, (long)cmd, (ulong_t)arg));
 }
-
-#if defined(__xpv)
-long
-HYPERVISOR_xsm_op(struct xen_acmctl *arg)
-{
-	return (__hypercall1(__HYPERVISOR_xsm_op, (ulong_t)arg));
-}
-
-long
-HYPERVISOR_sysctl(xen_sysctl_t *sysctl)
-{
-	return (__hypercall1(__HYPERVISOR_sysctl, (ulong_t)sysctl));
-}
-
-long
-HYPERVISOR_domctl(xen_domctl_t *domctl)
-{
-	return (__hypercall1(__HYPERVISOR_domctl, (ulong_t)domctl));
-}
-#endif /* __xpv */
 
 /* *** __HYPERVISOR_kexec_op *** NOT IMPLEMENTED */
 

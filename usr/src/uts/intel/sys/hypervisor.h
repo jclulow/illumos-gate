@@ -59,20 +59,13 @@ extern "C" {
 #define	xen_mb	membar_enter
 #define	xen_wmb	membar_producer
 
-#ifndef __xpv
 #include <sys/xpv_support.h>
-#else
-#include <sys/xpv_impl.h>
-#endif
 #include <sys/xen_errno.h>
 
 #if !defined(_ASM)
 
 #include <sys/processor.h>
 #include <sys/cpuvar.h>
-#ifdef __xpv
-#include <sys/xen_mmu.h>
-#endif
 #include <sys/systm.h>
 #include <xen/public/callback.h>
 #include <xen/public/event_channel.h>
@@ -169,20 +162,9 @@ extern uint64_t xpv_cpu_khz(void);
 /*
  * A quick way to ask if we're DOM0 or not ..
  */
-#ifndef __xpv
 
 #define	DOMAIN_IS_INITDOMAIN(info)	(__lintzero)
 #define	DOMAIN_IS_PRIVILEGED(info)	(__lintzero)
-
-#else
-
-#define	DOMAIN_IS_INITDOMAIN(info)	\
-	(((info)->flags & SIF_INITDOMAIN) == SIF_INITDOMAIN)
-
-#define	DOMAIN_IS_PRIVILEGED(info)	\
-	(((info)->flags & SIF_PRIVILEGED) == SIF_PRIVILEGED)
-
-#endif
 
 /*
  * start of day information passed up from the hypervisor
@@ -244,9 +226,6 @@ extern long HYPERVISOR_event_channel_op(int, void *); /* does return long */
 extern long HYPERVISOR_physdev_op(int, void *);
 extern long HYPERVISOR_hvm_op(int cmd, void *);
 /* *** __HYPERVISOR_kexec_op *** NOT IMPLEMENTED */
-#if defined(__xpv)
-extern long HYPERVISOR_mca(uint32_t, xen_mc_t *);
-#endif
 
 /*
  * HYPERCALL HELPER ROUTINES

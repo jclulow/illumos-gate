@@ -120,10 +120,6 @@
 #include <sys/model.h>
 #include <sys/panic.h>
 
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#endif
-
 #include "assym.h"
 
 	.data
@@ -681,7 +677,6 @@ tr_intr_ret_end:
 	jmp	nmiint
 	SET_SIZE(tr_nmiint)
 
-#if !defined(__xpv)
 	ENTRY_NP(tr_syserrtrap)
 	/*
 	 * If we got here we should always have a zero error code pushed.
@@ -699,7 +694,6 @@ tr_intr_ret_end:
 	popq	%r13
 	jmp	syserrtrap
 	SET_SIZE(tr_syserrtrap)
-#endif
 
 	ENTRY_NP(tr_mcetrap)
 	pushq	%r13

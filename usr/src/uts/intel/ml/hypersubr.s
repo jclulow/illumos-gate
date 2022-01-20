@@ -29,9 +29,7 @@
  */
 
 #include <sys/asm_linkage.h>
-#ifndef __xpv
 #include <sys/xpv_support.h>
-#endif
 #include <sys/hypervisor.h>
 
 /*
@@ -74,7 +72,6 @@
  * hypercall page requires a call and several more instructions than simply
  * issuing the proper trap.
  */
-#if !defined(__xpv)
 
 #define	HYPERCALL_PAGESIZE		0x1000
 #define	HYPERCALL_SHINFO_PAGESIZE	0x1000
@@ -98,11 +95,6 @@ hypercall_page:
 	shll	$5, %eax;		\
 	addq	$hypercall_page, %rax;	\
 	INDIRECT_JMP_REG(rax);
-
-#else /* !_xpv */
-
-#define	TRAP_INSTR	syscall
-#endif /* !__xpv */
 
 
 	ENTRY_NP(__hypercall0)

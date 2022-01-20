@@ -67,11 +67,7 @@
 #include <sys/bootvfs.h>
 #include <sys/tsc.h>
 #include <sys/smt.h>
-#ifdef __xpv
-#include <sys/hypervisor.h>
-#else
 #include <sys/xpv_support.h>
-#endif
 
 /*
  * some globals for patching the result of cpuid
@@ -123,13 +119,6 @@ mlsetup(struct regs *rp)
 	 */
 	cpu[0]->cpu_self = cpu[0];
 
-#if defined(__xpv)
-	/*
-	 * Point at the hypervisor's virtual cpu structure
-	 */
-	cpu[0]->cpu_m.mcpu_vcpu_info = &HYPERVISOR_shared_info->vcpu_info[0];
-#endif
-
 	/*
 	 * check if we've got special bits to clear or set
 	 * when checking cpu features
@@ -155,7 +144,6 @@ mlsetup(struct regs *rp)
 	else
 		cpuid_feature_edx_exclude = (uint32_t)prop_value;
 
-#if !defined(__xpv)
 	if (bootprop_getstr("nmi", prop_str, sizeof (prop_str)) == 0) {
 		if (strcmp(prop_str, "ignore") == 0) {
 			nmi_action = NMI_ACTION_IGNORE;
@@ -198,8 +186,6 @@ mlsetup(struct regs *rp)
 			smt_boot_disable = 1;
 	}
 
-#endif
-
 	/*
 	 * Initialize idt0, gdt0, ldt0_default, ktss0 and dftss.
 	 */
@@ -209,17 +195,12 @@ mlsetup(struct regs *rp)
 	 * lgrp_init() and possibly cpuid_pass1() need PCI config
 	 * space access
 	 */
-#if defined(__xpv)
-	if (DOMAIN_IS_INITDOMAIN(xen_info))
-		pci_cfgspace_init();
-#else
 	pci_cfgspace_init();
 	/*
 	 * Initialize the platform type from CPU 0 to ensure that
 	 * determine_platform() is only ever called once.
 	 */
 	determine_platform();
-#endif
 
 	/*
 	 * The first lightweight pass (pass0) through the cpuid data
@@ -234,7 +215,6 @@ mlsetup(struct regs *rp)
 	 */
 	cpuid_pass1(cpu[0], x86_featureset);
 
-#if !defined(__xpv)
 	if ((get_hwenv() & HW_XEN_HVM) != 0)
 		xen_hvm_init();
 
@@ -277,14 +257,9 @@ mlsetup(struct regs *rp)
 		patch_tsc_read(TSC_RDTSC_LFENCE);
 	}
 
-#endif	/* !__xpv */
 
-
-#if !defined(__xpv)
 	patch_memops(cpuid_getvendor(CPU));
-#endif	/* !__xpv */
 
-#if !defined(__xpv)
 	/* XXPV	what, if anything, should be dorked with here under xen? */
 
 	/*
@@ -310,7 +285,6 @@ mlsetup(struct regs *rp)
 
 	if (is_x86_feature(x86_featureset, X86FSET_SMEP))
 		setcr4(getcr4() | CR4_SMEP);
-#endif /* __xpv */
 
 	/*
 	 * initialize t0
@@ -421,13 +395,8 @@ mlsetup(struct regs *rp)
 	if (bootprop_getval(PLAT_DR_OPTIONS_NAME, &prop_value) == 0) {
 		plat_dr_options = (uint64_t)prop_value;
 	}
-#if defined(__xpv)
-	/* No support of DR operations on xpv */
-	plat_dr_options = 0;
-#else	/* __xpv */
 	/* Flag PLAT_DR_FEATURE_ENABLED should only be set by DR driver. */
 	plat_dr_options &= ~PLAT_DR_FEATURE_ENABLED;
-#endif	/* __xpv */
 
 	/*
 	 * Get value of "plat_dr_physmax" boot option.

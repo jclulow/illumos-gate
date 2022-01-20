@@ -112,17 +112,12 @@ typedef struct ucode_header_amd {
 } ucode_header_amd_t;
 
 typedef struct ucode_file_amd {
-#ifndef __xpv
 	ucode_header_amd_t uf_header;
 	uint8_t uf_data[896];
 	uint8_t uf_resv[896];
 	uint8_t uf_code_present;
 	uint8_t uf_code[191];
 	uint8_t uf_encr[2048];
-#else
-	uint8_t *ucodep;
-	uint32_t usize;
-#endif
 } ucode_file_amd_t;
 
 typedef struct ucode_eqtbl_amd {

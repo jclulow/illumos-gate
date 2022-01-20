@@ -85,11 +85,6 @@
 #include <sys/systm.h>
 #include <sys/note.h>
 
-#ifdef __xpv
-#include <sys/hypervisor.h>
-#include <vm/as.h>
-#endif
-
 #include <sys/promif.h>
 #include <sys/bootinfo.h>
 #include <vm/kboot_mmu.h>
@@ -99,9 +94,7 @@
  * cpu0 and default tables and structures.
  */
 user_desc_t	*gdt0;
-#if !defined(__xpv)
 desctbr_t	gdt0_default_r;
-#endif
 
 gate_desc_t	*idt0;		/* interrupt descriptor table */
 
@@ -272,10 +265,6 @@ get_ssd_base(system_desc_t *dp)
 uint_t
 idt_vector_to_ist(uint_t vector)
 {
-#if defined(__xpv)
-	_NOTE(ARGUNUSED(vector));
-	return (IST_NONE);
-#else
 	switch (vector) {
 	/* These should always use IST even without KPTI enabled. */
 	case T_DBLFLT:
@@ -304,7 +293,6 @@ idt_vector_to_ist(uint_t vector)
 		}
 		return (IST_NONE);
 	}
-#endif
 }
 
 void
@@ -345,15 +333,7 @@ gdt_update_usegd(uint_t sidx, user_desc_t *udp)
 	}
 #endif
 
-#if defined(__xpv)
-	uint64_t dpa = CPU->cpu_m.mcpu_gdtpa + sizeof (*udp) * sidx;
-
-	if (HYPERVISOR_update_descriptor(pa_to_ma(dpa), *(uint64_t *)udp))
-		panic("gdt_update_usegd: HYPERVISOR_update_descriptor");
-
-#else	/* __xpv */
 	CPU->cpu_gdt[sidx] = *udp;
-#endif	/* __xpv */
 }
 
 /*
@@ -379,76 +359,10 @@ ldt_update_segd(user_desc_t *ldp, user_desc_t *udp)
 	}
 #endif
 
-#if defined(__xpv)
-	uint64_t dpa;
-
-	dpa = mmu_ptob(hat_getpfnum(kas.a_hat, (caddr_t)ldp)) |
-	    ((uintptr_t)ldp & PAGEOFFSET);
-
-	/*
-	 * The hypervisor is a little more restrictive about what it
-	 * supports in the LDT.
-	 */
-	if (HYPERVISOR_update_descriptor(pa_to_ma(dpa), *(uint64_t *)udp) != 0)
-		return (EINVAL);
-
-#else	/* __xpv */
 	*ldp = *udp;
 
-#endif	/* __xpv */
 	return (0);
 }
-
-#if defined(__xpv)
-
-/*
- * Converts hw format gate descriptor into pseudo-IDT format for the hypervisor.
- * Returns true if a valid entry was written.
- */
-int
-xen_idt_to_trap_info(uint_t vec, gate_desc_t *sgd, void *ti_arg)
-{
-	trap_info_t *ti = ti_arg;	/* XXPV	Aargh - segments.h comment */
-
-	/*
-	 * skip holes in the IDT
-	 */
-	if (GATESEG_GETOFFSET(sgd) == 0)
-		return (0);
-
-	ASSERT(sgd->sgd_type == SDT_SYSIGT);
-	ti->vector = vec;
-	TI_SET_DPL(ti, sgd->sgd_dpl);
-
-	/*
-	 * Is this an interrupt gate?
-	 */
-	if (sgd->sgd_type == SDT_SYSIGT) {
-		/* LINTED */
-		TI_SET_IF(ti, 1);
-	}
-	ti->cs = sgd->sgd_selector;
-	ti->cs |= SEL_KPL;	/* force into ring 3. see KCS_SEL  */
-	ti->address = GATESEG_GETOFFSET(sgd);
-	return (1);
-}
-
-/*
- * Convert a single hw format gate descriptor and write it into our virtual IDT.
- */
-void
-xen_idt_write(gate_desc_t *sgd, uint_t vec)
-{
-	trap_info_t trapinfo[2];
-
-	bzero(trapinfo, sizeof (trapinfo));
-	if (xen_idt_to_trap_info(vec, sgd, &trapinfo[0]) == 0)
-		return;
-	if (xen_set_trap_table(trapinfo) != 0)
-		panic("xen_idt_write: xen_set_trap_table() failed");
-}
-
-#endif	/* __xpv */
 
 
 /*
@@ -511,8 +425,6 @@ init_gdt_common(user_desc_t *gdt)
 	set_usegd(&gdt[GDT_UDATA], SDP_SHORT, NULL, -1, SDT_MEMRWA, SEL_UPL,
 	    SDP_PAGES, SDP_OP32);
 
-#if !defined(__xpv)
-
 	/*
 	 * The 64-bit kernel has no default LDT. By default, the LDT descriptor
 	 * in the GDT is 0.
@@ -523,8 +435,6 @@ init_gdt_common(user_desc_t *gdt)
 	 */
 	set_syssegd((system_desc_t *)&gdt[GDT_KTSS], ktss0,
 	    sizeof (*ktss0) - 1, SDT_SYSTSS, SEL_KPL);
-
-#endif	/* !__xpv */
 
 	/*
 	 * Initialize fs and gs descriptors for 32 bit processes.
@@ -554,79 +464,6 @@ init_gdt_common(user_desc_t *gdt)
 	set_usegd(&zero_u32desc, SDP_SHORT, 0, -1, SDT_MEMRWA, SEL_UPL,
 	    SDP_PAGES, SDP_OP32);
 }
-
-#if defined(__xpv)
-
-static user_desc_t *
-init_gdt(void)
-{
-	uint64_t gdtpa;
-	ulong_t ma[1];		/* XXPV should be a memory_t */
-	ulong_t addr;
-
-#if !defined(__lint)
-	/*
-	 * Our gdt is never larger than a single page.
-	 */
-	ASSERT((sizeof (*gdt0) * NGDT) <= PAGESIZE);
-#endif
-	gdt0 = (user_desc_t *)BOP_ALLOC(bootops, (caddr_t)GDT_VA,
-	    PAGESIZE, PAGESIZE);
-	bzero(gdt0, PAGESIZE);
-
-	init_gdt_common(gdt0);
-
-	/*
-	 * XXX Since we never invoke kmdb until after the kernel takes
-	 * over the descriptor tables why not have it use the kernel's
-	 * selectors?
-	 */
-	if (boothowto & RB_DEBUG) {
-		set_usegd(&gdt0[GDT_B32DATA], SDP_LONG, NULL, -1, SDT_MEMRWA,
-		    SEL_KPL, SDP_PAGES, SDP_OP32);
-		set_usegd(&gdt0[GDT_B64CODE], SDP_LONG, NULL, -1, SDT_MEMERA,
-		    SEL_KPL, SDP_PAGES, SDP_OP32);
-	}
-
-	/*
-	 * Clear write permission for page containing the gdt and install it.
-	 */
-	gdtpa = pfn_to_pa(va_to_pfn(gdt0));
-	ma[0] = (ulong_t)(pa_to_ma(gdtpa) >> PAGESHIFT);
-	kbm_read_only((uintptr_t)gdt0, gdtpa);
-	xen_set_gdt(ma, NGDT);
-
-	/*
-	 * Reload the segment registers to use the new GDT.
-	 * On 64-bit, fixup KCS_SEL to be in ring 3.
-	 * See KCS_SEL in segments.h.
-	 */
-	load_segment_registers((KCS_SEL | SEL_KPL), KFS_SEL, KGS_SEL, KDS_SEL);
-
-	/*
-	 *  setup %gs for kernel
-	 */
-	xen_set_segment_base(SEGBASE_GS_KERNEL, (ulong_t)&cpus[0]);
-
-	/*
-	 * XX64 We should never dereference off "other gsbase" or
-	 * "fsbase".  So, we should arrange to point FSBASE and
-	 * KGSBASE somewhere truly awful e.g. point it at the last
-	 * valid address below the hole so that any attempts to index
-	 * off them cause an exception.
-	 *
-	 * For now, point it at 8G -- at least it should be unmapped
-	 * until some 64-bit processes run.
-	 */
-	addr = 0x200000000ul;
-	xen_set_segment_base(SEGBASE_FS, addr);
-	xen_set_segment_base(SEGBASE_GS_USER, addr);
-	xen_set_segment_base(SEGBASE_GS_USER_SEL, 0);
-
-	return (gdt0);
-}
-
-#else	/* __xpv */
 
 static user_desc_t *
 init_gdt(void)
@@ -693,8 +530,6 @@ init_gdt(void)
 	return (gdt0);
 }
 
-#endif	/* __xpv */
-
 
 /*
  * Build kernel IDT.
@@ -745,11 +580,9 @@ init_idt_common(gate_desc_t *idt)
 	 * Instead a failsafe event is injected into the guest if its selectors
 	 * and/or stack is in a broken state. See xen_failsafe_callback.
 	 */
-#if !defined(__xpv)
 	set_gatesegd(&idt[T_DBLFLT],
 	    (kpti_enable == 1) ? &tr_syserrtrap : &syserrtrap,
 	    KCS_SEL, SDT_SYSIGT, TRP_KPL, idt_vector_to_ist(T_DBLFLT));
-#endif	/* !__xpv */
 
 	/*
 	 * T_EXTOVRFLT coprocessor-segment-overrun not supported.
@@ -818,16 +651,6 @@ init_idt_common(gate_desc_t *idt)
 	brand_tbl[1].ih_inum = 0;
 }
 
-#if defined(__xpv)
-
-static void
-init_idt(gate_desc_t *idt)
-{
-	init_idt_common(idt);
-}
-
-#else	/* __xpv */
-
 static void
 init_idt(gate_desc_t *idt)
 {
@@ -841,47 +664,29 @@ init_idt(gate_desc_t *idt)
 	 * since it can only be generated on a 386 processor. 15 is also
 	 * unsupported and reserved.
 	 */
-#if !defined(__xpv)
 	for (i = 0; i < NIDT; i++) {
 		set_gatesegd(&idt[i],
 		    (kpti_enable == 1) ? &tr_resvtrap : &resvtrap,
 		    KCS_SEL, SDT_SYSIGT, TRP_KPL,
 		    idt_vector_to_ist(T_RESVTRAP));
 	}
-#else
-	for (i = 0; i < NIDT; i++) {
-		set_gatesegd(&idt[i], &resvtrap, KCS_SEL, SDT_SYSIGT, TRP_KPL,
-		    IST_NONE);
-	}
-#endif
 
 	/*
 	 * 20-31 reserved
 	 */
-#if !defined(__xpv)
 	for (i = 20; i < 32; i++) {
 		set_gatesegd(&idt[i],
 		    (kpti_enable == 1) ? &tr_invaltrap : &invaltrap,
 		    KCS_SEL, SDT_SYSIGT, TRP_KPL,
 		    idt_vector_to_ist(T_INVALTRAP));
 	}
-#else
-	for (i = 20; i < 32; i++) {
-		set_gatesegd(&idt[i], &invaltrap, KCS_SEL, SDT_SYSIGT, TRP_KPL,
-		    IST_NONE);
-	}
-#endif
 
 	/*
 	 * interrupts 32 - 255
 	 */
 	for (i = 32; i < 256; i++) {
-#if !defined(__xpv)
 		(void) snprintf(ivctname, sizeof (ivctname),
 		    (kpti_enable == 1) ? "tr_ivct%d" : "ivct%d", i);
-#else
-		(void) snprintf(ivctname, sizeof (ivctname), "ivct%d", i);
-#endif
 		ivctptr = (void (*)(void))kobj_getsymvalue(ivctname, 0);
 		if (ivctptr == NULL)
 			panic("kobj_getsymvalue(%s) failed", ivctname);
@@ -897,8 +702,6 @@ init_idt(gate_desc_t *idt)
 	init_idt_common(idt);
 }
 
-#endif	/* __xpv */
-
 /*
  * The kernel does not deal with LDTs unless a user explicitly creates
  * one. Under normal circumstances, the LDTR contains 0. Any process attempting
@@ -908,14 +711,8 @@ init_idt(gate_desc_t *idt)
 static void
 init_ldt(void)
 {
-#if defined(__xpv)
-	xen_set_ldt(NULL, 0);
-#else
 	wr_ldtr(0);
-#endif
 }
-
-#if !defined(__xpv)
 
 static void
 init_tss(void)
@@ -962,57 +759,6 @@ init_tss(void)
 	 */
 	wr_tsr(KTSS_SEL);
 }
-
-#endif	/* !__xpv */
-
-#if defined(__xpv)
-
-void
-init_desctbls(void)
-{
-	uint_t vec;
-	user_desc_t *gdt;
-
-	/*
-	 * Setup and install our GDT.
-	 */
-	gdt = init_gdt();
-
-	/*
-	 * Store static pa of gdt to speed up pa_to_ma() translations
-	 * on lwp context switches.
-	 */
-	ASSERT(IS_P2ALIGNED((uintptr_t)gdt, PAGESIZE));
-	CPU->cpu_gdt = gdt;
-	CPU->cpu_m.mcpu_gdtpa = pfn_to_pa(va_to_pfn(gdt));
-
-	/*
-	 * Setup and install our IDT.
-	 */
-#if !defined(__lint)
-	ASSERT(NIDT * sizeof (*idt0) <= PAGESIZE);
-#endif
-	idt0 = (gate_desc_t *)BOP_ALLOC(bootops, (caddr_t)IDT_VA,
-	    PAGESIZE, PAGESIZE);
-	bzero(idt0, PAGESIZE);
-	init_idt(idt0);
-	for (vec = 0; vec < NIDT; vec++)
-		xen_idt_write(&idt0[vec], vec);
-
-	CPU->cpu_idt = idt0;
-
-	/*
-	 * set default kernel stack
-	 */
-	xen_stack_switch(KDS_SEL,
-	    (ulong_t)&dblfault_stack0[sizeof (dblfault_stack0)]);
-
-	xen_init_callbacks();
-
-	init_ldt();
-}
-
-#else	/* __xpv */
 
 void
 init_desctbls(void)
@@ -1072,9 +818,6 @@ init_desctbls(void)
 	kpti_safe_cr3 = (uint64_t)getcr3();
 }
 
-#endif	/* __xpv */
-
-#ifndef __xpv
 /*
  * As per Intel Vol 3 27.5.2, the GDTR limit is reset to 64Kb on a VM exit, so
  * we have to manually fix it up ourselves.
@@ -1094,7 +837,6 @@ reset_gdtr_limit(void)
 
 	intr_restore(flags);
 }
-#endif /* __xpv */
 
 /*
  * In the early kernel, we need to set up a simple GDT to run on.
@@ -1125,23 +867,7 @@ brand_interpositioning_enable(void)
 
 	for (i = 0; brand_tbl[i].ih_inum; i++) {
 		idt[brand_tbl[i].ih_inum] = brand_tbl[i].ih_interp_desc;
-#if defined(__xpv)
-		xen_idt_write(&idt[brand_tbl[i].ih_inum],
-		    brand_tbl[i].ih_inum);
-#endif
 	}
-
-#if defined(__xpv)
-
-	/*
-	 * Currently the hypervisor only supports 64-bit syscalls via
-	 * syscall instruction. The 32-bit syscalls are handled by
-	 * interrupt gate above.
-	 */
-	xen_set_callback(brand_sys_syscall, CALLBACKTYPE_syscall,
-	    CALLBACKF_mask_events);
-
-#else
 
 	if (is_x86_feature(x86_featureset, X86FSET_ASYSC)) {
 		if (kpti_enable == 1) {
@@ -1152,8 +878,6 @@ brand_interpositioning_enable(void)
 			wrmsr(MSR_AMD_CSTAR, (uintptr_t)brand_sys_syscall32);
 		}
 	}
-
-#endif
 
 	if (is_x86_feature(x86_featureset, X86FSET_SEP)) {
 		if (kpti_enable == 1) {
@@ -1180,21 +904,7 @@ brand_interpositioning_disable(void)
 
 	for (i = 0; brand_tbl[i].ih_inum; i++) {
 		idt[brand_tbl[i].ih_inum] = brand_tbl[i].ih_default_desc;
-#if defined(__xpv)
-		xen_idt_write(&idt[brand_tbl[i].ih_inum],
-		    brand_tbl[i].ih_inum);
-#endif
 	}
-
-#if defined(__xpv)
-
-	/*
-	 * See comment above in brand_interpositioning_enable.
-	 */
-	xen_set_callback(sys_syscall, CALLBACKTYPE_syscall,
-	    CALLBACKF_mask_events);
-
-#else
 
 	if (is_x86_feature(x86_featureset, X86FSET_ASYSC)) {
 		if (kpti_enable == 1) {
@@ -1205,8 +915,6 @@ brand_interpositioning_disable(void)
 			wrmsr(MSR_AMD_CSTAR, (uintptr_t)sys_syscall32);
 		}
 	}
-
-#endif
 
 	if (is_x86_feature(x86_featureset, X86FSET_SEP)) {
 		if (kpti_enable == 1) {

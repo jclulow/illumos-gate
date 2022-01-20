@@ -40,9 +40,6 @@
 #include <sys/kdi_regs.h>
 #include <sys/psw.h>
 #include <sys/uadmin.h>
-#ifdef __xpv
-#include <sys/hypervisor.h>
-#endif
 #include <kdi_assym.h>
 #include <assym.h>
 
@@ -72,16 +69,6 @@
 	movq	%r11, KRS_GDT(%rax);		\
 1:
 
-#ifdef __xpv
-
-/*
- * Already on kernel gsbase via the hypervisor.
- */
-#define	SAVE_GSBASE(reg) /* nothing */
-#define	RESTORE_GSBASE(reg) /* nothing */
-
-#else
-
 #define	SAVE_GSBASE(base)				\
 	movl	$MSR_AMD_GSBASE, %ecx;			\
 	rdmsr;						\
@@ -103,8 +90,6 @@
 	shrq	$32, %rdx;				\
 	movl	$MSR_AMD_GSBASE, %ecx;			\
 	wrmsr
-
-#endif /* __xpv */
 
 /*
  * %ss, %rsp, %rflags, %cs, %rip, %err, %trapno are already on the stack.
@@ -250,15 +235,6 @@
 	subq	$REG_OFF(KDIREG_TRAPNO), %rsp
 	KDI_SAVE_REGS(%rsp)
 
-#ifdef __xpv
-	/*
-	 * Clear saved_upcall_mask in unused byte of cs slot on stack.
-	 * It can only confuse things.
-	 */
-	movb	$0, REG_OFF(KDIREG_CS)+4(%rsp)
-#endif
-
-#if !defined(__xpv)
 	/*
 	 * Switch to the kernel's GSBASE.  Neither GSBASE nor the ill-named
 	 * KGSBASE can be trusted, as the kernel may or may not have already
@@ -304,8 +280,6 @@
 	je	.no_kcr3
 	mov	%rdx, %cr3
 .no_kcr3:
-
-#endif	/* __xpv */
 
 	GET_CPUSAVE_ADDR	/* %rax = cpusave, %rbx = CPU ID */
 
@@ -463,13 +437,11 @@
 
 	SAVE_IDTGDT
 
-#if !defined(__xpv)
 	/* Save off %cr0, and clear write protect */
 	movq	%cr0, %rcx
 	movq	%rcx, KRS_CR0(%rax)
 	andq	$_BITNOT(CR0_WP), %rcx
 	movq	%rcx, %cr0
-#endif
 
 	/* Save the debug registers and disable any active watchpoints */
 
@@ -529,16 +501,13 @@
 	/*
 	 * Send this CPU back into the world
 	 */
-#if !defined(__xpv)
 	movq	KRS_CR0(%rdi), %rdx
 	movq	%rdx, %cr0
-#endif
 
 	KDI_RESTORE_DEBUGGING_STATE
 
 	movq	KRS_GREGS(%rdi), %rsp
 
-#if !defined(__xpv)
 	/*
 	 * If we're going back via tr_iret_kdi, then we want to copy the
 	 * final %cr3 we're going to back into the kpti_dbg area now.
@@ -558,7 +527,6 @@
 
 	/* The trampoline will undo this later. */
 	movq	%r13, REG_OFF(KDIREG_R13)(%rsp)
-#endif
 
 	KDI_RESTORE_REGS(%rsp)
 	addq	$REG_OFF(KDIREG_RIP), %rsp	/* Discard state, trapno, err */
@@ -566,11 +534,7 @@
 	 * The common trampoline code will restore %cr3 to the right value
 	 * for either kernel or userland.
 	 */
-#if !defined(__xpv)
 	jmp	tr_iret_kdi
-#else
-	IRET
-#endif
 	/*NOTREACHED*/
 	SET_SIZE(kdi_resume)
 
@@ -664,12 +628,7 @@ kdi_pass_invaltrap:
 	movl	$AD_BOOT, %edi
 	movl	$A_SHUTDOWN, %esi
 	call	*psm_shutdownf
-#if defined(__xpv)
-	movl	$SHUTDOWN_reboot, %edi
-	call	HYPERVISOR_shutdown
-#else
 	call	reset
-#endif
 	/*NOTREACHED*/
 
 	SET_SIZE(kdi_reboot)

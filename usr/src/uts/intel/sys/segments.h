@@ -96,16 +96,6 @@ extern "C" {
  * with a DPL below user (ring 3) the int $n will generate a #gp fault
  * which the hypervisor catches and forwards to the guest.
  */
-#if defined(__xpv)
-
-#define	SEL_XPL		0		/* hypervisor privilege level */
-#define	SEL_KPL		3		/* both kernel and user in ring 3 */
-#define	TRP_KPL		1		/* system gate priv (user blocked) */
-#define	TRP_XPL		0		/* system gate priv (hypervisor) */
-
-#define	IST_DBG		0
-
-#else	/* __xpv */
 
 #define	SEL_KPL		0		/* kernel privilege level on metal */
 #define	TRP_KPL		SEL_KPL		/* system gate priv (user blocked) */
@@ -117,8 +107,6 @@ extern "C" {
 #define	IST_DBG		4
 #define	IST_NESTABLE	5
 #define	IST_DEFAULT	6
-
-#endif	/* __xpv */
 
 #define	IST_NONE	0
 
@@ -414,13 +402,6 @@ extern void gdt_update_usegd(uint_t, user_desc_t *);
 
 extern int ldt_update_segd(user_desc_t *, user_desc_t *);
 
-#if defined(__xpv)
-
-extern int xen_idt_to_trap_info(uint_t, gate_desc_t *, void *);
-extern void xen_idt_write(gate_desc_t *, uint_t);
-
-#endif	/* __xen */
-
 void init_boot_gdt(user_desc_t *);
 
 #endif	/* _ASM */
@@ -568,11 +549,7 @@ void init_boot_gdt(user_desc_t *);
 #define	GDT_LWPGS	56	/* lwp private %gs segment selector */
 #define	GDT_BRANDMIN	57	/* first entry in GDT for brand usage */
 #define	GDT_BRANDMAX	61	/* last entry in GDT for brand usage */
-#if !defined(__xpv)
 #define	NGDT		90	/* number of entries in GDT */
-#else
-#define	NGDT		512	/* single 4K page for the hypervisor */
-#endif
 
 #endif	/* __i386 */
 
@@ -593,13 +570,8 @@ void init_boot_gdt(user_desc_t *);
  * kernel %cs. See desctbls.c for an example.
  */
 
-#if defined(__xpv) && defined(__amd64)
-#define	KCS_SEL		0xe030		/* FLAT_RING3_CS64 & 0xFFF0 */
-#define	KDS_SEL		0xe02b		/* FLAT_RING3_SS64 */
-#else
 #define	KCS_SEL		SEL_GDT(GDT_KCODE, SEL_KPL)
 #define	KDS_SEL		SEL_GDT(GDT_KDATA, SEL_KPL)
-#endif
 
 #define	UCS_SEL		SEL_GDT(GDT_UCODE, SEL_UPL)
 #if defined(__amd64)
@@ -684,9 +656,7 @@ extern tss_t *dftss0;
 
 extern void div0trap(), dbgtrap(), nmiint(), brktrap(), ovflotrap();
 extern void boundstrap(), invoptrap(), ndptrap();
-#if !defined(__xpv)
 extern void syserrtrap();
-#endif
 extern void invaltrap(), invtsstrap(), segnptrap(), stktrap();
 extern void gptrap(), pftrap(), ndperr();
 extern void overrun(), resvtrap();
@@ -700,9 +670,7 @@ extern void dtrace_ret();
 extern void tr_invaltrap();
 extern void tr_div0trap(), tr_dbgtrap(), tr_nmiint(), tr_brktrap();
 extern void tr_ovflotrap(), tr_boundstrap(), tr_invoptrap(), tr_ndptrap();
-#if !defined(__xpv)
 extern void tr_syserrtrap();
-#endif
 extern void tr_invaltrap(), tr_invtsstrap(), tr_segnptrap(), tr_stktrap();
 extern void tr_gptrap(), tr_pftrap(), tr_ndperr();
 extern void tr_overrun(), tr_resvtrap();

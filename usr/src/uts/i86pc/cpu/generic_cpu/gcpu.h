@@ -219,13 +219,9 @@ extern void gcpu_mca_init(cmi_hdl_t);
 extern void gcpu_mca_fini(cmi_hdl_t);
 extern void gcpu_mca_cmci_enable(cmi_hdl_t);
 extern cmi_errno_t gcpu_msrinject(cmi_hdl_t, cmi_mca_regs_t *, uint_t, int);
-#ifndef __xpv
 extern uint64_t gcpu_mca_trap(cmi_hdl_t, struct regs *);
 extern void gcpu_cmci_trap(cmi_hdl_t);
 extern void gcpu_hdl_poke(cmi_hdl_t);
-#else
-extern void gcpu_xpv_panic_callback(void);
-#endif
 
 /*
  * Local functions
@@ -237,9 +233,6 @@ extern void gcpu_poll_trace_init(gcpu_poll_trace_ctl_t *);
 extern void gcpu_poll_trace(gcpu_poll_trace_ctl_t *, uint8_t, uint8_t);
 extern void gcpu_mca_logout(cmi_hdl_t, struct regs *, uint64_t,
     gcpu_mce_status_t *, boolean_t, int);
-#ifdef __xpv
-extern void gcpu_xpv_mca_init(int);
-#endif /* __xpv */
 
 #endif /* _KERNEL */
 

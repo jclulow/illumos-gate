@@ -229,12 +229,7 @@ catch_fault:
 	SET_SIZE(setcr0)
 
         ENTRY(getcr2)
-#if defined(__xpv)
-	movq	%gs:CPU_VCPU_INFO, %rax
-	movq	VCPU_INFO_ARCH_CR2(%rax), %rax
-#else
         movq    %cr2, %rax
-#endif
         ret
 	SET_SIZE(getcr2)
 
@@ -242,8 +237,6 @@ catch_fault:
 	movq    %cr3, %rax
 	ret
 	SET_SIZE(getcr3)
-
-#if !defined(__xpv)
 
         ENTRY(setcr3)
         movq    %rdi, %cr3
@@ -255,8 +248,6 @@ catch_fault:
 	movq	%rdi, %cr3
 	ret
 	SET_SIZE(reload_cr3)
-
-#endif	/* __xpv */
 
 	ENTRY(getcr4)
 	movq	%cr4, %rax
@@ -320,12 +311,6 @@ catch_fault:
 	ret
 	SET_SIZE(i86_mwait)
 
-#if defined(__xpv)
-	/*
-	 * Defined in C
-	 */
-#else
-
 	ENTRY_NP(tsc_read)
 	movq	%rbx, %r11
 	movl	$0, %eax
@@ -370,8 +355,6 @@ _tsc_lfence_start:
 _tsc_lfence_end:
 	SET_SIZE(tsc_read)
 
-
-#endif	/* __xpv */
 
 	ENTRY_NP(randtick)
 	rdtsc
@@ -752,23 +735,6 @@ str_valid:
 	ENTRY(clear_int_flag)
 	pushfq
 	popq	%rax
-#if defined(__xpv)
-	leaq	xpv_panicking, %rdi
-	movl	(%rdi), %edi
-	cmpl	$0, %edi
-	jne	2f
-	CLIRET(%rdi, %dl)	/* returns event mask in %dl */
-	/*
-	 * Synthesize the PS_IE bit from the event mask bit
-	 */
-	andq    $_BITNOT(PS_IE), %rax
-	testb	$1, %dl
-	jnz	1f
-	orq	$PS_IE, %rax
-1:
-	ret
-2:
-#endif
 	CLI(%rdi)
 	ret
 	SET_SIZE(clear_int_flag)
@@ -817,20 +783,7 @@ str_valid:
 	ENTRY(restore_int_flag)
 	testq	$PS_IE, %rdi
 	jz	1f
-#if defined(__xpv)
-	leaq	xpv_panicking, %rsi
-	movl	(%rsi), %esi
-	cmpl	$0, %esi
-	jne	1f
-	/*
-	 * Since we're -really- running unprivileged, our attempt
-	 * to change the state of the IF bit will be ignored.
-	 * The virtual IF bit is tweaked by CLI and STI.
-	 */
-	IE_TO_EVENT_MASK(%rsi, %rdi)
-#else
 	sti
-#endif
 1:
 	ret
 	SET_SIZE(restore_int_flag)
@@ -849,22 +802,7 @@ str_valid:
 	ENTRY(dtrace_interrupt_disable)
 	pushfq
 	popq	%rax
-#if defined(__xpv)
-	leaq	xpv_panicking, %rdi
-	movl	(%rdi), %edi
-	cmpl	$0, %edi
-	jne	.dtrace_interrupt_disable_done
-	CLIRET(%rdi, %dl)	/* returns event mask in %dl */
-	/*
-	 * Synthesize the PS_IE bit from the event mask bit
-	 */
-	andq    $_BITNOT(PS_IE), %rax
-	testb	$1, %dl
-	jnz	.dtrace_interrupt_disable_done
-	orq	$PS_IE, %rax
-#else
 	CLI(%rdx)
-#endif
 .dtrace_interrupt_disable_done:
 	ret
 	SET_SIZE(dtrace_interrupt_disable)
@@ -872,18 +810,6 @@ str_valid:
 	ENTRY(dtrace_interrupt_enable)
 	pushq	%rdi
 	popfq
-#if defined(__xpv)
-	leaq	xpv_panicking, %rdx
-	movl	(%rdx), %edx
-	cmpl	$0, %edx
-	jne	.dtrace_interrupt_enable_done
-	/*
-	 * Since we're -really- running unprivileged, our attempt
-	 * to change the state of the IF bit will be ignored. The
-	 * virtual IF bit is tweaked by CLI and STI.
-	 */
-	IE_TO_EVENT_MASK(%rdx, %rdi)
-#endif
 .dtrace_interrupt_enable_done:
 	ret
 	SET_SIZE(dtrace_interrupt_enable)
@@ -1139,33 +1065,6 @@ str_valid:
 	SET_SIZE(invalidate_cache)
 
 	ENTRY_NP(getcregs)
-#if defined(__xpv)
-	/*
-	 * Only a few of the hardware control registers or descriptor tables
-	 * are directly accessible to us, so just zero the structure.
-	 *
-	 * XXPV	Perhaps it would be helpful for the hypervisor to return
-	 *	virtualized versions of these for post-mortem use.
-	 *	(Need to reevaluate - perhaps it already does!)
-	 */
-	pushq	%rdi		/* save *crp */
-	movq	$CREGSZ, %rsi
-	call	bzero
-	popq	%rdi
-
-	/*
-	 * Dump what limited information we can
-	 */
-	movq	%cr0, %rax
-	movq	%rax, CREG_CR0(%rdi)	/* cr0 */
-	movq	%cr2, %rax
-	movq	%rax, CREG_CR2(%rdi)	/* cr2 */
-	movq	%cr3, %rax
-	movq	%rax, CREG_CR3(%rdi)	/* cr3 */
-	movq	%cr4, %rax
-	movq	%rax, CREG_CR4(%rdi)	/* cr4 */
-
-#else	/* __xpv */
 
 #define	GETMSR(r, off, d)	\
 	movl	$r, %ecx;	\
@@ -1194,7 +1093,6 @@ str_valid:
 	movq	%rax, CREG_CR8(%rdi)	/* cr8 */
 	GETMSR(MSR_AMD_KGSBASE, CREG_KGSBASE, %rdi)
 	GETMSR(MSR_AMD_EFER, CREG_EFER, %rdi)
-#endif	/* __xpv */
 	ret
 	SET_SIZE(getcregs)
 
@@ -1564,20 +1462,6 @@ vpanic_common:
 	ENTRY(getflags)
 	pushfq
 	popq	%rax
-#if defined(__xpv)
-	CURTHREAD(%rdi)
-	KPREEMPT_DISABLE(%rdi)
-	/*
-	 * Synthesize the PS_IE bit from the event mask bit
-	 */
-	CURVCPU(%r11)
-	andq    $_BITNOT(PS_IE), %rax
-	XEN_TEST_UPCALL_MASK(%r11)
-	jnz	1f
-	orq	$PS_IE, %rax
-1:
-	KPREEMPT_ENABLE_NOKP(%rdi)
-#endif
 	ret
 	SET_SIZE(getflags)
 

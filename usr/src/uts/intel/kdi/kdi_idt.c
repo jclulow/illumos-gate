@@ -150,9 +150,7 @@ struct idt_description {
 	{ T_BOUNDFLT, 0,	kdi_trap5, NULL },
 	{ T_ILLINST, 0,		kdi_trap6, NULL },
 	{ T_NOEXTFLT, 0,	kdi_trap7, NULL },
-#if !defined(__xpv)
 	{ T_DBLFLT, 0,		syserrtrap, NULL },
-#endif
 	{ T_EXTOVRFLT, 0,	kdi_trap9, NULL },
 	{ T_TSSFLT, 0,		kdi_traperr10, NULL },
 	{ T_SEGFLT, 0,		kdi_traperr11, NULL },
@@ -180,10 +178,8 @@ kdi_idt_init(selector_t sel)
 		uint_t high = id->id_high != 0 ? id->id_high : id->id_low;
 		size_t incr = id->id_incrp != NULL ? *id->id_incrp : 0;
 
-#if !defined(__xpv)
 		if (kpti_enable && sel == KCS_SEL && id->id_low == T_DBLFLT)
 			id->id_basehdlr = tr_syserrtrap;
-#endif
 
 		for (i = id->id_low; i <= high; i++) {
 			caddr_t hdlr = (caddr_t)id->id_basehdlr +
@@ -389,15 +385,10 @@ kdi_trap_pass(kdi_cpusave_t *cpusave)
 	 * See the comments in the kernel's T_SGLSTP handler for why we need to
 	 * do this.
 	 */
-#if !defined(__xpv)
 	if (tt == T_SGLSTP &&
 	    (pc == (greg_t)sys_sysenter || pc == (greg_t)brand_sys_sysenter ||
 	    pc == (greg_t)tr_sys_sysenter ||
 	    pc == (greg_t)tr_brand_sys_sysenter)) {
-#else
-	if (tt == T_SGLSTP &&
-	    (pc == (greg_t)sys_sysenter || pc == (greg_t)brand_sys_sysenter)) {
-#endif
 		return (1);
 	}
 

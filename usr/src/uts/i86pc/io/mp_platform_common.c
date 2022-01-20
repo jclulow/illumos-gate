@@ -73,10 +73,8 @@
 #include <sys/pci_intr_lib.h>
 #include <sys/sunndi.h>
 #include <sys/prom_debug.h>
-#if !defined(__xpv)
 #include <sys/hpet.h>
 #include <sys/clock.h>
-#endif
 
 /*
  *	Local Function Prototypes
@@ -107,11 +105,9 @@ int apic_debug_mps_id = 0;	/* 1 - print MPS ID strings */
 int apic_sci_vect = -1;
 iflag_t apic_sci_flags;
 
-#if !defined(__xpv)
 /* ACPI HPET interrupt configuration; -1 if HPET not used */
 int apic_hpet_vect = -1;
 iflag_t apic_hpet_flags;
-#endif
 
 /*
  * psm name pointer
@@ -1031,7 +1027,6 @@ acpi_probe(char *modname)
 			    "?Using ACPI for CPU/IOAPIC information ONLY\n");
 		}
 
-#if !defined(__xpv)
 		/*
 		 * Probe ACPI for HPET information here which is used later in
 		 * apic_picinit().  Note that we do not need to use the HPET at
@@ -1041,7 +1036,6 @@ acpi_probe(char *modname)
 		PRM_POINT("hpet_acpi_init()");
 		(void) hpet_acpi_init(&apic_hpet_vect, &apic_hpet_flags,
 		    apic_timer_stop_count, apic_timer_restart);
-#endif
 
 		kmem_free(local_ids, NCPU * sizeof (uint32_t));
 		kmem_free(proc_ids, NCPU * sizeof (uint32_t));

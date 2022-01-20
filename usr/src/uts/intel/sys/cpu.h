@@ -39,9 +39,6 @@
 #include <sys/inttypes.h>
 
 #if defined(_KERNEL)
-#if defined(__xpv)
-#include <sys/hypervisor.h>
-#endif
 #if defined(__GNUC__) && defined(_ASM_INLINES)
 #include <asm/cpu.h>
 #endif

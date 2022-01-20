@@ -52,11 +52,9 @@ extern void unlock_hres_lock(void);
 extern void hres_tick(void);
 extern void (*hrtime_tick)(void);
 
-#ifndef __xpv
 extern void tsc_hrtimeinit(uint64_t cpu_freq_hz);
 extern void tsc_sync_master(processorid_t);
 extern void tsc_sync_slave(void);
-#endif
 
 /*
  * Careful: this can always return zero on some systems.  Use the system hrtime

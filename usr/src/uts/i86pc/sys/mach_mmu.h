@@ -144,11 +144,7 @@ extern void mmu_invlpg(caddr_t);
 
 #endif
 
-#ifdef __xpv
-#include <sys/xen_mmu.h>
-#else
 #include <sys/pc_mmu.h>
-#endif
 
 /*
  * The software extraction for a single Page Table Entry will always
