@@ -92,8 +92,6 @@ extern pfn_t xen_shared_info_frame;
 
 extern int xpv_feature(int);
 
-#define	IN_XPV_PANIC()	(__lintzero)
-
 #ifdef __cplusplus
 }
 #endif

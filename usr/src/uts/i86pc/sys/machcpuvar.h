@@ -46,19 +46,6 @@ extern "C" {
 
 #ifndef	_ASM
 /*
- * On a virtualized platform a virtual cpu may not be actually
- * on a physical cpu, especially in situations where a configuration has
- * more vcpus than pcpus.  This function tells us (if it's able) if the
- * specified vcpu is currently running on a pcpu.  Note if it is not
- * known or not able to determine, it will return the unknown state.
- */
-#define	VCPU_STATE_UNKNOWN	0
-#define	VCPU_ON_PCPU		1
-#define	VCPU_NOT_ON_PCPU	2
-
-extern int vcpu_on_pcpu(processorid_t);
-
-/*
  * Machine specific fields of the cpu struct
  * defined in common/sys/cpuvar.h.
  *
@@ -69,17 +56,6 @@ extern int vcpu_on_pcpu(processorid_t);
 struct cpuid_info;
 struct cpu_ucode_info;
 struct cmi_hdl;
-
-/*
- * A note about the hypervisor affinity bits: a one bit in the affinity mask
- * means the corresponding event channel is allowed to be serviced
- * by this cpu.
- */
-struct xen_evt_data {
-	ulong_t		pending_sel[PIL_MAX + 1]; /* event array selectors */
-	ulong_t		pending_evts[PIL_MAX + 1][sizeof (ulong_t) * 8];
-	ulong_t		evt_affinity[sizeof (ulong_t) * 8]; /* service on cpu */
-};
 
 enum fast_syscall_state {
 	FSS_DISABLED		= 0,

@@ -219,9 +219,6 @@ extern "C" {
  * limit give dtrace the red zone it needs below kernelbase.  The 32-bit
  * limit gives us a small red zone to detect address-space overruns in a
  * user program.
- *
- * On the hypervisor, we limit the user to memory below the VA hole.
- * Subtract 1 large page for a red zone.
  */
 #define	USERLIMIT	ADDRESS_C(0xfffffc7fffe00000)
 

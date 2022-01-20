@@ -303,9 +303,6 @@ extern void x86pte_mapout(void);
 #define	HTABLE_LOCK_INC(ht)	atomic_inc_32(&(ht)->ht_lock_cnt)
 #define	HTABLE_LOCK_DEC(ht)	atomic_dec_32(&(ht)->ht_lock_cnt)
 
-#define	XPV_ALLOW_PAGETABLE_UPDATES()
-#define	XPV_DISALLOW_PAGETABLE_UPDATES()
-
 #endif	/* _KERNEL */
 
 

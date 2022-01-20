@@ -110,7 +110,6 @@
 	ENTRY_NP(dbgtrap)
 	TRAP_NOERR(T_SGLSTP)	/* $1 */
 
-#if !defined(__xpv)		/* no sysenter support yet */
 	/*
 	 * If we get here as a result of single-stepping a sysenter
 	 * instruction, we suddenly find ourselves taking a #db
@@ -152,7 +151,6 @@
 1:	swapgs
 2:	lfence /* swapgs mitigation */
 	popq	%r11
-#endif	/* !__xpv */
 
 	INTR_PUSH
 	movq	%db6, %r15

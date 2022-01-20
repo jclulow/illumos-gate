@@ -234,17 +234,6 @@ softcall_choose_cpu()
 		    (cp->cpu_flags & CPU_ENABLE) == 0 ||
 		    (cp == cpu_inmotion))
 			continue;
-#if defined(__x86)
-		/*
-		 * Don't select this CPU if a hypervisor indicates it
-		 * isn't currently scheduled onto a physical cpu.  We are
-		 * looking for a cpu that can respond quickly and the time
-		 * to get the virtual cpu scheduled and switched to running
-		 * state is likely to be relatively lengthy.
-		 */
-		if (vcpu_on_pcpu(cp->cpu_id) == VCPU_NOT_ON_PCPU)
-			continue;
-#endif	/* __x86 */
 
 		/* if CPU is not busy */
 		if (cp->cpu_intrload == 0) {

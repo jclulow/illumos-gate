@@ -82,8 +82,7 @@
  * Historically, on x86, when a process was running on CPU, the root of the page
  * table was inserted into %cr3 on each CPU on which it was currently running.
  * When processes would switch (by calling hat_switch()), then the value in %cr3
- * on that CPU would change to that of the new HAT. While this behavior is still
- * maintained in the xpv kernel, this is not what is done today.
+ * on that CPU would change to that of the new HAT.
  *
  * -------------------
  * Per-CPU Page Tables
@@ -363,17 +362,6 @@ kmem_cache_t	*hat32_hash_cache;
  */
 struct hatstats hatstat;
 
-/*
- * Some earlier hypervisor versions do not emulate cmpxchg of PTEs
- * correctly.  For such hypervisors we must set PT_USER for kernel
- * entries ourselves (normally the emulation would set PT_USER for
- * kernel entries and PT_USER|PT_GLOBAL for user entries).  pt_kern is
- * thus set appropriately.  Note that dboot/kbm is OK, as only the full
- * HAT uses cmpxchg() and the other paths (hypercall etc.) were never
- * incorrect.
- */
-int pt_kern;
-
 extern pfn_t memseg_get_start(struct memseg *);
 
 #define	PP_GETRM(pp, rmmask)    (pp->p_nrm & rmmask)
@@ -524,7 +512,6 @@ hat_alloc(struct as *as)
 	 */
 	hat->hat_htable = NULL;
 	hat->hat_ht_cached = NULL;
-	XPV_DISALLOW_MIGRATE();
 	ht = htable_create(hat, (uintptr_t)0, TOP_LEVEL(hat), NULL);
 	hat->hat_htable = ht;
 
@@ -559,8 +546,6 @@ hat_alloc(struct as *as)
 	}
 
 init_done:
-
-	XPV_ALLOW_MIGRATE();
 
 	hat_list_append(hat);
 
@@ -883,7 +868,7 @@ mmu_init(void)
 
 
 	for (i = 0; i <= mmu.max_page_level; ++i) {
-		mmu.pte_bits[i] = PT_VALID | pt_kern;
+		mmu.pte_bits[i] = PT_VALID;
 		if (i > 0)
 			mmu.pte_bits[i] |= PT_PAGESIZE;
 	}
@@ -1552,7 +1537,6 @@ hat_swapout(hat_t *hat)
 	htable_t	*ht = NULL;
 	level_t		l;
 
-	XPV_DISALLOW_MIGRATE();
 	/*
 	 * We can't just call hat_unload(hat, 0, _userlimit...)  here, because
 	 * seg_spt and shared pagetables can't be swapped out.
@@ -1609,7 +1593,6 @@ hat_swapout(hat_t *hat)
 	 * go back and flush all the htables off the cached list.
 	 */
 	htable_purge_hat(hat);
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -1995,7 +1978,6 @@ hat_memload(
 	level_t		level = 0;
 	pfn_t		pfn = page_pptonum(pp);
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(hat == kas.a_hat || va < _userlimit);
 	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
@@ -2010,7 +1992,6 @@ hat_memload(
 	if (mmu.kmap_addr <= va && va < mmu.kmap_eaddr) {
 		ASSERT(hat == kas.a_hat);
 		hat_kmap_load(addr, pp, attr, flags);
-		XPV_ALLOW_MIGRATE();
 		return;
 	}
 
@@ -2021,7 +2002,6 @@ hat_memload(
 	attr |= HAT_STORECACHING_OK;
 	if (hati_load_common(hat, va, pp, attr, flags, level, pfn) != 0)
 		panic("unexpected hati_load_common() failure");
-	XPV_ALLOW_MIGRATE();
 }
 
 /* ARGSUSED */
@@ -2052,7 +2032,6 @@ hat_memload_array(
 	pfn_t		pfn;
 	pgcnt_t		i;
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(hat == kas.a_hat || va + len <= _userlimit);
 	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
@@ -2128,7 +2107,6 @@ hat_memload_array(
 		va += pgsize;
 		pgindx += mmu_btop(pgsize);
 	}
-	XPV_ALLOW_MIGRATE();
 }
 
 /* ARGSUSED */
@@ -2187,7 +2165,6 @@ hat_devload(
 	int		f;	/* per PTE copy of flags  - maybe modified */
 	uint_t		a;	/* per PTE copy of attr */
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(hat == kas.a_hat || eva <= _userlimit);
 	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
@@ -2270,7 +2247,6 @@ hat_devload(
 		va += pgsize;
 		pfn += mmu_btop(pgsize);
 	}
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -2297,7 +2273,6 @@ hat_unlock(hat_t *hat, caddr_t addr, size_t len)
 	if (eaddr > _userlimit)
 		panic("hat_unlock() address out of range - above _userlimit");
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(AS_LOCK_HELD(hat->hat_as));
 	while (vaddr < eaddr) {
 		(void) htable_walk(hat, &ht, &vaddr, eaddr);
@@ -2315,7 +2290,6 @@ hat_unlock(hat_t *hat, caddr_t addr, size_t len)
 	}
 	if (ht)
 		htable_release(ht);
-	XPV_ALLOW_MIGRATE();
 }
 
 /* ARGSUSED */
@@ -2661,7 +2635,6 @@ hat_unload(hat_t *hat, caddr_t addr, size_t len, uint_t flags)
 {
 	uintptr_t va = (uintptr_t)addr;
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(hat == kas.a_hat || va + len <= _userlimit);
 
 	/*
@@ -2673,7 +2646,6 @@ hat_unload(hat_t *hat, caddr_t addr, size_t len, uint_t flags)
 	} else {
 		hat_unload_callback(hat, addr, len, flags, NULL);
 	}
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -2725,7 +2697,6 @@ hat_unload_callback(
 	uint_t		r_cnt = 0;
 	x86pte_t	old_pte;
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(hat == kas.a_hat || eaddr <= _userlimit);
 	ASSERT(IS_PAGEALIGNED(vaddr));
 	ASSERT(IS_PAGEALIGNED(eaddr));
@@ -2743,7 +2714,6 @@ hat_unload_callback(
 			}
 			htable_release(ht);
 		}
-		XPV_ALLOW_MIGRATE();
 		return;
 	}
 
@@ -2796,7 +2766,6 @@ hat_unload_callback(
 	 */
 	if (r_cnt > 0)
 		handle_ranges(hat, cb, r_cnt, r);
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -2844,7 +2813,6 @@ hat_sync(hat_t *hat, caddr_t addr, size_t len, uint_t flags)
 	ASSERT(IS_PAGEALIGNED(eaddr));
 	ASSERT(hat == kas.a_hat || eaddr <= _userlimit);
 
-	XPV_DISALLOW_MIGRATE();
 	for (; vaddr < eaddr; vaddr += LEVEL_SIZE(ht->ht_level)) {
 try_again:
 		pte = htable_walk(hat, &ht, &vaddr, eaddr);
@@ -2898,7 +2866,6 @@ try_again:
 	}
 	if (ht)
 		htable_release(ht);
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -2968,7 +2935,6 @@ hat_updateattr(hat_t *hat, caddr_t addr, size_t len, uint_t attr, int what)
 	x86pte_t	oldpte, newpte;
 	page_t		*pp;
 
-	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(vaddr));
 	ASSERT(IS_PAGEALIGNED(eaddr));
 	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
@@ -3055,7 +3021,6 @@ try_again:
 	}
 	if (ht)
 		htable_release(ht);
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -3133,7 +3098,6 @@ hat_getpfnum(hat_t *hat, caddr_t addr)
 	if (IN_VA_HOLE(vaddr))
 		return (PFN_INVALID);
 
-	XPV_DISALLOW_MIGRATE();
 	/*
 	 * A very common use of hat_getpfnum() is from the DDI for kernel pages.
 	 * Use the kmap_ptes (which also covers the 32 bit heap) to speed
@@ -3148,13 +3112,11 @@ hat_getpfnum(hat_t *hat, caddr_t addr)
 		if (PTE_ISVALID(pte))
 			/*LINTED [use of constant 0 causes a lint warning] */
 			pfn = PTE2PFN(pte, 0);
-		XPV_ALLOW_MIGRATE();
 		return (pfn);
 	}
 
 	ht = htable_getpage(hat, vaddr, &entry);
 	if (ht == NULL) {
-		XPV_ALLOW_MIGRATE();
 		return (PFN_INVALID);
 	}
 	ASSERT(vaddr >= ht->ht_vaddr);
@@ -3163,7 +3125,6 @@ hat_getpfnum(hat_t *hat, caddr_t addr)
 	if (ht->ht_level > 0)
 		pfn += mmu_btop(vaddr & LEVEL_OFFSET(ht->ht_level));
 	htable_release(ht);
-	XPV_ALLOW_MIGRATE();
 	return (pfn);
 }
 
@@ -3267,7 +3228,6 @@ hat_share(
 		ASSERT(hat_get_mapped_size(ism_hat) == 0);
 		return (0);
 	}
-	XPV_DISALLOW_MIGRATE();
 
 	/*
 	 * The SPT segment driver often passes us a size larger than there are
@@ -3417,7 +3377,6 @@ not_shared:
 	}
 	if (ism_ht != NULL)
 		htable_release(ism_ht);
-	XPV_ALLOW_MIGRATE();
 	return (0);
 }
 
@@ -3442,7 +3401,6 @@ hat_unshare(hat_t *hat, caddr_t addr, size_t len, uint_t ismszc)
 	ASSERT(eaddr <= _userlimit);
 	ASSERT(IS_PAGEALIGNED(vaddr));
 	ASSERT(IS_PAGEALIGNED(eaddr));
-	XPV_DISALLOW_MIGRATE();
 
 	/*
 	 * First go through and remove any shared pagetables.
@@ -3492,7 +3450,6 @@ hat_unshare(hat_t *hat, caddr_t addr, size_t len, uint_t ismszc)
 	if (!is_it_dism(hat, addr))
 		flags |= HAT_UNLOAD_UNLOCK;
 	hat_unload(hat, addr, len, flags);
-	XPV_ALLOW_MIGRATE();
 }
 
 
@@ -3520,7 +3477,6 @@ hati_page_clrwrt(struct page *pp)
 	x86pte_t	new;
 	uint_t		pszc = 0;
 
-	XPV_DISALLOW_MIGRATE();
 next_size:
 	/*
 	 * walk thru the mapping list clearing write permission
@@ -3562,7 +3518,6 @@ next_size:
 			goto next_size;
 		}
 	}
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -3726,8 +3681,6 @@ hati_pageunload(struct page *pp, uint_t pg_szcd, uint_t forceflag)
 	uint_t		entry;
 	level_t		level;
 
-	XPV_DISALLOW_MIGRATE();
-
 	/*
 	 * prevent recursion due to kmem_free()
 	 */
@@ -3761,7 +3714,6 @@ next_size:
 				if (cur_pp->p_szc <= pg_szcd) {
 					ASSERT(curthread->t_hatdepth > 0);
 					--curthread->t_hatdepth;
-					XPV_ALLOW_MIGRATE();
 					return (0);
 				}
 
@@ -4021,7 +3973,6 @@ hat_pagesync(struct page *pp, uint_t flags)
 		}
 	}
 
-	XPV_DISALLOW_MIGRATE();
 next_size:
 	/*
 	 * walk thru the mapping list syncing (and clearing) ref/mod bits.
@@ -4081,7 +4032,6 @@ try_again:
 		}
 	}
 done:
-	XPV_ALLOW_MIGRATE();
 	return (save_pp->p_nrm & nrmbits);
 }
 
@@ -4161,9 +4111,7 @@ void
 hat_thread_exit(kthread_t *thd)
 {
 	ASSERT(thd->t_procp->p_as == &kas);
-	XPV_DISALLOW_MIGRATE();
 	hat_switch(thd->t_procp->p_as->a_hat);
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -4173,13 +4121,11 @@ hat_thread_exit(kthread_t *thd)
 void
 hat_setup(hat_t *hat, int flags)
 {
-	XPV_DISALLOW_MIGRATE();
 	kpreempt_disable();
 
 	hat_switch(hat);
 
 	kpreempt_enable();
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -4204,7 +4150,6 @@ hat_mempte_setup(caddr_t addr)
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(!IN_VA_HOLE(va));
 	++curthread->t_hatdepth;
-	XPV_DISALLOW_MIGRATE();
 	ht = htable_getpte(kas.a_hat, va, &entry, &oldpte, 0);
 	if (ht == NULL) {
 		ht = htable_create(kas.a_hat, va, 0, NULL);
@@ -4225,7 +4170,6 @@ hat_mempte_setup(caddr_t addr)
 	 * return the PTE physical address to the caller.
 	 */
 	htable_release(ht);
-	XPV_ALLOW_MIGRATE();
 	p = PT_INDEX_PHYSADDR(pfn_to_pa(ht->ht_pfn), entry);
 	--curthread->t_hatdepth;
 	return (p);
@@ -4241,7 +4185,6 @@ hat_mempte_release(caddr_t addr, hat_mempte_t pte_pa)
 {
 	htable_t	*ht;
 
-	XPV_DISALLOW_MIGRATE();
 	/*
 	 * invalidate any left over mapping and decrement the htable valid count
 	 */
@@ -4264,7 +4207,6 @@ hat_mempte_release(caddr_t addr, hat_mempte_t pte_pa)
 	ASSERT(ht->ht_level == 0);
 	HTABLE_DEC(ht->ht_valid_cnt);
 	htable_release(ht);
-	XPV_ALLOW_MIGRATE();
 }
 
 /*
@@ -4299,7 +4241,6 @@ hat_mempte_remap(
 	ASSERT(ht->ht_pfn == mmu_btop(pte_pa));
 	htable_release(ht);
 #endif
-	XPV_DISALLOW_MIGRATE();
 	pte = hati_mkpte(pfn, attr, 0, flags);
 	{
 		x86pte_t *pteptr;
@@ -4313,7 +4254,6 @@ hat_mempte_remap(
 		mmu_flush_tlb_kpage((uintptr_t)addr);
 		x86pte_mapout();
 	}
-	XPV_ALLOW_MIGRATE();
 }
 
 

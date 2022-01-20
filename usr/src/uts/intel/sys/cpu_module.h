@@ -84,17 +84,6 @@ typedef enum cmi_errno {
  * be prepared for some operations that "cannot fail" to fail or return
  * odd data.
  *
- * A CMI_HDL_SOLARIS_xVM_MCA handle is used when we are running
- * in i86xpv architecture - dom0 to a Solaris xVM hypervisor - and want to
- * use a handle on each real execution core (as opposed to vcpu)
- * to perform MCA related activities.  The model for this handle type
- * is that the hypervisor continues to own the real hardware and
- * includes a polling service and #MC handler which forward error
- * telemetry to dom0 for logging and diagnosis.  As such, the operations
- * such as RDMSR and WRMSR for this handle type do *not* read and write
- * real MSRs via hypercalls- instead they should provide the values from
- * already-read MCA bank telemetry, and writes are discarded.
- *
  * If some application requires real MSR read and write access another
  * handle class should be introduced.
  */
@@ -103,7 +92,6 @@ typedef struct cmi_hdl *cmi_hdl_t;	/* opaque chip/core/strand handle */
 
 enum cmi_hdl_class {
 	CMI_HDL_NATIVE,
-	CMI_HDL_SOLARIS_xVM_MCA,
 	CMI_HDL_NEUTRAL
 };
 

@@ -246,9 +246,6 @@ mdboot(int cmd, int fcn, char *mdep, boolean_t invoke_cb)
 	if (!(fcn == AD_HALT || fcn == AD_POWEROFF))
 		prom_printf("rebooting...\n");
 
-	if (IN_XPV_PANIC())
-		reset();
-
 	/*
 	 * We can't bring up the console from above lock level, so do it now
 	 */
@@ -893,16 +890,10 @@ panic_stopcpus(cpu_t *cp, kthread_t *t, int spl)
 	processorid_t i;
 	cpuset_t xcset;
 
-	/*
-	 * In the case of a Xen panic, the hypervisor has already stopped
-	 * all of the CPUs.
-	 */
-	if (!IN_XPV_PANIC()) {
-		(void) splzs();
+	(void) splzs();
 
-		CPUSET_ALL_BUT(xcset, cp->cpu_id);
-		xc_priority(0, 0, 0, CPUSET2BV(xcset), (xc_func_t)panic_idle);
-	}
+	CPUSET_ALL_BUT(xcset, cp->cpu_id);
+	xc_priority(0, 0, 0, CPUSET2BV(xcset), (xc_func_t)panic_idle);
 
 	for (i = 0; i < NCPU; i++) {
 		if (i != cp->cpu_id && cpu[i] != NULL &&

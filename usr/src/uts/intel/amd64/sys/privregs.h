@@ -123,15 +123,7 @@ struct regs {
 #include <sys/machprivregs.h>
 #include <sys/pcb.h>
 
-/*
- * We can not safely sample {fs,gs}base on the hypervisor. The rdmsr
- * instruction triggers a #gp fault which is emulated in the hypervisor
- * on behalf of the guest. This is normally ok but if the guest is in
- * the special failsafe handler it must not fault again or the hypervisor
- * will kill the domain. We could use something different than INTR_PUSH
- * in xen_failsafe_callback but for now we will not sample them.
- */
-#if defined(DEBUG) && !defined(__xpv)
+#if defined(DEBUG)
 #define	__SAVE_BASES				\
 	movl    $MSR_AMD_FSBASE, %ecx;          \
 	rdmsr;                                  \

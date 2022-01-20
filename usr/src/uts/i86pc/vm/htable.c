@@ -191,7 +191,6 @@ ptable_free(pfn_t pfn)
 		panic("ptable_free(): no page for pfn!");
 	ASSERT(PAGE_SHARED(pp));
 	ASSERT(pfn == pp->p_pagenum);
-	ASSERT(!IN_XPV_PANIC());
 
 	/*
 	 * Get an exclusive lock, might have to wait for a kmem reader.
@@ -606,9 +605,7 @@ htable_reap(void *handle)
 	/*
 	 * Let htable_steal() do the work, we just call htable_free()
 	 */
-	XPV_DISALLOW_MIGRATE();
 	list = htable_steal(reap_cnt, B_TRUE);
-	XPV_ALLOW_MIGRATE();
 	while ((ht = list) != NULL) {
 		list = ht->ht_next;
 		HATSTAT_INC(hs_reaped);
@@ -1760,12 +1757,10 @@ x86pte_mapin(pfn_t pfn, uint_t index, htable_t *ht)
 	if (!PTE_EQUIV(newpte, pte)) {
 
 		{
-			XPV_ALLOW_PAGETABLE_UPDATES();
 			if (mmu.pae_hat)
 				*pteptr = newpte;
 			else
 				*(x86pte32_t *)pteptr = newpte;
-			XPV_DISALLOW_PAGETABLE_UPDATES();
 			mmu_flush_tlb_kpage((uintptr_t)PWIN_VA(x));
 		}
 	}
@@ -1874,9 +1869,7 @@ x86pte_set(htable_t *ht, uint_t entry, x86pte_t new, void *ptr)
 			goto done;
 		}
 
-		XPV_ALLOW_PAGETABLE_UPDATES();
 		old = CAS_PTE(ptep, prev, n);
-		XPV_DISALLOW_PAGETABLE_UPDATES();
 	} while (old != prev);
 
 	/*
@@ -1911,9 +1904,7 @@ x86pte_cas(htable_t *ht, uint_t entry, x86pte_t old, x86pte_t new)
 	x86pte_t	pte;
 	x86pte_t	*ptep;
 	ptep = x86pte_access_pagetable(ht, entry);
-	XPV_ALLOW_PAGETABLE_UPDATES();
 	pte = CAS_PTE(ptep, old, new);
-	XPV_DISALLOW_PAGETABLE_UPDATES();
 	x86pte_release_pagetable(ht);
 	return (pte);
 }
@@ -1954,9 +1945,7 @@ x86pte_inval(
 		oldpte = GET_PTE(ptep);
 		if (expect != 0 && (oldpte & PT_PADDR) != (expect & PT_PADDR))
 			goto done;
-		XPV_ALLOW_PAGETABLE_UPDATES();
 		found = CAS_PTE(ptep, oldpte, 0);
-		XPV_DISALLOW_PAGETABLE_UPDATES();
 	} while (found != oldpte);
 	if (tlb && (oldpte & (PT_REF | PT_MOD)))
 		hat_tlb_inval(ht->ht_hat, htable_e2va(ht, entry));
@@ -1985,9 +1974,7 @@ x86pte_update(
 	ASSERT(ht->ht_level <= mmu.max_page_level);
 
 	ptep = x86pte_access_pagetable(ht, entry);
-	XPV_ALLOW_PAGETABLE_UPDATES();
 	found = CAS_PTE(ptep, expect, new);
-	XPV_DISALLOW_PAGETABLE_UPDATES();
 	if (found == expect) {
 		hat_tlb_inval(ht->ht_hat, htable_e2va(ht, entry));
 
@@ -2004,10 +1991,8 @@ x86pte_update(
 		    (GET_PTE(ptep) & PT_MOD) != 0) {
 			do {
 				found = GET_PTE(ptep);
-				XPV_ALLOW_PAGETABLE_UPDATES();
 				found =
 				    CAS_PTE(ptep, found, found | PT_WRITABLE);
-				XPV_DISALLOW_PAGETABLE_UPDATES();
 			} while ((found & PT_WRITABLE) == 0);
 		}
 	}

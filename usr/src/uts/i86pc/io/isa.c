@@ -1318,14 +1318,6 @@ enumerate_BIOS_serial(dev_info_t *isa_dip)
 			isa_extra_count++;
 		}
 	}
-
-	/*
-	 * An asy node may have been attached via ACPI enumeration, or
-	 * directly from this file.  Check each serial port to see if it
-	 * is in use by the hypervisor.  If it is in use, then remove
-	 * the node from the device tree.
-	 */
-
 }
 
 /*

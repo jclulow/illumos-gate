@@ -261,9 +261,6 @@ typedef struct tlb_range {
 	int8_t	tr_level; 	/* page table level */
 } tlb_range_t;
 
-#define	XPV_DISALLOW_MIGRATE()	/* nothing */
-#define	XPV_ALLOW_MIGRATE()	/* nothing */
-
 #define	pfn_is_foreign(pfn)	__lintzero
 
 typedef enum flush_tlb_type {

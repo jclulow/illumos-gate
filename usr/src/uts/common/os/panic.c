@@ -325,16 +325,7 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 
 		fm_banner();
 
-#if defined(__x86)
-		/*
-		 * A hypervisor panic originates outside of Solaris, so we
-		 * don't want to prepend the panic message with misleading
-		 * pointers from within Solaris.
-		 */
-		if (!IN_XPV_PANIC())
-#endif
-			printf("\n\rpanic[cpu%d]/thread=%p: ", cp->cpu_id,
-			    (void *)t);
+		printf("\n\rpanic[cpu%d]/thread=%p: ", cp->cpu_id, (void *)t);
 		vprintf(format, alist);
 		printf("\n\n");
 

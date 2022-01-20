@@ -200,12 +200,11 @@ extern void smap_enable(void);
 extern void setup_mca(void);
 extern void pat_sync(void);
 extern void patch_tsc_read(int);
-#if defined(__amd64) && !defined(__xpv)
+#if defined(__amd64)
 extern void patch_memops(uint_t);
-#endif	/* defined(__amd64) && !defined(__xpv) */
+#endif
 extern void setup_xfem(void);
 #define	cpr_dprintf prom_printf
-#define	IN_XPV_PANIC() (__lintzero)
 
 #endif /* _KERNEL */
 

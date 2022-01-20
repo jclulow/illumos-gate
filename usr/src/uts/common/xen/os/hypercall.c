@@ -134,15 +134,9 @@ HYPERVISOR_multicall(void *call_list, uint_t nr_calls)
 int
 HYPERVISOR_update_va_mapping(ulong_t va, uint64_t new_pte, ulong_t flags)
 {
-#if !defined(_BOOT)
-	if (IN_XPV_PANIC())
-		return (0);
-#endif
 #if defined(__amd64)
-
 	return (__hypercall3_int(__HYPERVISOR_update_va_mapping, va,
 	    new_pte, flags));
-
 #endif	/* __amd64 */
 }
 

@@ -82,21 +82,14 @@ extern "C" {
 #define	SELTOIDX(s)	((s) >> 3)	/* selector to index */
 
 /*
- * SEL_(KPL,UPL,XPL) is the RPL or DPL value for code and data selectors
- * and their descriptors respectively.
+ * SEL_(KPL,UPL) is the RPL or DPL value for code and data selectors and their
+ * descriptors respectively.
  *
- * TRP_(KPL,UPL,XPL) is used to indicate the DPL for system gates only.
+ * TRP_(KPL,UPL) is used to indicate the DPL for system gates only.
  *
- * This distinction is important to support para-virt guests on the
- * 64-bit hypervisor. Both guest kernel and user run in ring 3 and the
- * hypervisor runs in ring 0. When the kernel creates its trap and
- * interrupt gates it needs a way to prevent any arbitrary int $n
- * instruction from entering a gate that is not expected. The hypervisor
- * allows these gates to have a DPL from 1 to 3. By creating gates
- * with a DPL below user (ring 3) the int $n will generate a #gp fault
- * which the hypervisor catches and forwards to the guest.
+ * This distinction was historically important for para-virt guests on the
+ * 64-bit Xen hypervisor.
  */
-
 #define	SEL_KPL		0		/* kernel privilege level on metal */
 #define	TRP_KPL		SEL_KPL		/* system gate priv (user blocked) */
 

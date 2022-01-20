@@ -385,13 +385,6 @@ resume_return:
 
 	/* clean up the fp unit. It might be left enabled */
 
-#if defined(__xpv)		/* XXPV XXtclayton */
-	/*
-	 * Remove this after bringup.
-	 * (Too many #gp's for an instrumented hypervisor.)
-	 */
-	STTS(%rax)
-#else
 	movq	%cr0, %rax
 	testq	$CR0_TS, %rax
 	jnz	.zfpu_disabled		/* if TS already set, nothing to do */
@@ -399,8 +392,6 @@ resume_return:
 	orq	$CR0_TS, %rax
 	movq	%rax, %cr0
 .zfpu_disabled:
-
-#endif	/* __xpv */
 
 	/*
 	 * Temporarily switch to the idle thread's stack so that the zombie

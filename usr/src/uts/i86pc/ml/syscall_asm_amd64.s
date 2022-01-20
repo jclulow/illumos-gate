@@ -381,42 +381,14 @@ __bad_ts_msg:
  *
  * Or in other words, we have no registers available at all.
  * Only swapgs can save us!
- *
- * Under the hypervisor, the swapgs has happened already.  However, the
- * state of the world is very different from that we're familiar with.
- *
- * In particular, we have a stack structure like that for interrupt
- * gates, except that the %cs and %ss registers are modified for reasons
- * that are not entirely clear.  Critically, the %rcx/%r11 values do
- * *not* reflect the usage of those registers under a 'real' syscall[1];
- * the stack, therefore, looks like this:
- *
- *	0x0(rsp)	potentially junk %rcx
- *	0x8(rsp)	potentially junk %r11
- *	0x10(rsp)	user %rip
- *	0x18(rsp)	modified %cs
- *	0x20(rsp)	user %rflags
- *	0x28(rsp)	user %rsp
- *	0x30(rsp)	modified %ss
- *
- *
- * and before continuing on, we must load the %rip into %rcx and the
- * %rflags into %r11.
- *
- * [1] They used to, and we relied on it, but this was broken in 3.1.1.
- * Sigh.
  */
-#define	XPV_SYSCALL_PROD /* nothing */
-
 	ENTRY_NP2(brand_sys_syscall,_allsyscalls)
 	SWAPGS				/* kernel gsbase */
-	XPV_SYSCALL_PROD
 	BRAND_CALLBACK(BRAND_CB_SYSCALL, BRAND_URET_FROM_REG(%rcx))
 	jmp	noprod_sys_syscall
 
 	ALTENTRY(sys_syscall)
 	SWAPGS				/* kernel gsbase */
-	XPV_SYSCALL_PROD
 
 noprod_sys_syscall:
 	movq	%r15, %gs:CPU_RTMP_R15
@@ -483,7 +455,7 @@ noprod_sys_syscall:
 	 *
 	 * Since we already did SWAPGS, record the KGSBASE.
 	 */
-#if defined(DEBUG) && defined(TRAPTRACE) && !defined(__xpv)
+#if defined(DEBUG) && defined(TRAPTRACE)
 	movl	$MSR_AMD_KGSBASE, %ecx
 	rdmsr
 	movl	%eax, REGOFF_GSBASE(%rsp)
@@ -690,13 +662,11 @@ _syscall_post_call:
 
 	ENTRY_NP(brand_sys_syscall32)
 	SWAPGS				/* kernel gsbase */
-	XPV_TRAP_POP
 	BRAND_CALLBACK(BRAND_CB_SYSCALL32, BRAND_URET_FROM_REG(%rcx))
 	jmp	nopop_sys_syscall32
 
 	ALTENTRY(sys_syscall32)
 	SWAPGS				/* kernel gsbase */
-	XPV_TRAP_POP
 
 nopop_sys_syscall32:
 	movl	%esp, %r10d
@@ -746,7 +716,7 @@ _syscall32_save:
 	 *
 	 * Since we already did SWAPGS, record the KGSBASE.
 	 */
-#if defined(DEBUG) && defined(TRAPTRACE) && !defined(__xpv)
+#if defined(DEBUG) && defined(TRAPTRACE)
 	movl	$MSR_AMD_KGSBASE, %ecx
 	rdmsr
 	movl	%eax, REGOFF_GSBASE(%rsp)
@@ -1018,7 +988,7 @@ _full_syscall_postsys32:
 	 *
 	 * Since we already did SWAPGS, record the KGSBASE.
 	 */
-#if defined(DEBUG) && defined(TRAPTRACE) && !defined(__xpv)
+#if defined(DEBUG) && defined(TRAPTRACE)
 	movl	$MSR_AMD_KGSBASE, %ecx
 	rdmsr
 	movl	%eax, REGOFF_GSBASE(%rsp)
@@ -1179,14 +1149,12 @@ _full_syscall_postsys32:
 
 	ENTRY_NP(brand_sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
-	XPV_TRAP_POP
 	call	smap_enable
 	BRAND_CALLBACK(BRAND_CB_INT91, BRAND_URET_FROM_INTR_STACK())
 	jmp	nopop_syscall_int
 
 	ALTENTRY(sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
-	XPV_TRAP_POP
 	call	smap_enable
 
 nopop_syscall_int:

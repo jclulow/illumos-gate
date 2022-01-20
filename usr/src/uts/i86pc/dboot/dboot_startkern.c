@@ -2037,7 +2037,7 @@ startup_kernel(void)
 	 */
 	init_mem_alloc();
 
-#if !defined(__xpv) && !defined(_BOOT_TARGET_amd64)
+#if !defined(_BOOT_TARGET_amd64)
 	/*
 	 * disable PAE on 32 bit h/w w/o NX and < 4Gig of memory
 	 */
@@ -2080,7 +2080,7 @@ startup_kernel(void)
 
 	ktext_phys = FOUR_MEG;		/* from UNIX Mapfile */
 
-#if !defined(__xpv) && defined(_BOOT_TARGET_amd64)
+#if defined(_BOOT_TARGET_amd64)
 	/*
 	 * For grub, copy kernel bits from the ELF64 file to final place.
 	 */

@@ -141,11 +141,6 @@ serial_init(void)
 	/* disable interrupts */
 	outb(port + ICR, 0);
 
-#if !defined(_BOOT)
-	if (IN_XPV_PANIC())
-		return;
-#endif
-
 	/* adjust setting based on tty properties */
 	serial_adjust_prop();
 }

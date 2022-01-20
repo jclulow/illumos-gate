@@ -675,14 +675,3 @@ out_online:
 
 	return (rv);
 }
-
-/*
- * Return vcpu state, since this could be a virtual environment that we
- * are unaware of, return "unknown".
- */
-/* ARGSUSED */
-int
-vcpu_on_pcpu(processorid_t cpu)
-{
-	return (VCPU_STATE_UNKNOWN);
-}
