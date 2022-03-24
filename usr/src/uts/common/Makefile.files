@@ -29,7 +29,7 @@
 # Copyright 2016 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 # Copyright 2020 RackTop Systems, Inc.
-# Copyright 2021 Oxide Computer Company
+# Copyright 2022 Oxide Computer Company
 #
 
 #
@@ -2108,6 +2108,9 @@ VIOBLK_OBJS = vioblk.o
 
 # Virtio network driver
 VIOIF_OBJS = vioif.o
+
+# Virtio 9P transport driver
+VIO9P_OBJS = vio9p.o
 
 #
 #	kiconv modules

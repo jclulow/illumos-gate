@@ -22,6 +22,7 @@
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
  */
 
 #include <regex.h>
@@ -33,6 +34,7 @@
 #include <sys/zone.h>
 #include <sys/zcons.h>
 #include <sys/cpuid_drv.h>
+#include <sys/sysmacros.h>
 
 static int display(di_minor_t minor, di_node_t node);
 static int parallel(di_minor_t minor, di_node_t node);
@@ -57,6 +59,7 @@ static int cpuid(di_minor_t minor, di_node_t node);
 static int glvc(di_minor_t minor, di_node_t node);
 static int ses_callback(di_minor_t minor, di_node_t node);
 static int kmdrv_create(di_minor_t minor, di_node_t node);
+static int vio9p_create(di_minor_t minor, di_node_t node);
 
 static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo", "(^sad$)",
@@ -206,7 +209,10 @@ static devfsadm_create_t misc_cbt[] = {
 	},
 	{ "pseudo", "ddi_pseudo", "overlay",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
-	}
+	},
+	{ "pseudo", "ddi_pseudo", "vio9p",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, vio9p_create,
+	},
 };
 
 DEVFSADM_CREATE_INIT_V0(misc_cbt);
@@ -245,7 +251,10 @@ static devfsadm_remove_t misc_remove_cbt[] = {
 	},
 	{ "pseudo", "^sctp|sctp6$",
 	    RM_PRE | RM_ALWAYS, ILEVEL_0, devfsadm_rm_link
-	}
+	},
+	{ "9p", "^9p/[0-9]+$",
+	    RM_PRE | RM_HOT | RM_ALWAYS, ILEVEL_0, devfsadm_rm_all
+	},
 };
 
 /* Rules for gpio devices */
@@ -623,6 +632,44 @@ av_create(di_minor_t minor, di_node_t node)
 	}
 
 	(void) snprintf(path, sizeof (path), "av/%s/%s", buf, minor_str);
+	free(buf);
+
+	(void) devfsadm_mklink(path, node, minor, 0);
+
+	return (DEVFSADM_CONTINUE);
+}
+
+/*
+ * Create device nodes for Virtio 9P channels:
+ *	/dev/9p/[0-9]+
+ */
+static int
+vio9p_create(di_minor_t minor, di_node_t node)
+{
+	devfsadm_enumerate_t rules[1] = {"^9p$/^([0-9]+)$", 1, MATCH_ADDR};
+	char *minor_name = di_minor_name(minor);
+	char path[PATH_MAX + 1];
+	char *devpath, *buf;
+
+	if (strcmp(minor_name, "9p") != 0) {
+		return (DEVFSADM_CONTINUE);
+	}
+
+	/*
+	 * Add the minor name to the physical path so that we can enumerate the
+	 * channel number for link creation:
+	 */
+	if ((devpath = di_devfs_path(node)) == NULL) {
+		return (DEVFSADM_CONTINUE);
+	}
+	(void) snprintf(path, sizeof (path), "%s:%s", devpath, minor_name);
+	di_devfs_path_free(devpath);
+
+	if (devfsadm_enumerate_int(path, 0, &buf, rules, ARRAY_SIZE(rules))) {
+		return (DEVFSADM_CONTINUE);
+	}
+
+	(void) snprintf(path, sizeof (path), "9p/%s", buf);
 	free(buf);
 
 	(void) devfsadm_mklink(path, node, minor, 0);

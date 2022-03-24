@@ -27,7 +27,7 @@
 # Copyright 2018 Nexenta Systems, Inc.
 # Copyright 2019 RackTop Systems
 # Copyright 2019 Peter Tribble.
-# Copyright 2021 Oxide Computer Company
+# Copyright 2022 Oxide Computer Company
 #
 
 #
@@ -417,6 +417,9 @@ DRV_KMODS	+= vioblk
 
 # Virtio network driver
 DRV_KMODS	+= vioif
+
+# Virtio 9P transport driver
+DRV_KMODS	+= vio9p
 
 #
 #	DTrace and DTrace Providers
