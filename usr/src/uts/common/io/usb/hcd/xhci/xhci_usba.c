@@ -25,6 +25,8 @@
 #include <sys/strsun.h>
 #include <sys/strsubr.h>
 
+volatile int xhci_noop_madness = 0;
+
 xhci_t *
 xhci_hcdi_get_xhcip_from_dev(usba_device_t *ud)
 {
@@ -212,53 +214,63 @@ xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 		return (ret);
 	}
 
-	if (xhci_pipe_madness && xep->xep_type == USB_EP_ATTR_BULK) {
-#if 0
-		boolean_t in = (ph->p_ep.bEndpointAddress & USB_EP_DIR_MASK) ==
-		    USB_EP_DIR_IN;
-#endif
-		delay(drv_usectohz(10 * 1000));
+	mutex_exit(&xd->xd_imtx);
 
-		if ((ret = xhci_command_stop_endpoint(xhcip, xd, xep)) != 
-		    USB_SUCCESS) {
-			xhci_error(xhcip,
-			    "failed to stop endpoint on pipe open %d", ret);
-			mutex_exit(&xd->xd_imtx);
-			xhci_endpoint_fini(xd, epid);
-			kmem_free(pipe, sizeof (xhci_pipe_t));
-			return (ret);
+	if (xhci_noop_madness && xep->xep_type == USB_EP_ATTR_BULK) {
+		/*
+		 * XXX Let's try shoving a no-op TRB in there and waiting for
+		 * it to complete...
+		 */
+		mutex_enter(&xhcip->xhci_lock);
+		for (uint_t n = 0; n < 4; n++) {
+			cmn_err(CE_WARN, "XHCI: sending NOOP %u...", n);
+			xep->xep_need_noop = B_TRUE;
+			//if (n == 0) {
+			//	xhci_trb_t noop = {
+			//		.trb_addr = LE_32(0),
+			//		.trb_status = LE_32(XHCI_TRB_INTR(0)),
+			//		.trb_flags = LE_32(XHCI_TRB_TYPE_NOOP | 
+			//		    XHCI_TRB_IOC),
+			//	};
+			//	xhci_ring_trb_put(&xep->xep_ring, &noop);
+			//} else {
+				xhci_trb_t evdata = {
+					.trb_addr = LE_64(0x54321000 | n),
+					.trb_status = LE_32(XHCI_TRB_INTR(0)),
+					.trb_flags =
+					    LE_32(XHCI_TRB_TYPE_EVENT | 
+					    XHCI_TRB_IOC),
+				};
+				xhci_ring_trb_put(&xep->xep_ring, &evdata);
+			//} else {
+			//	xhci_trb_t noop = {
+			//		.trb_addr = LE_32(0),
+			//		.trb_status = LE_32(XHCI_TRB_INTR(0)),
+			//		.trb_flags = LE_32(XHCI_TRB_TYPE_NOOP | 
+			//		    XHCI_TRB_ENT),
+			//	};
+			//	xhci_trb_t evdata = {
+			//		.trb_addr = LE_64(0x12345000),
+			//		.trb_status = LE_32(XHCI_TRB_INTR(0)),
+			//		.trb_flags =
+			//		    LE_32(XHCI_TRB_TYPE_EVENT | 
+			//		    XHCI_TRB_IOC),
+			//	};
+			//	xhci_ring_trb_fill(&xep->xep_ring, 1U, &evdata,
+			//	    NULL, B_TRUE);
+			//	xhci_ring_trb_fill(&xep->xep_ring, 0U, &noop,
+			//	    NULL, B_FALSE);
+			//	xhci_ring_trb_produce(&xep->xep_ring, 2);
+			//}
+			//delay(drv_usectohz(10 * 1000));
+			(void) xhci_endpoint_ring(xhcip, xd, xep);
+			while (xep->xep_need_noop) {
+				cv_wait(&xep->xep_state_cv, &xhcip->xhci_lock);
+			}
 		}
-
-#if 0
-		delay(drv_usectohz(10 * 1000));
-
-		if ((ret = xhci_command_reset_endpoint(xhcip, xd, xep)) != 
-		    USB_SUCCESS) {
-			xhci_error(xhcip,
-			    "failed to reset endpoint on pipe open %d", ret);
-			mutex_exit(&xd->xd_imtx);
-			xhci_endpoint_fini(xd, epid);
-			kmem_free(pipe, sizeof (xhci_pipe_t));
-			return (ret);
-		}
-#endif
-
-		delay(drv_usectohz(10 * 1000));
-
-		if ((ret = xhci_command_set_tr_dequeue(xhcip, xd, xep)) != 
-		    USB_SUCCESS) {
-			xhci_error(xhcip,
-			    "failed to set TR deq on pipe open %d", ret);
-			mutex_exit(&xd->xd_imtx);
-			xhci_endpoint_fini(xd, epid);
-			kmem_free(pipe, sizeof (xhci_pipe_t));
-			return (ret);
-		}
-
-		delay(drv_usectohz(10 * 1000));
+		mutex_exit(&xhcip->xhci_lock);
 	}
 
-	mutex_exit(&xd->xd_imtx);
 add:
 	pipe->xp_ep = xep;
 	ph->p_hcd_private = (usb_opaque_t)pipe;

@@ -582,6 +582,7 @@ xhci_endpoint_init(xhci_t *xhcip, xhci_device_t *xd,
 	xep->xep_xhci = xhcip;
 	xep->xep_num = epid;
 	xep->xep_need_uncork = B_FALSE;
+	xep->xep_first_td = B_TRUE;
 	if (ph == NULL) {
 		xep->xep_pipe = NULL;
 		xep->xep_type = USB_EP_ATTR_CONTROL;
@@ -959,6 +960,8 @@ xhci_endpoint_schedule(xhci_t *xhcip, xhci_device_t *xd, xhci_endpoint_t *xep,
 
 	xt->xt_sched_time = gethrtime();
 
+	xep->xep_first_td = B_FALSE;
+
 	if (ring == B_FALSE)
 		return (USB_SUCCESS);
 
@@ -992,6 +995,11 @@ xhci_endpoint_determine_transfer(xhci_t *xhcip, xhci_endpoint_t *xep,
 	if (XHCI_TRB_GET_ED(LE_32(trb->trb_flags)) != 0) {
 		if (LE_64(trb->trb_addr) != (uintptr_t)xt)
 			return (NULL);
+
+		uint_t code = XHCI_TRB_GET_CODE(LE_32(trb->trb_status));
+		uint_t transferred = XHCI_TRB_REMAIN(LE_32(trb->trb_status));
+		xhci_error(xhcip, "EVENT DATA CODE %u LEN %u",
+		    code, transferred);
 
 		*offp = xt->xt_ntrbs - 1;
 		return (xt);
@@ -1528,6 +1536,29 @@ xhci_endpoint_transfer_callback(xhci_t *xhcip, xhci_trb_t *trb)
 		 * Ignore the address we use for the zero-length uncorking
 		 * transfer.
 		 */
+		mutex_exit(&xhcip->xhci_lock);
+		return (B_TRUE);
+	}
+
+	/*
+	 * XXX Look for a noop?
+	 */
+	if (xep->xep_need_noop) {
+		xhci_error(xhcip, "NOOP-WAIT; code %d, slot %d, "
+		    "endpoint %d, addr %llx; waiting for noop",
+		    code, slot, endpoint,
+		    (long long unsigned)(LE_64(trb->trb_addr)));
+
+		if (code == XHCI_CODE_SUCCESS && LE_64(trb->trb_addr) == 0) {
+			xhci_error(xhcip, "got NOOP; code %u!", code);
+			xep->xep_need_noop = B_FALSE;
+			cv_broadcast(&xep->xep_state_cv);
+		} else {
+			xhci_error(xhcip, "not NOOP!");
+			/*XXX*/ xep->xep_need_noop = B_FALSE;
+			/*XXX*/ cv_broadcast(&xep->xep_state_cv);
+		}
+
 		mutex_exit(&xhcip->xhci_lock);
 		return (B_TRUE);
 	}

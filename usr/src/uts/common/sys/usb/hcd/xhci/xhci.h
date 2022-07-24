@@ -347,6 +347,7 @@ typedef struct xhci_transfer {
 	usb_isoc_pkt_descr_t	*xt_isoc;
 	usb_opaque_t		xt_usba_req;
 	boolean_t		xt_use_event_data;
+	boolean_t		xt_extra_zero;
 } xhci_transfer_t;
 
 /*
@@ -545,6 +546,8 @@ typedef struct xhci_endpoint {
 	usba_pipe_handle_data_t	*xep_pipe;
 	xhci_ring_t		xep_ring;
 	boolean_t		xep_need_uncork;
+	boolean_t		xep_need_noop;
+	boolean_t		xep_first_td;
 } xhci_endpoint_t;
 
 #define	XHCI_UNCORK_SENTINEL	0x12345000
