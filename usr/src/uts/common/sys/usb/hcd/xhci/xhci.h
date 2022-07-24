@@ -233,11 +233,18 @@ extern "C" {
  *	XHCI_QUIRK_INTC_EHCI	This is an Intel platform which supports
  *				rerouting ports between EHCI and xHCI
  *				controllers on the platform.
+ *
+ *	XHCI_QUIRK_BULK_STALL	Some Intel controllers appear to drop
+ *				the first bulk transfer on a newly configured
+ *				endpoint.  With this quirk, we will inject
+ *				a zero-length transfer into the ring before
+ *				trying to use it for the first time.
  */
 typedef enum xhci_quirk {
 	XHCI_QUIRK_NO_MSI	= 0x01,
 	XHCI_QUIRK_32_ONLY	= 0x02,
-	XHCI_QUIRK_INTC_EHCI	= 0x04
+	XHCI_QUIRK_INTC_EHCI	= 0x04,
+	XHCI_QUIRK_BULK_STALL	= 0x08,
 } xhci_quirk_t;
 
 /*
@@ -339,6 +346,7 @@ typedef struct xhci_transfer {
 	uint64_t		*xt_trbs_pa;
 	usb_isoc_pkt_descr_t	*xt_isoc;
 	usb_opaque_t		xt_usba_req;
+	boolean_t		xt_use_event_data;
 } xhci_transfer_t;
 
 /*
@@ -536,7 +544,10 @@ typedef struct xhci_endpoint {
 	list_t			xep_transfers;
 	usba_pipe_handle_data_t	*xep_pipe;
 	xhci_ring_t		xep_ring;
+	boolean_t		xep_need_uncork;
 } xhci_endpoint_t;
+
+#define	XHCI_UNCORK_SENTINEL	0x12345000
 
 typedef struct xhci_device {
 	list_node_t		xd_link;

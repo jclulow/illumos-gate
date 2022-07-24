@@ -280,6 +280,8 @@ xhci_ring_trb_space(xhci_ring_t *xrp, uint_t ntrb)
 	return (B_TRUE);
 }
 
+volatile int xhci_cycle_check = 1;
+
 /*
  * Fill in a TRB in the ring at offset trboff. If cycle is currently set to
  * B_TRUE, then we fill in the appropriate cycle bit to tell the system to
@@ -313,6 +315,29 @@ xhci_ring_trb_fill(xhci_ring_t *xrp, uint_t trboff, xhci_trb_t *host_trb,
 		cycle ^= 1;
 
 	trb = &xrp->xr_trb[ent];
+
+	if (xhci_cycle_check) {
+		/*
+		 * XXX Let's try and verify that the cycle bit is as we expect
+		 * at this stage.
+		 */
+		uint8_t actual_cycle =
+		    (trb->trb_flags & LE_32(XHCI_TRB_CYCLE)) != 0;
+		if (put_cycle) {
+			/*
+			 * We expect that the value is _invalid_ right now, but
+			 * we want to set it to valid so that this TRB will be
+			 * read.
+			 */
+			VERIFY3U(actual_cycle, !=, cycle);
+		} else {
+			/*
+			 * We expect that the value is _invalid_ right now.  It
+			 * should already be invalid, so it should be the same.
+			 */
+			VERIFY3U(actual_cycle, ==, cycle);
+		}
+	}
 
 	trb->trb_addr = host_trb->trb_addr;
 	trb->trb_status = host_trb->trb_status;

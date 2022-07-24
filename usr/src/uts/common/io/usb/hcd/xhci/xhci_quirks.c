@@ -50,8 +50,20 @@ xhci_quirks_populate(xhci_t *xhcip)
 		if (xqt->xqt_vendor == xhcip->xhci_vendor_id &&
 		    xqt->xqt_device == xhcip->xhci_device_id) {
 			xhcip->xhci_quirks = xqt->xqt_quirks;
-			return;
+			break;
 		}
+	}
+
+	if (xhcip->xhci_vendor_id == 0x8086) {
+		/*
+		 * On some Intel systems we have seen that the first bulk
+		 * transfer can be mysteriously lost in transit.  There are no
+		 * errors, it just never seems to arrive at the device.  By
+		 * "priming" the ring with a zero-length transfer that does not
+		 * use chaining or event generation, we seem to be able to get
+		 * things moving.
+		 */
+		xhcip->xhci_quirks |= XHCI_QUIRK_BULK_STALL;
 	}
 }
 

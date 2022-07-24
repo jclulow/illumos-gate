@@ -53,6 +53,8 @@ xhci_hcdi_pm_support(dev_info_t *dip)
 	return (USB_FAILURE);
 }
 
+volatile int xhci_pipe_madness = 0;
+
 static int
 xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 {
@@ -208,6 +210,52 @@ xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 		xhci_endpoint_fini(xd, epid);
 		kmem_free(pipe, sizeof (xhci_pipe_t));
 		return (ret);
+	}
+
+	if (xhci_pipe_madness && xep->xep_type == USB_EP_ATTR_BULK) {
+#if 0
+		boolean_t in = (ph->p_ep.bEndpointAddress & USB_EP_DIR_MASK) ==
+		    USB_EP_DIR_IN;
+#endif
+		delay(drv_usectohz(10 * 1000));
+
+		if ((ret = xhci_command_stop_endpoint(xhcip, xd, xep)) != 
+		    USB_SUCCESS) {
+			xhci_error(xhcip,
+			    "failed to stop endpoint on pipe open %d", ret);
+			mutex_exit(&xd->xd_imtx);
+			xhci_endpoint_fini(xd, epid);
+			kmem_free(pipe, sizeof (xhci_pipe_t));
+			return (ret);
+		}
+
+#if 0
+		delay(drv_usectohz(10 * 1000));
+
+		if ((ret = xhci_command_reset_endpoint(xhcip, xd, xep)) != 
+		    USB_SUCCESS) {
+			xhci_error(xhcip,
+			    "failed to reset endpoint on pipe open %d", ret);
+			mutex_exit(&xd->xd_imtx);
+			xhci_endpoint_fini(xd, epid);
+			kmem_free(pipe, sizeof (xhci_pipe_t));
+			return (ret);
+		}
+#endif
+
+		delay(drv_usectohz(10 * 1000));
+
+		if ((ret = xhci_command_set_tr_dequeue(xhcip, xd, xep)) != 
+		    USB_SUCCESS) {
+			xhci_error(xhcip,
+			    "failed to set TR deq on pipe open %d", ret);
+			mutex_exit(&xd->xd_imtx);
+			xhci_endpoint_fini(xd, epid);
+			kmem_free(pipe, sizeof (xhci_pipe_t));
+			return (ret);
+		}
+
+		delay(drv_usectohz(10 * 1000));
 	}
 
 	mutex_exit(&xd->xd_imtx);

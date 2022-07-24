@@ -545,6 +545,8 @@ xhci_endpoint_setup_context(xhci_t *xhcip, xhci_device_t *xd,
 	return (0);
 }
 
+volatile int xhci_ever_uncork = 0;
+
 /*
  * Initialize the endpoint and its input context for a given device. This is
  * called from two different contexts:
@@ -579,12 +581,22 @@ xhci_endpoint_init(xhci_t *xhcip, xhci_device_t *xd,
 	xep->xep_xd = xd;
 	xep->xep_xhci = xhcip;
 	xep->xep_num = epid;
+	xep->xep_need_uncork = B_FALSE;
 	if (ph == NULL) {
 		xep->xep_pipe = NULL;
 		xep->xep_type = USB_EP_ATTR_CONTROL;
 	} else {
 		xep->xep_pipe = ph;
 		xep->xep_type = ph->p_ep.bmAttributes & USB_EP_ATTR_MASK;
+
+		boolean_t in = (ph->p_ep.bEndpointAddress & USB_EP_DIR_MASK) ==
+		    USB_EP_DIR_IN;
+
+		if ((xhcip->xhci_quirks & XHCI_QUIRK_BULK_STALL) != 0 &&
+		    xep->xep_type == USB_EP_ATTR_BULK && !in &&
+		    xhci_ever_uncork != 0) {
+			xep->xep_need_uncork = B_TRUE;
+		}
 	}
 
 	if ((ret = xhci_ring_alloc(xhcip, &xep->xep_ring)) != 0) {
@@ -852,6 +864,8 @@ xhci_endpoint_tick(void *arg)
 	xhci_transfer_free(xhcip, xt);
 }
 
+volatile int xhci_always_uncork = 0;
+
 /*
  * We've been asked to schedule a series of frames onto the specified endpoint.
  * We need to make sure that there is enough room, at which point we can queue
@@ -872,8 +886,49 @@ xhci_endpoint_schedule(xhci_t *xhcip, xhci_device_t *xd, xhci_endpoint_t *xep,
 	if ((xep->xep_state & XHCI_ENDPOINT_DONT_SCHEDULE) != 0)
 		return (USB_FAILURE);
 
-	if (xhci_ring_trb_space(rp, xt->xt_ntrbs) == B_FALSE)
+	uint_t ntrbs = xt->xt_ntrbs;
+	if (xep->xep_need_uncork) {
+		/*
+		 * Reserve an extra TRB for the uncorking transfer.
+		 */
+		ntrbs += 2;
+	}
+
+	if (xhci_ring_trb_space(rp, ntrbs) == B_FALSE)
 		return (USB_NO_RESOURCES);
+
+	if (xep->xep_need_uncork) {
+		/*
+		 * Construct a synthetic zero-length request that should
+		 * ideally produce no device activity, in an attempt to get the
+		 * stalled endpoint moving.
+		 */
+#if 1
+		xhci_trb_t nothing = {
+			.trb_addr = XHCI_UNCORK_SENTINEL,
+			.trb_status = LE_32(XHCI_TRB_LEN(0) |
+			    XHCI_TRB_TDREM(0) |
+			    XHCI_TRB_INTR(0)),
+			.trb_flags = LE_32(XHCI_TRB_TYPE_NORMAL | XHCI_TRB_IOC),
+		};
+		xhci_ring_trb_put(rp, &nothing);
+#else
+		// xhci_trb_t first = {
+		// 	.trb_addr = XHCI_UNCORK_SENTINEL,
+		// 	.trb_status = LE_32(XHCI_TRB_INTR(0)),
+		// 	.trb_flags = LE_32(XHCI_TRB_TYPE_NOOP | XHCI_TRB_ENT),
+		// };
+		xhci_trb_t second = {
+			.trb_addr = XHCI_UNCORK_SENTINEL,
+			.trb_status = LE_32(XHCI_TRB_INTR(0)),
+			.trb_flags = LE_32(XHCI_TRB_TYPE_EVENT | XHCI_TRB_IOC),
+		};
+		xhci_ring_trb_put(rp, &second);
+#endif
+		if (xhci_always_uncork == 0) {
+			xep->xep_need_uncork = B_FALSE;
+		}
+	}
 
 	for (i = xt->xt_ntrbs - 1; i > 0; i--) {
 		xhci_ring_trb_fill(rp, i, &xt->xt_trbs[i], &xt->xt_trbs_pa[i],
@@ -1400,6 +1455,13 @@ xhci_endpoint_transfer_callback(xhci_t *xhcip, xhci_trb_t *trb)
 	slot = XHCI_TRB_GET_SLOT(LE_32(trb->trb_flags));
 	code = XHCI_TRB_GET_CODE(LE_32(trb->trb_status));
 
+	DTRACE_PROBE5(xhci__transfer__callback,
+	    xhci_t *, xhcip,
+	    xhci_trb_t *, trb,
+	    int, endpoint,
+	    int, slot,
+	    int, code);
+
 	switch (code) {
 	case XHCI_CODE_RING_UNDERRUN:
 	case XHCI_CODE_RING_OVERRUN:
@@ -1457,6 +1519,17 @@ xhci_endpoint_transfer_callback(xhci_t *xhcip, xhci_trb_t *trb)
 		mutex_exit(&xhcip->xhci_lock);
 		xhci_fm_runtime_reset(xhcip);
 		return (B_FALSE);
+	}
+
+	if ((xhcip->xhci_quirks & XHCI_QUIRK_BULK_STALL) != 0 &&
+	    xep->xep_type == USB_EP_ATTR_BULK &&
+	    trb->trb_addr == XHCI_UNCORK_SENTINEL) {
+		/*
+		 * Ignore the address we use for the zero-length uncorking
+		 * transfer.
+		 */
+		mutex_exit(&xhcip->xhci_lock);
+		return (B_TRUE);
 	}
 
 	/*

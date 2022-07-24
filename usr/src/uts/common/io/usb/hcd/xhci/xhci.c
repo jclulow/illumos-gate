@@ -1817,6 +1817,11 @@ xhci_fm_runtime_reset(xhci_t *xhcip)
 	ddi_fm_service_impact(xhcip->xhci_dip, DDI_SERVICE_LOST);
 	taskq_dispatch_ent(xhci_taskq, xhci_reset_task, xhcip, 0,
 	    &xhcip->xhci_tqe);
+	/*
+	 * XXX Make this more debuggable for now...
+	 */
+	panic("woah, you are passing another XHCI runtime reset required");
+
 out:
 	if (!locked) {
 		mutex_exit(&xhcip->xhci_lock);

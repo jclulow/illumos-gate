@@ -21,6 +21,8 @@
 
 #include <sys/usb/hcd/xhci/xhci.h>
 
+volatile int xhci_use_event_data = 1;
+
 int
 xhci_check_dma_handle(xhci_t *xhcip, xhci_dma_buffer_t *xdb)
 {
@@ -309,6 +311,8 @@ xhci_transfer_alloc(xhci_t *xhcip, xhci_endpoint_t *xep, size_t size,
 	if (xt == NULL)
 		return (NULL);
 
+	xt->xt_use_event_data = B_FALSE;
+
 	if (size != 0) {
 		int sgl = XHCI_DEF_DMA_SGL;
 
@@ -334,7 +338,10 @@ xhci_transfer_alloc(xhci_t *xhcip, xhci_endpoint_t *xep, size_t size,
 		 */
 		if (xep->xep_type == USB_EP_ATTR_BULK) {
 			sgl = XHCI_TRANSFER_DMA_SGL;
-			trbs++;
+			if (xhci_use_event_data) {
+				xt->xt_use_event_data = B_TRUE;
+				trbs++;
+			}
 		}
 
 		xhci_dma_acc_attr(xhcip, &acc);
@@ -459,6 +466,7 @@ void
 xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
     boolean_t in)
 {
+	/* XXX xhci_t *xhcip = xep->xep_xhci;*/
 	uint_t mps, tdsize, flags;
 	int i;
 
@@ -507,8 +515,7 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 		 * endpoint type that uses chaining today) has only one cookie,
 		 * then we'll still schedule an event data block.
 		 */
-		if (xep->xep_type == USB_EP_ATTR_BULK ||
-		    xt->xt_buffer.xdb_ncookies > 1) {
+		if (xt->xt_use_event_data || xt->xt_buffer.xdb_ncookies > 1) {
 			flags |= XHCI_TRB_CHAIN;
 		}
 
@@ -526,12 +533,21 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 		if (i + 1 == xt->xt_buffer.xdb_ncookies) {
 			switch (xep->xep_type) {
 			case USB_EP_ATTR_BULK:
-				flags |= XHCI_TRB_ENT;
+				if (xt->xt_use_event_data) {
+					flags |= XHCI_TRB_ENT;
+				} else {
+					flags |= XHCI_TRB_IOC;
+					if (in) {
+						flags |= XHCI_TRB_ISP;
+					}
+				}
 				break;
 			case USB_EP_ATTR_CONTROL:
+				VERIFY(!xt->xt_use_event_data);
 				flags |= XHCI_TRB_ISP;
 				break;
 			default:
+				VERIFY(!xt->xt_use_event_data);
 				flags |= XHCI_TRB_IOC;
 				break;
 			}
@@ -546,7 +562,7 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 	/*
 	 * The last TRB in any bulk transfer is the Event Data TRB.
 	 */
-	if (xep->xep_type == USB_EP_ATTR_BULK) {
+	if (xt->xt_use_event_data) {
 		VERIFY(off + xt->xt_buffer.xdb_ncookies + 1 <= xt->xt_ntrbs);
 		xt->xt_trbs[off + i].trb_addr = LE_64((uintptr_t)xt);
 		xt->xt_trbs[off + i].trb_status = LE_32(XHCI_TRB_INTR(0));
