@@ -378,7 +378,7 @@ usb_ugen_attach(usb_ugen_hdl_t usb_ugen_hdl, ddi_attach_cmd_t cmd)
 	ugen_minor_node_table_shrink(ugenp);
 
 	/* we are ready to go */
-	ugenp->ug_dev_state = USB_DEV_ONLINE;
+	UGEN_SET_DEV_STATE(ugenp, USB_DEV_ONLINE);
 
 	mutex_exit(&ugenp->ug_mutex);
 
@@ -537,7 +537,7 @@ ugen_cpr_suspend(ugen_state_t *ugenp)
 		    "ugen_cpr_suspend:");
 
 		prev_state = ugenp->ug_dev_state;
-		ugenp->ug_dev_state = USB_DEV_SUSPENDED;
+		UGEN_SET_DEV_STATE(ugenp, USB_DEV_SUSPENDED);
 
 		if (ugenp->ug_open_count) {
 			/* drain outstanding cmds */
@@ -553,7 +553,7 @@ ugen_cpr_suspend(ugen_state_t *ugenp)
 
 			/* if still outstanding cmds, fail suspend */
 			if (ugenp->ug_pending_cmds) {
-				ugenp->ug_dev_state = prev_state;
+				UGEN_SET_DEV_STATE(ugenp, prev_state);
 
 				USB_DPRINTF_L2(UGEN_PRINT_CPR,
 				    ugenp->ug_log_hdl,
@@ -629,7 +629,7 @@ usb_ugen_disconnect_ev_cb(usb_ugen_hdl_t usb_ugen_hdl)
 	(void) usb_serialize_access(ugenp->ug_ser_cookie, USB_WAIT, 0);
 
 	mutex_enter(&ugenp->ug_mutex);
-	ugenp->ug_dev_state = USB_DEV_DISCONNECTED;
+	UGEN_SET_DEV_STATE(ugenp, USB_DEV_DISCONNECTED);
 	if (ugenp->ug_open_count) {
 		mutex_exit(&ugenp->ug_mutex);
 
@@ -696,7 +696,7 @@ ugen_restore_state(ugen_state_t *ugenp)
 	    USB_LOG_L0, UGEN_PRINT_HOTPLUG, USB_CHK_ALL, NULL) ==
 	    USB_FAILURE) {
 		mutex_enter(&ugenp->ug_mutex);
-		ugenp->ug_dev_state = USB_DEV_DISCONNECTED;
+		UGEN_SET_DEV_STATE(ugenp, USB_DEV_DISCONNECTED);
 
 		/* wakeup devstat reads and polls */
 		ugen_ds_change(ugenp);
@@ -720,14 +720,13 @@ ugen_restore_state(ugen_state_t *ugenp)
 	mutex_enter(&ugenp->ug_mutex);
 	switch (ugenp->ug_dev_state) {
 	case USB_DEV_DISCONNECTED:
-		ugenp->ug_dev_state = (ugenp->ug_open_count == 0) ?
-		    USB_DEV_ONLINE : USB_UGEN_DEV_UNAVAILABLE_RECONNECT;
+		UGEN_SET_DEV_STATE(ugenp, (ugenp->ug_open_count == 0) ?
+		    USB_DEV_ONLINE : USB_UGEN_DEV_UNAVAILABLE_RECONNECT);
 
 		break;
 	case USB_DEV_SUSPENDED:
-		ugenp->ug_dev_state = (ugenp->ug_open_count == 0) ?
-		    USB_DEV_ONLINE : USB_UGEN_DEV_UNAVAILABLE_RESUME;
-
+		UGEN_SET_DEV_STATE(ugenp, (ugenp->ug_open_count == 0) ?
+		    USB_DEV_ONLINE : USB_UGEN_DEV_UNAVAILABLE_RESUME);
 		break;
 	}
 	USB_DPRINTF_L4(UGEN_PRINT_HOTPLUG, ugenp->ug_log_hdl,
@@ -952,7 +951,7 @@ usb_ugen_close(usb_ugen_hdl_t usb_ugen_hdl, dev_t dev, int flag, int otype,
 		    ((ugenp->ug_dev_state == USB_UGEN_DEV_UNAVAILABLE_RESUME) ||
 		    (ugenp->ug_dev_state ==
 		    USB_UGEN_DEV_UNAVAILABLE_RECONNECT))) {
-			ugenp->ug_dev_state = USB_DEV_ONLINE;
+			UGEN_SET_DEV_STATE(ugenp, USB_DEV_ONLINE);
 
 			/* wakeup devstat reads and polls */
 			ugen_ds_change(ugenp);
@@ -4633,7 +4632,7 @@ usb_ugen_power(usb_ugen_hdl_t usb_ugen_hdl, int comp, int level)
 
 			break;
 		default:
-			ugenp->ug_dev_state = USB_DEV_ONLINE;
+			UGEN_SET_DEV_STATE(ugenp, USB_DEV_ONLINE);
 
 			/* wakeup devstat reads and polls */
 			ugen_ds_change(ugenp);

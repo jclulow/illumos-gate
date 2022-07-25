@@ -25,6 +25,7 @@
 #ifndef _SYS_USBA_UGEND_H
 #define	_SYS_USBA_UGEND_H
 
+#include <sys/sdt.h>
 
 /*
  * UGEN - USB Generic Driver Support
@@ -315,6 +316,16 @@ _NOTE(DATA_READABLE_WITHOUT_LOCK(ugen_state::ug_max_bulk_xfer_sz))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(ugen_state::ug_dev_data))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(ugen_state::ug_cleanup_flags))
 
+#define	UGEN_SET_DEV_STATE(ugenp, newstate)				\
+	do {								\
+		ugen_state_t *lugenp = (ugenp);				\
+		uint_t lnewstate = (newstate);				\
+		DTRACE_PROBE3(ugen__set__dev__state,			\
+		    ugen_state_t *, lugenp,				\
+		    uint_t, lugenp->ug_dev_state,			\
+		    uint_t, lnewstate);					\
+		lugenp->ug_dev_state = lnewstate;			\
+	} while (0)
 
 /* ugen_cleanup_flags */
 #define	UGEN_INIT_LOCKS			0x01
