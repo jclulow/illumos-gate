@@ -4291,8 +4291,11 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 	/* calculate 600 ms delay time */
 	time_delay = (6 * drv_usectohz(hubd_device_delay)) / 10;
 
-	for (retry = 0; (hubd->h_dev_state == USB_DEV_ONLINE) &&
-	    (retry < hubd_retry_enumerate); retry++) {
+	for (retry = 0; retry < hubd_retry_enumerate; retry++) {
+		if (hubd->h_dev_state != USB_DEV_ONLINE) {
+			return (USB_FAILURE);
+		}
+
 		USB_DPRINTF_L4(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
 		    "resetting port%d, retry=%d", port, retry);
 
@@ -4373,9 +4376,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			/* check if we still have the connection */
 			if (!(status & PORT_STATUS_CCS)) {
 				/* lost connection, set exit condition */
-				retry = hubd_retry_enumerate;
-
-				break;
+				goto retry_enumerate;
 			}
 		} else {
 			port_status = speed;
@@ -4412,9 +4413,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 					if ((hubd->h_reset_port[port]) &&
 					    (hubd_check_same_device(hubd,
 					    port) != USB_SUCCESS)) {
-						retry = hubd_retry_enumerate;
-
-						break;
+						goto retry_enumerate;
 					}
 
 					/*
@@ -4501,45 +4500,42 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 		    "retrying on port %d", port);
 	}
 
-	if (retry >= hubd_retry_enumerate) {
-		/*
-		 * If it is a High Speed Root Hub and connected device
-		 * Is a Low/Full Speed, it will be handled by USB 1.1
-		 * Host Controller. In this case, USB 2.0 Host Controller
-		 * will transfer the ownership of this port to USB 1.1
-		 * Host Controller. So don't display any error message on
-		 * the console. Note, this isn't the case for USB 3.x.
-		 */
-		if ((hubd_usb_addr == ROOT_HUB_ADDR) &&
-		    (hub_port_status == USBA_HIGH_SPEED_DEV) &&
-		    (port_status != USBA_HIGH_SPEED_DEV)) {
-			USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG,
-			    hubd->h_log_handle,
-			    "hubd_handle_port_connect: Low/Full speed "
-			    "device is connected to High Speed root hub");
-		} else {
-			USB_DPRINTF_L0(DPRINT_MASK_HOTPLUG,
-			    hubd->h_log_handle,
-			    "Connecting device on port %d failed", port);
-		}
-
-		(void) hubd_disable_port(hubd, port);
-		usba_update_hotplug_stats(hubd->h_dip,
-		    USBA_TOTAL_HOTPLUG_FAILURE|USBA_HOTPLUG_FAILURE);
-		hubd->h_total_hotplug_failure++;
-
-		/*
-		 * the port should be automagically
-		 * disabled but just in case, we do
-		 * it here
-		 */
-		(void) hubd_disable_port(hubd, port);
-
-		/* ack all changes because we disabled this port */
-		(void) hubd_determine_port_status(hubd,
-		    port, &status, &change, NULL, HUBD_ACK_ALL_CHANGES);
-
+retry_enumerate:
+	/*
+	 * If it is a High Speed Root Hub and connected device Is a Low/Full
+	 * Speed, it will be handled by USB 1.1 Host Controller.  In this case,
+	 * USB 2.0 Host Controller will transfer the ownership of this port to
+	 * USB 1.1 Host Controller.  So don't display any error message on the
+	 * console.  Note, this isn't the case for USB 3.x.
+	 */
+	if ((hubd_usb_addr == ROOT_HUB_ADDR) &&
+	    (hub_port_status == USBA_HIGH_SPEED_DEV) &&
+	    (port_status != USBA_HIGH_SPEED_DEV)) {
+		USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG,
+		    hubd->h_log_handle,
+		    "hubd_handle_port_connect: Low/Full speed "
+		    "device is connected to High Speed root hub");
+	} else {
+		USB_DPRINTF_L0(DPRINT_MASK_HOTPLUG,
+		    hubd->h_log_handle,
+		    "Connecting device on port %d failed", port);
 	}
+
+	(void) hubd_disable_port(hubd, port);
+	usba_update_hotplug_stats(hubd->h_dip,
+	    USBA_TOTAL_HOTPLUG_FAILURE | USBA_HOTPLUG_FAILURE);
+	hubd->h_total_hotplug_failure++;
+
+	/*
+	 * the port should be automagically
+	 * disabled but just in case, we do
+	 * it here
+	 */
+	(void) hubd_disable_port(hubd, port);
+
+	/* ack all changes because we disabled this port */
+	(void) hubd_determine_port_status(hubd,
+	    port, &status, &change, NULL, HUBD_ACK_ALL_CHANGES);
 
 	return (USB_FAILURE);
 }
