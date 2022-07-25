@@ -35,9 +35,6 @@
  *	shared endpoints
  */
 
-#if defined(lint) && !defined(DEBUG)
-#define	DEBUG	1
-#endif
 #include <sys/usb/usba/usbai_version.h>
 #include <sys/usb/usba.h>
 #include <sys/usb/usba/usba_types.h>
@@ -69,25 +66,24 @@ static int usb_mid_open(dev_t *, int, int, cred_t *);
 static int usb_mid_close(dev_t, int, int, cred_t *);
 static int usb_mid_read(dev_t, struct uio *, cred_t *);
 static int usb_mid_write(dev_t, struct uio *, cred_t *);
-static int usb_mid_poll(dev_t, short, int,  short *,
-					struct pollhead **);
+static int usb_mid_poll(dev_t, short, int,  short *, struct pollhead **);
 
 static struct cb_ops usb_mid_cb_ops = {
-	usb_mid_open,
-	usb_mid_close,
-	nodev,		/* strategy */
-	nodev,		/* print */
-	nodev,		/* dump */
-	usb_mid_read,	/* read */
-	usb_mid_write,	/* write */
-	nodev,
-	nodev,		/* devmap */
-	nodev,		/* mmap */
-	nodev,		/* segmap */
-	usb_mid_poll,	/* poll */
-	ddi_prop_op,	/* prop_op */
-	NULL,
-	D_MP
+	.cb_rev =	CB_REV,
+	.cb_flag =	D_MP,
+	.cb_open =	usb_mid_open,
+	.cb_close =	usb_mid_close,
+	.cb_strategy =	nodev,
+	.cb_print =	nodev,
+	.cb_dump =	nodev,
+	.cb_read =	usb_mid_read,
+	.cb_write =	usb_mid_write,
+	.cb_ioctl =	nodev,
+	.cb_devmap =	nodev,
+	.cb_mmap =	nodev,
+	.cb_segmap =	nodev,
+	.cb_chpoll =	usb_mid_poll,
+	.cb_prop_op =	ddi_prop_op,
 };
 
 static int usb_mid_busop_get_eventcookie(dev_info_t *dip,
@@ -903,10 +899,6 @@ usb_mid_ugen_attach(usb_mid_t *usb_mid, boolean_t remove_children)
 			usb_mid->mi_ugen_hdl = hdl;
 		}
 	}
-
-#ifndef lint
-	_NOTE(COMPETING_THREADS_NOW);
-#endif
 }
 
 
