@@ -21,9 +21,6 @@
 
 #include <sys/usb/hcd/xhci/xhci.h>
 
-volatile int xhci_use_event_data = 1;
-volatile int xhci_special_pad = 0;
-
 int
 xhci_check_dma_handle(xhci_t *xhcip, xhci_dma_buffer_t *xdb)
 {
@@ -312,9 +309,6 @@ xhci_transfer_alloc(xhci_t *xhcip, xhci_endpoint_t *xep, size_t size,
 	if (xt == NULL)
 		return (NULL);
 
-	xt->xt_use_event_data = B_FALSE;
-	xt->xt_extra_zero = B_FALSE;
-
 	if (size != 0) {
 		int sgl = XHCI_DEF_DMA_SGL;
 
@@ -340,16 +334,7 @@ xhci_transfer_alloc(xhci_t *xhcip, xhci_endpoint_t *xep, size_t size,
 		 */
 		if (xep->xep_type == USB_EP_ATTR_BULK) {
 			sgl = XHCI_TRANSFER_DMA_SGL;
-			if (xhci_use_event_data) {
-				xt->xt_use_event_data = B_TRUE;
-				trbs++;
-			}
-			if (xhci_special_pad &&
-			    xep->xep_first_td &&
-			    size <= xep->xep_pipe->p_ep.wMaxPacketSize) {
-				xt->xt_extra_zero = B_TRUE;
-				trbs++;
-			}
+			trbs++;
 		}
 
 		xhci_dma_acc_attr(xhcip, &acc);
@@ -474,8 +459,7 @@ void
 xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
     boolean_t in)
 {
-	xhci_t *xhcip = xep->xep_xhci;
-	uint_t mps, tdsize;
+	uint_t mps, tdsize, flags;
 	int i;
 
 	VERIFY(xt->xt_buffer.xdb_ncookies > 0);
@@ -498,7 +482,6 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 
 	for (i = 0; i < xt->xt_buffer.xdb_ncookies; i++) {
 		uint64_t pa, dmasz;
-		uint_t flags;
 
 		pa = xt->xt_buffer.xdb_cookies[i].dmac_laddress;
 		dmasz = xt->xt_buffer.xdb_cookies[i].dmac_size;
@@ -524,8 +507,7 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 		 * endpoint type that uses chaining today) has only one cookie,
 		 * then we'll still schedule an event data block.
 		 */
-		if (xt->xt_use_event_data ||
-		    xt->xt_extra_zero ||
+		if (xep->xep_type == USB_EP_ATTR_BULK ||
 		    xt->xt_buffer.xdb_ncookies > 1) {
 			flags |= XHCI_TRB_CHAIN;
 		}
@@ -544,31 +526,16 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 		if (i + 1 == xt->xt_buffer.xdb_ncookies) {
 			switch (xep->xep_type) {
 			case USB_EP_ATTR_BULK:
-				if (xt->xt_use_event_data) {
-					flags |= XHCI_TRB_ENT;
-				} else {
-					flags |= XHCI_TRB_IOC;
-					if (in) {
-						flags |= XHCI_TRB_ISP;
-					}
-				}
+				flags |= XHCI_TRB_ENT;
 				break;
 			case USB_EP_ATTR_CONTROL:
-				VERIFY(!xt->xt_use_event_data);
 				flags |= XHCI_TRB_ISP;
 				break;
 			default:
-				VERIFY(!xt->xt_use_event_data);
 				flags |= XHCI_TRB_IOC;
 				break;
 			}
 		}
-
-		xhci_error(xhcip, "TRB[%4u + %4d] addr %p len %8u tdsize %8u\n",
-		    off, i,
-		    (void *)(uintptr_t)pa,
-		    (uint_t)dmasz,
-		    (uint_t)tdsize);
 
 		xt->xt_trbs[off + i].trb_addr = LE_64(pa);
 		xt->xt_trbs[off + i].trb_status = LE_32(XHCI_TRB_LEN(dmasz) |
@@ -576,42 +543,16 @@ xhci_transfer_trb_fill_data(xhci_endpoint_t *xep, xhci_transfer_t *xt, int off,
 		xt->xt_trbs[off + i].trb_flags = LE_32(flags);
 	}
 
-	if (xt->xt_extra_zero) {
-		VERIFY3U(xep->xep_type, ==, USB_EP_ATTR_BULK);
-
-		uint_t flags = XHCI_TRB_TYPE_NORMAL;
-		if (xt->xt_use_event_data) {
-			flags |= XHCI_TRB_ENT | XHCI_TRB_CHAIN;
-		} else {
-			flags |= XHCI_TRB_IOC;
-		}
-
-		xhci_error(xhcip, "TRB[%4u + %4d] addr %p len %8u tdsize %8u\n",
-		    off, i,
-		    (void *)(uintptr_t)0,
-		    (uint_t)0,
-		    (uint_t)0);
-
-		xt->xt_trbs[off + i].trb_addr = LE_64(0);
-		xt->xt_trbs[off + i].trb_status = LE_32(XHCI_TRB_LEN(0) |
-		    XHCI_TRB_TDREM(0) | XHCI_TRB_INTR(0));
-		xt->xt_trbs[off + i].trb_flags = LE_32(flags);
-
-		i++;
-	}
-
 	/*
 	 * The last TRB in any bulk transfer is the Event Data TRB.
 	 */
-	if (xt->xt_use_event_data) {
+	if (xep->xep_type == USB_EP_ATTR_BULK) {
 		VERIFY(off + xt->xt_buffer.xdb_ncookies + 1 <= xt->xt_ntrbs);
 		xt->xt_trbs[off + i].trb_addr = LE_64((uintptr_t)xt);
 		xt->xt_trbs[off + i].trb_status = LE_32(XHCI_TRB_INTR(0));
 		xt->xt_trbs[off + i].trb_flags = LE_32(XHCI_TRB_TYPE_EVENT |
 		    XHCI_TRB_IOC);
 	}
-	
-	xhci_error(xhcip, "TRB DONE\n");
 }
 
 /*
