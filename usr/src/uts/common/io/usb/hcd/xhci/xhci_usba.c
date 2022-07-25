@@ -216,6 +216,31 @@ xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 
 	mutex_exit(&xd->xd_imtx);
 
+	if ((ret = xhci_command_stop_endpoint(xhcip, xd, xep)) != USB_SUCCESS) {
+		xhci_error(xhcip, "command stop endpoint failed %d", ret);
+	} else {
+		for (uint n = 0; n < 23; n++) {
+			/*
+			 * XXX lols
+			 */
+			xep->xep_ring.xr_head = n;
+			xep->xep_ring.xr_tail = n;
+			xep->xep_ring.xr_cycle = 1;
+
+			if ((ret = xhci_command_set_tr_dequeue(xhcip, xd, xep)) !=
+			    USB_SUCCESS) {
+				xhci_error(xhcip, "command set tr deq failed %d", ret);
+			} else {
+				xhci_error(xhcip, "OK well let's see");
+				xhci_noop_madness = 1;
+			}
+		}
+	}
+
+	if ((ret = xhci_command_evaluate_context(xhcip, xd)) != USB_SUCCESS) {
+		xhci_error(xhcip, "evaluate context failed %d", ret);
+	}
+
 	if (xhci_noop_madness && xep->xep_type == USB_EP_ATTR_BULK) {
 		/*
 		 * XXX Let's try shoving a no-op TRB in there and waiting for

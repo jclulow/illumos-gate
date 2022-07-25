@@ -931,12 +931,21 @@ xhci_endpoint_schedule(xhci_t *xhcip, xhci_device_t *xd, xhci_endpoint_t *xep,
 		}
 	}
 
+#if 0
 	for (i = xt->xt_ntrbs - 1; i > 0; i--) {
 		xhci_ring_trb_fill(rp, i, &xt->xt_trbs[i], &xt->xt_trbs_pa[i],
 		    B_TRUE);
 	}
 	xhci_ring_trb_fill(rp, 0U, &xt->xt_trbs[0], &xt->xt_trbs_pa[0],
 	    B_FALSE);
+#else
+	for (i = 0; i < xt->xt_ntrbs; i++) {
+		boolean_t put_cycle = i > 0 ? B_TRUE : B_FALSE;
+
+		xhci_ring_trb_fill(rp, i, &xt->xt_trbs[i], &xt->xt_trbs_pa[i],
+		    put_cycle);
+	}
+#endif
 
 	XHCI_DMA_SYNC(rp->xr_dma, DDI_DMA_SYNC_FORDEV);
 	xhci_ring_trb_produce(rp, xt->xt_ntrbs);
