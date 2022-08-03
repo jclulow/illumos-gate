@@ -46,6 +46,7 @@
 #include <sys/kobj_lex.h>
 #include <sys/fs/dv_node.h>
 #include <sys/strsun.h>
+#include <sys/sdt.h>
 
 /*
  * External functions
@@ -2311,7 +2312,6 @@ hubd_setdevconfig(hubd_t *hubd, usb_port_t port)
 	if ((rval = usb_pipe_open(child_dip, NULL, NULL,
 	    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, &ph)) ==
 	    USB_SUCCESS) {
-
 		/* Set the default configuration of the device */
 		if ((rval = usb_pipe_sync_ctrl_xfer(child_dip, ph,
 		    USB_DEV_REQ_HOST_TO_DEV,
@@ -3911,8 +3911,8 @@ hubd_hotplug_thread(void *arg)
 
 	hubd_stop_polling(hubd);
 
-	while ((hubd->h_dev_state == USB_DEV_ONLINE) &&
-	    (hubd->h_port_change)) {
+	while (hubd->h_dev_state == USB_DEV_ONLINE &&
+	    hubd->h_port_change != 0) {
 		/*
 		 * The 0th bit is the hub status change bit.
 		 * handle loss of local power here
@@ -4296,8 +4296,10 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			return (USB_FAILURE);
 		}
 
-		USB_DPRINTF_L4(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
-		    "resetting port%d, retry=%d", port, retry);
+		DTRACE_PROBE3(hubd__connect__try,
+		    hubd_t *, hubd,
+		    usb_port_t, port,
+		    int, retry);
 
 		if ((rval = hubd_reset_port(hubd, port)) != USB_SUCCESS) {
 			(void) hubd_determine_port_status(hubd,
@@ -4324,7 +4326,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 		(void) hubd_enable_port(hubd, port);
 
 		/* we skip this delay in the first iteration */
-		if (retry) {
+		if (retry > 0) {
 			/*
 			 * delay for device to signal disconnect/connect so
 			 * that hub properly recognizes the speed of the device
@@ -4389,7 +4391,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			 * if the child already exists, set addrs and config
 			 * to the device post connect event to the child
 			 */
-			if (hubd->h_children_dips[port]) {
+			if (hubd->h_children_dips[port] != NULL) {
 				/* set addrs to this device */
 				rval = hubd_setdevaddr(hubd, port);
 
@@ -4398,7 +4400,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 				 * to enumerate. But, avoid delay in the first
 				 * iteration
 				 */
-				if (retry) {
+				if (retry > 0) {
 					mutex_exit(HUBD_MUTEX(hubd));
 					delay(drv_usectohz(
 					    hubd_device_delay/100));
@@ -4485,19 +4487,12 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			}
 		}
 
-		/* wait a while until it settles? */
-		USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
-		    "disabling port %d again", port);
-
 		(void) hubd_disable_port(hubd, port);
-		if (retry) {
+		if (retry > 0) {
 			mutex_exit(HUBD_MUTEX(hubd));
 			delay(time_delay);
 			mutex_enter(HUBD_MUTEX(hubd));
 		}
-
-		USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
-		    "retrying on port %d", port);
 	}
 
 retry_enumerate:
@@ -4508,9 +4503,9 @@ retry_enumerate:
 	 * USB 1.1 Host Controller.  So don't display any error message on the
 	 * console.  Note, this isn't the case for USB 3.x.
 	 */
-	if ((hubd_usb_addr == ROOT_HUB_ADDR) &&
-	    (hub_port_status == USBA_HIGH_SPEED_DEV) &&
-	    (port_status != USBA_HIGH_SPEED_DEV)) {
+	if (hubd_usb_addr == ROOT_HUB_ADDR &&
+	    hub_port_status == USBA_HIGH_SPEED_DEV &&
+	    port_status != USBA_HIGH_SPEED_DEV) {
 		USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG,
 		    hubd->h_log_handle,
 		    "hubd_handle_port_connect: Low/Full speed "

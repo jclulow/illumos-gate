@@ -429,6 +429,9 @@ xhci_endpoint_avg_trb(xhci_t *xhcip, usb_ep_descr_t *ep, int mps)
 	/* LINTED: E_FUNC_NO_RET_VAL */
 }
 
+volatile uint_t xhci_wrong = 0x10;
+volatile uint_t xhci_wrong_from = /*0x20*/ 0;
+
 int
 xhci_endpoint_setup_context(xhci_t *xhcip, xhci_device_t *xd,
     xhci_endpoint_t *xep)
@@ -465,6 +468,11 @@ xhci_endpoint_setup_context(xhci_t *xhcip, xhci_device_t *xd,
 	VERIFY(xep->xep_pipe != NULL);
 
 	mps = xep->xep_pipe->p_ep.wMaxPacketSize & XHCI_CONTEXT_MPS_MASK;
+	if (xhci_wrong_from != 0 && mps == xhci_wrong_from) {
+		xhci_error(xhcip, "GETTING IT WORNG %x -> %x!", mps,
+		    xhci_wrong);
+		mps = xhci_wrong;
+	}
 	mult = XHCI_CONTEXT_DEF_MULT;
 	cerr = XHCI_CONTEXT_DEF_CERR;
 
@@ -1041,6 +1049,9 @@ xhci_endpoint_control_callback(xhci_t *xhcip, xhci_device_t *xd,
 	code = XHCI_TRB_GET_CODE(LE_32(trb->trb_status));
 	ucrp = (usb_ctrl_req_t *)xt->xt_usba_req;
 
+	DTRACE_PROBE1(xhci__control__callback,
+	    int, code);
+
 	/*
 	 * Now that we know what this TRB is for, was it for a data/normal stage
 	 * or is it the status stage. We cheat by looking at the last entry. If
@@ -1050,7 +1061,6 @@ xhci_endpoint_control_callback(xhci_t *xhcip, xhci_device_t *xd,
 	 */
 	if (off != xt->xt_ntrbs - 1) {
 		uint_t remain;
-		usb_ctrl_req_t *ucrp = (usb_ctrl_req_t *)xt->xt_usba_req;
 
 		/*
 		 * This is a data stage TRB. The only reason we should have

@@ -314,6 +314,12 @@ xhci_command_event_callback(xhci_t *xhcip, xhci_trb_t *trb)
 
 	mutex_enter(&xcr->xcr_lock);
 
+	cstat = XHCI_TRB_GET_CODE(LE_32(trb->trb_status));
+	DTRACE_PROBE3(xhci__command__event__callback,
+	    xhci_t *, xhcip,
+	    xhci_trb_t *, trb,
+	    int, cstat);
+
 	/*
 	 * If we got an event that indicates that the command ring was stopped,
 	 * then we have successfully finished an abort. While a command ring
@@ -321,7 +327,6 @@ xhci_command_event_callback(xhci_t *xhcip, xhci_trb_t *trb)
 	 * driver does not do so at this time; however, we guard the state
 	 * transition just in case.
 	 */
-	cstat = XHCI_TRB_GET_CODE(LE_32(trb->trb_status));
 	if (cstat == XHCI_CODE_CMD_RING_STOP) {
 		if (xcr->xcr_state == XHCI_COMMAND_RING_ABORTING)
 			xcr->xcr_state = XHCI_COMMAND_RING_ABORT_DONE;

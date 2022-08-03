@@ -138,9 +138,13 @@ xhci_event_process_psc(xhci_t *xhcip, xhci_trb_t *trb)
 boolean_t
 xhci_event_process_trb(xhci_t *xhcip, xhci_trb_t *trb)
 {
-	uint32_t type;
+	uint32_t type = LE_32(trb->trb_flags) & XHCI_TRB_TYPE_MASK;
 
-	type = LE_32(trb->trb_flags) & XHCI_TRB_TYPE_MASK;
+	DTRACE_PROBE3(xhci__event__trb,
+	    xhci_t *, xhcip,
+	    xhci_trb_t *, trb,
+	    uint32_t, type);
+
 	switch (type) {
 	case XHCI_EVT_PORT_CHANGE:
 		if (!xhci_event_process_psc(xhcip, trb))
