@@ -593,6 +593,11 @@ xhci_endpoint_init(xhci_t *xhcip, xhci_device_t *xd,
 	} else {
 		xep->xep_pipe = ph;
 		xep->xep_type = ph->p_ep.bmAttributes & USB_EP_ATTR_MASK;
+		if (xep->xep_type != xd->xd_epcfgs[epid].xepc_type) {
+			xhci_error(xhcip, "MOVE FROM %x TO %x",
+			    xd->xd_epcfgs[epid].xepc_type,
+			    xep->xep_type);
+		}
 	}
 
 	if ((ret = xhci_ring_alloc(xhcip, &xep->xep_ring)) != 0) {

@@ -538,6 +538,11 @@ typedef struct xhci_endpoint {
 	xhci_ring_t		xep_ring;
 } xhci_endpoint_t;
 
+typedef struct xhci_endpoint_config {
+	boolean_t		xepc_configured;
+	uint_t			xepc_type;
+} xhci_endpoint_config_t;
+
 typedef struct xhci_device {
 	list_node_t		xd_link;
 	usb_port_t		xd_port;
@@ -553,6 +558,7 @@ typedef struct xhci_device {
 	xhci_slot_context_t	*xd_slotout;
 	xhci_endpoint_context_t	*xd_endout[XHCI_NUM_ENDPOINTS];
 	xhci_endpoint_t		*xd_endpoints[XHCI_NUM_ENDPOINTS];
+	xhci_endpoint_config_t	xd_epcfgs[XHCI_NUM_ENDPOINTS];
 } xhci_device_t;
 
 typedef enum xhci_periodic_state {

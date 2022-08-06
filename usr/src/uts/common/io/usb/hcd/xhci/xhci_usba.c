@@ -59,10 +59,12 @@ xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	xhci_t *xhcip = xhci_hcdi_get_xhcip(ph);
 	xhci_pipe_t *pipe;
 	xhci_endpoint_t *xep;
+	xhci_endpoint_config_t *xepc = NULL;
 	xhci_device_t *xd;
 	int kmflags = usb_flags & USB_FLAGS_SLEEP ? KM_SLEEP : KM_NOSLEEP;
 	int ret;
 	uint_t epid;
+	boolean_t config_ep = B_TRUE;
 
 	mutex_enter(&xhcip->xhci_lock);
 	if (xhcip->xhci_state & XHCI_S_ERROR) {
@@ -168,20 +170,27 @@ xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 		return (USB_HC_HARDWARE_ERROR);
 	}
 	xep = xd->xd_endpoints[epid];
+	xepc = &xd->xd_epcfgs[epid];
+
+	if (xepc->xepc_configured) {
+		config_ep = B_FALSE;
+	}
 
 	mutex_enter(&xd->xd_imtx);
 	mutex_exit(&xhcip->xhci_lock);
 
 	/*
-	 * Update the slot and input context for this endpoint. We make sure to
-	 * always set the slot as having changed in the context field as the
-	 * specification suggests we should and some hardware requires it.
+	 * Update the slot and input context for this endpoint. We make
+	 * sure to always set the slot as having changed in the context
+	 * field as the specification suggests we should and some
+	 * hardware requires it.
 	 */
 	xd->xd_input->xic_drop_flags = LE_32(0);
 	xd->xd_input->xic_add_flags = LE_32(XHCI_INCTX_MASK_DCI(0) |
 	    XHCI_INCTX_MASK_DCI(epid + 1));
 
-	if (epid + 1 > XHCI_SCTX_GET_DCI(LE_32(xd->xd_slotin->xsc_info))) {
+	if (epid + 1 >
+	    XHCI_SCTX_GET_DCI(LE_32(xd->xd_slotin->xsc_info))) {
 		uint32_t info;
 
 		info = xd->xd_slotin->xsc_info;
@@ -203,7 +212,19 @@ xhci_hcdi_pipe_open(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 		return (USB_HC_HARDWARE_ERROR);
 	}
 
-	if ((ret = xhci_command_configure_endpoint(xhcip, xd)) != USB_SUCCESS) {
+	if (config_ep) {
+		ret = xhci_command_configure_endpoint(xhcip, xd);
+	} else {
+		/*
+		 * XXX
+		 */
+		(void) xhci_command_stop_endpoint(xhcip, xd, xep);
+		(void) xhci_command_set_tr_dequeue(xhcip, xd, xep);
+		ret = xhci_endpoint_ring(xhcip, xd, xep);
+		//ret = xhci_command_evaluate_context(xhcip, xd);
+	}
+
+	if (ret != USB_SUCCESS) {
 		mutex_exit(&xd->xd_imtx);
 		xhci_endpoint_fini(xd, epid);
 		kmem_free(pipe, sizeof (xhci_pipe_t));
@@ -216,6 +237,9 @@ add:
 	ph->p_hcd_private = (usb_opaque_t)pipe;
 	mutex_enter(&xhcip->xhci_lock);
 	list_insert_tail(&xhcip->xhci_usba.xa_pipes, pipe);
+	if (xepc != NULL) {
+		xepc->xepc_configured = B_TRUE;
+	}
 	mutex_exit(&xhcip->xhci_lock);
 
 	return (USB_SUCCESS);
@@ -425,9 +449,20 @@ xhci_hcdi_pipe_close(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	xhci_pipe_t *xp;
 	xhci_device_t *xd;
 	xhci_endpoint_t *xep;
+	xhci_endpoint_config_t *xepc = NULL;
 	uint32_t info;
 	int ret, i;
 	uint_t epid;
+	boolean_t unconfig_ep = B_TRUE;
+
+	if ((ph->p_ep.bmAttributes & USB_EP_ATTR_MASK) == USB_EP_ATTR_BULK/* &&
+	    (ph->p_ep.bEndpointAddress & USB_EP_DIR_MASK) == USB_EP_DIR_OUT*/) {
+		/*
+		 * XXX For bulk output endpoints, we are going to try leaving
+		 * them configured...
+		 */
+		unconfig_ep = B_FALSE;
+	}
 
 	if ((ph->p_ep.bmAttributes & USB_EP_ATTR_MASK) == USB_EP_ATTR_INTR &&
 	    xhcip->xhci_usba.xa_intr_cb_ph != NULL) {
@@ -460,6 +495,7 @@ xhci_hcdi_pipe_close(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 		return (USB_FAILURE);
 	}
 	xep = xd->xd_endpoints[epid];
+	xepc = &xd->xd_epcfgs[epid];
 
 	if (xp->xp_ep != NULL && xp->xp_ep->xep_num == XHCI_DEFAULT_ENDPOINT) {
 		xep->xep_pipe = NULL;
@@ -473,6 +509,10 @@ xhci_hcdi_pipe_close(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	 */
 	mutex_enter(&xd->xd_imtx);
 
+	if (!unconfig_ep) {
+		goto timeouts;
+	}
+
 	/*
 	 * Potentially update the slot input context about the current max
 	 * endpoint. Make sure to set that the slot context is being updated
@@ -481,9 +521,11 @@ xhci_hcdi_pipe_close(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	xd->xd_input->xic_drop_flags = LE_32(XHCI_INCTX_MASK_DCI(epid + 1));
 	xd->xd_input->xic_add_flags = LE_32(XHCI_INCTX_MASK_DCI(0));
 	for (i = XHCI_NUM_ENDPOINTS - 1; i >= 0; i--) {
-		if (xd->xd_endpoints[i] != NULL &&
-		    xd->xd_endpoints[i] != xep)
+		if ((xd->xd_endpoints[i] != NULL ||
+		    xd->xd_epcfgs[i].xepc_configured) &&
+		    xd->xd_endpoints[i] != xep) {
 			break;
+		}
 	}
 	info = xd->xd_slotin->xsc_info;
 	info &= ~XHCI_SCTX_DCI_MASK;
@@ -497,6 +539,7 @@ xhci_hcdi_pipe_close(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	 */
 	bzero(xd->xd_endin[xep->xep_num], sizeof (xhci_endpoint_context_t));
 
+timeouts:
 	/*
 	 * Stop the device and kill our timeout. Note, it is safe to hold the
 	 * device's input mutex across the untimeout, this lock should never be
@@ -506,16 +549,29 @@ xhci_hcdi_pipe_close(usba_pipe_handle_data_t *ph, usb_flags_t usb_flags)
 	mutex_exit(&xhcip->xhci_lock);
 	(void) untimeout(xep->xep_timeout);
 
-	ret = xhci_command_configure_endpoint(xhcip, xd);
+	if (unconfig_ep) {
+		ret = xhci_command_configure_endpoint(xhcip, xd);
+	} else {
+		/*
+		 * XXX I guess we should stop it so that we can have the ring
+		 * back?
+		 */
+		ret = xhci_command_stop_endpoint(xhcip, xd, xep);
+	}
 	mutex_exit(&xd->xd_imtx);
 	if (ret != USB_SUCCESS)
 		return (ret);
 	mutex_enter(&xhcip->xhci_lock);
 
+	if (unconfig_ep) {
+		xepc->xepc_configured = B_FALSE;
+	}
+
 	/*
 	 * Now that we've unconfigured the endpoint. See if we need to flush any
 	 * transfers.
 	 */
+
 	xhci_hcdi_pipe_flush(xhcip, xep, USB_CR_PIPE_CLOSING);
 	if ((ph->p_ep.bEndpointAddress & USB_EP_DIR_MASK) == USB_EP_DIR_IN) {
 		xhci_hcdi_periodic_free(xhcip, xp);
@@ -1642,6 +1698,11 @@ xhci_hcdi_device_redo(usba_device_t *ud)
 	 * the framework:
 	 */
 	xd->xd_addressed = B_FALSE;
+
+	/*
+	 * XXX Forget about prior use of Configure Endpoint for this device.
+	 */
+	bzero(xd->xd_epcfgs, sizeof (xd->xd_epcfgs));
 
 	mutex_exit(&xhcip->xhci_lock);
 
