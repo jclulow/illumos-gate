@@ -554,6 +554,7 @@ static int hubd_can_suspend(hubd_t *hubd);
 static void hubd_restore_device_state(dev_info_t *dip, hubd_t *hubd);
 static int hubd_setdevaddr(hubd_t *hubd, usb_port_t port);
 static void hubd_setdevconfig(hubd_t *hubd, usb_port_t port);
+static int hubd_devredo(hubd_t *hubd, usb_port_t port);
 
 static int hubd_register_events(hubd_t *hubd);
 static void hubd_do_callback(hubd_t *hubd, dev_info_t *dip,
@@ -2174,6 +2175,30 @@ usba_hubdi_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	}
 }
 
+static int
+hubd_devredo(hubd_t *hubd, usb_port_t port)
+{
+	VERIFY(MUTEX_HELD(HUBD_MUTEX(hubd)));
+
+	dev_info_t *child_dip = hubd->h_children_dips[port];
+	if (child_dip == NULL) {
+		return (USB_SUCCESS);
+	}
+
+	/*uchar_t address = hubd->h_usba_devices[port]->usb_addr;*/
+	usba_device_t *usba_device = hubd->h_usba_devices[port];
+
+	int r = USB_SUCCESS;
+
+	if (usba_device->usb_hcdi_ops->usba_hcdi_device_redo != NULL) {
+		mutex_exit(HUBD_MUTEX(hubd));
+		r = usba_device->usb_hcdi_ops->usba_hcdi_device_redo(
+		    usba_device);
+		mutex_enter(HUBD_MUTEX(hubd));
+	}
+
+	return (r);
+}
 
 /*
  * hubd_setdevaddr
@@ -2312,6 +2337,31 @@ hubd_setdevconfig(hubd_t *hubd, usb_port_t port)
 	if ((rval = usb_pipe_open(child_dip, NULL, NULL,
 	    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, &ph)) ==
 	    USB_SUCCESS) {
+		uint_t tries = 0;
+
+		/* XXX get the config? */
+		mblk_t *data;
+onemore:
+		data = NULL;
+		int rr;
+		rr = usb_pipe_sync_ctrl_xfer(child_dip, ph,
+		    USB_DEV_REQ_DEV_TO_HOST | USB_DEV_REQ_RCPT_DEV,
+		    USB_REQ_GET_CFG,
+		    0,
+		    0,
+		    1,
+		    &data, 0,
+		    &completion_reason, &cb_flags, 0);
+		freemsg(data);
+		if (tries++ == 0 && (rr != USB_SUCCESS ||
+		    completion_reason == USB_CR_STALL)) {
+			/*
+			 * XXX lol
+			 */
+			delay(drv_usectohz(50 * 1000));
+			goto onemore;
+		}
+
 		/* Set the default configuration of the device */
 		if ((rval = usb_pipe_sync_ctrl_xfer(child_dip, ph,
 		    USB_DEV_REQ_HOST_TO_DEV,
@@ -4326,7 +4376,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 		(void) hubd_enable_port(hubd, port);
 
 		/* we skip this delay in the first iteration */
-		if (retry > 0) {
+		// if (retry > 0) {
 			/*
 			 * delay for device to signal disconnect/connect so
 			 * that hub properly recognizes the speed of the device
@@ -4343,7 +4393,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			 * So enable it again.
 			 */
 			(void) hubd_enable_port(hubd, port);
-		}
+		// }
 
 		if ((rval = hubd_determine_port_status(hubd, port, &status,
 		    &change, &speed, 0)) != USB_SUCCESS) {
@@ -4392,6 +4442,12 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			 * to the device post connect event to the child
 			 */
 			if (hubd->h_children_dips[port] != NULL) {
+				/*
+				 * XXX Maybe the HCD should reset things
+				 * here...
+				 */
+				hubd_devredo(hubd, port);
+
 				/* set addrs to this device */
 				rval = hubd_setdevaddr(hubd, port);
 
@@ -6014,6 +6070,20 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
 
 	def_ph = usba_get_dflt_pipe_handle(child_dip);
 
+	{
+		/* XXX get the config? */
+		mblk_t *data = NULL;
+		(void) usb_pipe_sync_ctrl_xfer(child_dip, def_ph,
+		    USB_DEV_REQ_DEV_TO_HOST | USB_DEV_REQ_RCPT_DEV,
+		    USB_REQ_GET_CFG,
+		    0,
+		    0,
+		    1,
+		    &data, 0,
+		    &completion_reason, &cb_flags, 0);
+		freemsg(data);
+	}
+
 	/* Set the configuration */
 	(void) usb_pipe_sync_ctrl_xfer(child_dip, def_ph,
 	    USB_DEV_REQ_HOST_TO_DEV,
@@ -6026,6 +6096,20 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
 	    &completion_reason,
 	    &cb_flags,
 	    0);
+
+	{
+		/* XXX get the config? */
+		mblk_t *data = NULL;
+		(void) usb_pipe_sync_ctrl_xfer(child_dip, def_ph,
+		    USB_DEV_REQ_DEV_TO_HOST | USB_DEV_REQ_RCPT_DEV,
+		    USB_REQ_GET_CFG,
+		    0,
+		    0,
+		    1,
+		    &data, 0,
+		    &completion_reason, &cb_flags, 0);
+		freemsg(data);
+	}
 
 	mutex_enter(&child_ud->usb_mutex);
 	child_ud->usb_active_cfg_ndx	= config_index;

@@ -20,6 +20,7 @@
  */
 
 #include <sys/usb/hcd/xhci/xhci.h>
+#include <sys/sdt.h>
 
 /*
  * The following structure and global define the default configuration that we
@@ -245,7 +246,8 @@ xhci_root_hub_handle_port_clear_feature(xhci_t *xhcip, usb_ctrl_req_t *ucrp)
 {
 	int feat = ucrp->ctrl_wValue;
 	int port = XHCI_PS_INDPORT(ucrp->ctrl_wIndex);
-	uint32_t reg;
+	uint32_t oldreg, reg;
+	uintptr_t index;
 
 	ASSERT(MUTEX_HELD(&xhcip->xhci_lock));
 
@@ -254,7 +256,8 @@ xhci_root_hub_handle_port_clear_feature(xhci_t *xhcip, usb_ctrl_req_t *ucrp)
 	if (ucrp->ctrl_wLength != 0)
 		return (USB_CR_UNSPECIFIED_ERR);
 
-	reg = xhci_get32(xhcip, XHCI_R_OPER, XHCI_PORTSC(port));
+	index = XHCI_PORTSC(port);
+	oldreg = reg = xhci_get32(xhcip, XHCI_R_OPER, XHCI_PORTSC(port));
 	if (xhci_check_regs_acc(xhcip) != DDI_FM_OK) {
 		xhci_error(xhcip, "failed to read port status register for "
 		    "port %d: encountered fatal FM error, resetting device",
@@ -307,6 +310,12 @@ xhci_root_hub_handle_port_clear_feature(xhci_t *xhcip, usb_ctrl_req_t *ucrp)
 		return (USB_CR_NOT_SUPPORTED);
 	}
 
+	DTRACE_PROBE4(xhci__hub__clear__feature,
+	    int, feat,
+	    uintptr_t, index,
+	    uint32_t, oldreg,
+	    uint32_t, reg);
+
 	xhci_put32(xhcip, XHCI_R_OPER, XHCI_PORTSC(port), reg);
 	if (xhci_check_regs_acc(xhcip) != DDI_FM_OK) {
 		xhci_error(xhcip, "failed to write port status register for "
@@ -325,7 +334,7 @@ xhci_root_hub_handle_port_set_feature(xhci_t *xhcip, usb_ctrl_req_t *ucrp)
 	int feat = ucrp->ctrl_wValue;
 	int port = XHCI_PS_INDPORT(ucrp->ctrl_wIndex);
 	uint32_t val = XHCI_PS_INDVAL(ucrp->ctrl_wIndex);
-	uint32_t reg;
+	uint32_t oldreg, reg;
 	uintptr_t index;
 
 	ASSERT(MUTEX_HELD(&xhcip->xhci_lock));
@@ -336,7 +345,7 @@ xhci_root_hub_handle_port_set_feature(xhci_t *xhcip, usb_ctrl_req_t *ucrp)
 		return (USB_CR_UNSPECIFIED_ERR);
 
 	index = XHCI_PORTSC(port);
-	reg = xhci_get32(xhcip, XHCI_R_OPER, index);
+	oldreg = reg = xhci_get32(xhcip, XHCI_R_OPER, index);
 	if (xhci_check_regs_acc(xhcip) != DDI_FM_OK) {
 		xhci_error(xhcip, "failed to read port status register for "
 		    "port %d: encountered fatal FM error, resetting device",
@@ -421,6 +430,12 @@ xhci_root_hub_handle_port_set_feature(xhci_t *xhcip, usb_ctrl_req_t *ucrp)
 		    "feature %d on port %d", feat, port);
 		return (USB_CR_NOT_SUPPORTED);
 	}
+
+	DTRACE_PROBE4(xhci__hub__set__feature,
+	    int, feat,
+	    uintptr_t, index,
+	    uint32_t, oldreg,
+	    uint32_t, reg);
 
 	xhci_put32(xhcip, XHCI_R_OPER, index, reg);
 	if (xhci_check_regs_acc(xhcip) != DDI_FM_OK) {

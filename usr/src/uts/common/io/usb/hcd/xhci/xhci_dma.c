@@ -164,7 +164,7 @@ xhci_dma_scratchpad_attr(xhci_t *xhcip, ddi_dma_attr_t *attrp)
 uint64_t
 xhci_dma_pa(xhci_dma_buffer_t *xdb)
 {
-	ASSERT(xdb->xdb_ncookies == 1);
+	ASSERT3U(xdb->xdb_ncookies, ==, 1);
 	return (xdb->xdb_cookies[0].dmac_laddress);
 }
 

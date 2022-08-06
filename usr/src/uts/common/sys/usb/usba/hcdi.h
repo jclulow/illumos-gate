@@ -53,7 +53,8 @@ extern "C" {
 #define	HCDI_OPS_VERSION_0 0
 #define	HCDI_OPS_VERSION_1 1
 #define	HCDI_OPS_VERSION_2 2
-#define	HCDI_OPS_VERSION	HCDI_OPS_VERSION_2
+#define	HCDI_OPS_VERSION_3 3
+#define	HCDI_OPS_VERSION	HCDI_OPS_VERSION_3
 
 typedef struct usba_hcdi_ops {
 	int	usba_hcdi_ops_version;	/* implementation version */
@@ -230,6 +231,12 @@ typedef struct usba_hcdi_ops {
 		usba_device_t			*usba_device,
 		uint8_t				nports,
 		uint8_t				think_time);
+
+	/*
+	 * XXX
+	 */
+	int	(*usba_hcdi_device_redo)(
+		usba_device_t			*usba_device);
 } usba_hcdi_ops_t;
 
 

@@ -865,7 +865,7 @@ xhci_hcdi_pipe_bulk_xfer(usba_pipe_handle_data_t *ph, usb_bulk_req_t *ubrp,
 	epid = xhci_endpoint_pipe_to_epid(ph);
 	if (xd->xd_endpoints[epid] == NULL) {
 		mutex_exit(&xhcip->xhci_lock);
-		xhci_error(xhcip, "asked to do control transfer on slot %d, "
+		xhci_error(xhcip, "asked to do bulk transfer on slot %d, "
 		    "port %d, endpoint: %d, but no endpoint structure",
 		    xd->xd_slot, xd->xd_port, epid);
 		return (USB_FAILURE);
@@ -1542,6 +1542,189 @@ xhci_hcdi_device_tt(usba_device_t *ud)
 	return (ret);
 }
 
+static void
+xhci_just_slot_context_things(usba_device_t *ud, xhci_device_t *xd)
+{
+	uint32_t route, rp, info, info2, tt;
+
+	/*
+	 * These are the default slot context and the endpoint zero context that
+	 * we're enabling. See 4.3.3.
+	 */
+	xd->xd_input->xic_add_flags = LE_32(XHCI_INCTX_MASK_DCI(0) |
+	    XHCI_INCTX_MASK_DCI(1));
+
+	/*
+	 * Note, we never need to set the MTT bit as illumos never enables the
+	 * alternate MTT interface.
+	 */
+	xhci_hcdi_device_route(ud, &route, &rp);
+	info = XHCI_SCTX_SET_ROUTE(route) | XHCI_SCTX_SET_DCI(1);
+	switch (ud->usb_port_status) {
+	case USBA_LOW_SPEED_DEV:
+		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_LOW);
+		break;
+	case USBA_HIGH_SPEED_DEV:
+		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_HIGH);
+		break;
+	case USBA_FULL_SPEED_DEV:
+		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_FULL);
+		break;
+	case USBA_SUPER_SPEED_DEV:
+	default:
+		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_SUPER);
+		break;
+	}
+	info2 = XHCI_SCTX_SET_RHPORT(rp);
+	tt = XHCI_SCTX_SET_IRQ_TARGET(0);
+	tt |= xhci_hcdi_device_tt(ud);
+
+	xd->xd_slotin->xsc_info = LE_32(info);
+	xd->xd_slotin->xsc_info2 = LE_32(info2);
+	xd->xd_slotin->xsc_tt = LE_32(tt);
+}
+
+static int
+xhci_hcdi_device_redo(usba_device_t *ud)
+{
+	xhci_t *xhcip = xhci_hcdi_get_xhcip_from_dev(ud);
+	xhci_device_t *xd = usba_hcdi_get_device_private(ud);
+	int ret;
+
+	/*
+	 * XXX
+	 *  - xep->xep_state |= XHCI_ENDPOINT_TEARDOWN;
+	 *  - untimeout(xep->xep_timeout)
+	 *  - feels like we need to do this for every endpoint on the device?
+	 *
+	 *  - xhci_command_disable_slot(xhcip, xd->xd_slot);
+	 *  - xhci_context_slot_output_fini()
+	 *
+	 *  - reset all the input and output context memory
+	 *
+	 *  - xhci_command_enable_slot()
+	 *  		this gets us a new slot number
+	 *  - 
+	 */
+
+	/*
+	 * Mark as torn down all endpoints.
+	 */
+	for (uint_t n = 0; n < XHCI_NUM_ENDPOINTS; n++) {
+		timeout_id_t to_cancel = 0;
+
+		mutex_enter(&xhcip->xhci_lock);
+		xhci_endpoint_t *xep = xd->xd_endpoints[n];
+		if (xep != NULL) {
+			if (n != XHCI_DEFAULT_ENDPOINT) {
+				xhci_error(xhcip, "REDO on non-default EP %u",
+				    n);
+			}
+			xep->xep_state |= XHCI_ENDPOINT_TEARDOWN;
+			to_cancel = xep->xep_timeout;
+		}
+		mutex_exit(&xhcip->xhci_lock);
+
+		if (to_cancel != 0) {
+			(void) untimeout(to_cancel);
+		}
+	}
+
+	/*
+	 * Disable the slot.
+	 */
+	uint_t old_slot = xd->xd_slot;
+	ret = xhci_command_disable_slot(xhcip, xd->xd_slot);
+	if (ret != USB_SUCCESS) {
+		xhci_error(xhcip, "failed to disable slot %d: %d",
+		    xd->xd_slot, ret);
+		return (USB_HC_HARDWARE_ERROR);
+	}
+
+	mutex_enter(&xhcip->xhci_lock);
+
+	/*
+	 * Remove the slot context from the DCBAA, because we will likely get a
+	 * new slot ID on re-enable.
+	 */
+	xhci_context_slot_output_fini(xhcip, xd);
+	xhci_endpoint_fini(xd, XHCI_DEFAULT_ENDPOINT);
+
+	/*
+	 * The device will need to be readdressed at the appropriate moment by
+	 * the framework:
+	 */
+	xd->xd_addressed = B_FALSE;
+
+	mutex_exit(&xhcip->xhci_lock);
+
+	/*
+	 * XXX zero the output context, because we would have done that
+	 * on allocation...
+	 */
+	bzero(xd->xd_octx.xdb_va, xd->xd_octx.xdb_len);
+
+	/*
+	 * Get a new slot!
+	 */
+	ret = xhci_command_enable_slot(xhcip, &xd->xd_slot);
+	if (ret != USB_SUCCESS) {
+		xhci_error(xhcip, "REDO enable slot fail %d", ret);
+		/*xhci_hcdi_device_free(xd);*/
+		return (ret);
+	}
+
+	xhci_error(xhcip, "REDO took us from slot %u to %u", old_slot,
+	    xd->xd_slot);
+
+	xhci_just_slot_context_things(ud, xd);
+
+	if ((ret = xhci_endpoint_init(xhcip, xd, NULL)) != 0) {
+		xhci_error(xhcip, "REDO endpoint init fail %d", ret);
+		/*(void) xhci_command_disable_slot(xhcip, xd->xd_slot);
+		xhci_hcdi_device_free(xd);*/
+		return (USB_HC_HARDWARE_ERROR);
+	}
+
+	if (xhci_context_slot_output_init(xhcip, xd) != B_TRUE) {
+		xhci_error(xhcip, "REDO context slot output init fail");
+		/*(void) xhci_command_disable_slot(xhcip, xd->xd_slot);
+		xhci_endpoint_fini(xd, 0);
+		xhci_hcdi_device_free(xd);*/
+		return (USB_HC_HARDWARE_ERROR);
+	}
+
+	if ((ret = xhci_command_set_address(xhcip, xd, B_TRUE)) != 0) {
+		xhci_error(xhcip, "REDO set address %d", ret);
+		/*(void) xhci_command_disable_slot(xhcip, xd->xd_slot);
+		xhci_context_slot_output_fini(xhcip, xd);
+		xhci_endpoint_fini(xd, 0);
+		xhci_hcdi_device_free(xd);*/
+		return (ret);
+	}
+
+#if 0
+	/*
+	 * Reset the ring for the default endpoint?
+	 */
+	xhci_endpoint_t *xep = xd->xd_endpoints[XHCI_DEFAULT_ENDPOINT];
+	xhci_ring_reset(xhcip, &xep->xep_ring);
+
+	xhci_endpoint_fini(xd, XHCI_DEFAULT_ENDPOINT);
+#endif
+
+#if 0
+	mutex_enter(&xd->xd_imtx);
+	xd->xd_input->xic_drop_flags = 0;
+	xd->xd_input->xic_add_flags = LE_32(XHCI_INCTX_MASK_DCI(0) |
+	    XHCI_INCTX_MASK_DCI(1));
+	(void) xhci_command_configure_endpoint(xhcip, xd);
+	mutex_exit(&xd->xd_imtx);
+#endif
+
+	return (0);
+}
+
 /*
  * Initialize a new device. This allocates a device slot from the controller,
  * which tranfers it to our control.
@@ -1555,7 +1738,6 @@ xhci_hcdi_device_init(usba_device_t *ud, usb_port_t port, void **hcdpp)
 	ddi_dma_attr_t attr;
 	xhci_t *xhcip = xhci_hcdi_get_xhcip_from_dev(ud);
 	size_t isize, osize, incr;
-	uint32_t route, rp, info, info2, tt;
 
 	xd = kmem_zalloc(sizeof (xhci_device_t), KM_SLEEP);
 	xd->xd_port = port;
@@ -1613,41 +1795,7 @@ xhci_hcdi_device_init(usba_device_t *ud, usb_port_t port, void **hcdpp)
 		return (ret);
 	}
 
-	/*
-	 * These are the default slot context and the endpoint zero context that
-	 * we're enabling. See 4.3.3.
-	 */
-	xd->xd_input->xic_add_flags = LE_32(XHCI_INCTX_MASK_DCI(0) |
-	    XHCI_INCTX_MASK_DCI(1));
-
-	/*
-	 * Note, we never need to set the MTT bit as illumos never enables the
-	 * alternate MTT interface.
-	 */
-	xhci_hcdi_device_route(ud, &route, &rp);
-	info = XHCI_SCTX_SET_ROUTE(route) | XHCI_SCTX_SET_DCI(1);
-	switch (ud->usb_port_status) {
-	case USBA_LOW_SPEED_DEV:
-		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_LOW);
-		break;
-	case USBA_HIGH_SPEED_DEV:
-		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_HIGH);
-		break;
-	case USBA_FULL_SPEED_DEV:
-		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_FULL);
-		break;
-	case USBA_SUPER_SPEED_DEV:
-	default:
-		info |= XHCI_SCTX_SET_SPEED(XHCI_SPEED_SUPER);
-		break;
-	}
-	info2 = XHCI_SCTX_SET_RHPORT(rp);
-	tt = XHCI_SCTX_SET_IRQ_TARGET(0);
-	tt |= xhci_hcdi_device_tt(ud);
-
-	xd->xd_slotin->xsc_info = LE_32(info);
-	xd->xd_slotin->xsc_info2 = LE_32(info2);
-	xd->xd_slotin->xsc_tt = LE_32(tt);
+	xhci_just_slot_context_things(ud, xd);
 
 	if ((ret = xhci_endpoint_init(xhcip, xd, NULL)) != 0) {
 		(void) xhci_command_disable_slot(xhcip, xd->xd_slot);
@@ -1883,6 +2031,7 @@ xhci_hcd_init(xhci_t *xhcip)
 	ops->usba_hcdi_device_fini = xhci_hcdi_device_fini;
 	ops->usba_hcdi_device_address = xhci_hcdi_device_address;
 	ops->usba_hcdi_hub_update = xhci_hcdi_hub_update;
+	ops->usba_hcdi_device_redo = xhci_hcdi_device_redo;
 
 	hreg.usba_hcdi_register_version = HCDI_REGISTER_VERSION;
 	hreg.usba_hcdi_register_dip = xhcip->xhci_dip;
