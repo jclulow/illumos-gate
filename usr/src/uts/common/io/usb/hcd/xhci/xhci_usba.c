@@ -1584,28 +1584,15 @@ xhci_just_slot_context_things(usba_device_t *ud, xhci_device_t *xd)
 	xd->xd_slotin->xsc_tt = LE_32(tt);
 }
 
+/*
+ * XXX This is not finished.  Locking, teardown flags, etc.
+ */
 static int
 xhci_hcdi_device_redo(usba_device_t *ud)
 {
 	xhci_t *xhcip = xhci_hcdi_get_xhcip_from_dev(ud);
 	xhci_device_t *xd = usba_hcdi_get_device_private(ud);
 	int ret;
-
-	/*
-	 * XXX
-	 *  - xep->xep_state |= XHCI_ENDPOINT_TEARDOWN;
-	 *  - untimeout(xep->xep_timeout)
-	 *  - feels like we need to do this for every endpoint on the device?
-	 *
-	 *  - xhci_command_disable_slot(xhcip, xd->xd_slot);
-	 *  - xhci_context_slot_output_fini()
-	 *
-	 *  - reset all the input and output context memory
-	 *
-	 *  - xhci_command_enable_slot()
-	 *  		this gets us a new slot number
-	 *  - 
-	 */
 
 	/*
 	 * Mark as torn down all endpoints.
@@ -1665,6 +1652,11 @@ xhci_hcdi_device_redo(usba_device_t *ud)
 	bzero(xd->xd_octx.xdb_va, xd->xd_octx.xdb_len);
 
 	/*
+	 * XXX Error handling from here on out is wrong.  What do we do with a
+	 * drunken sailor?
+	 */
+
+	/*
 	 * Get a new slot!
 	 */
 	ret = xhci_command_enable_slot(xhcip, &xd->xd_slot);
@@ -1702,25 +1694,6 @@ xhci_hcdi_device_redo(usba_device_t *ud)
 		xhci_hcdi_device_free(xd);*/
 		return (ret);
 	}
-
-#if 0
-	/*
-	 * Reset the ring for the default endpoint?
-	 */
-	xhci_endpoint_t *xep = xd->xd_endpoints[XHCI_DEFAULT_ENDPOINT];
-	xhci_ring_reset(xhcip, &xep->xep_ring);
-
-	xhci_endpoint_fini(xd, XHCI_DEFAULT_ENDPOINT);
-#endif
-
-#if 0
-	mutex_enter(&xd->xd_imtx);
-	xd->xd_input->xic_drop_flags = 0;
-	xd->xd_input->xic_add_flags = LE_32(XHCI_INCTX_MASK_DCI(0) |
-	    XHCI_INCTX_MASK_DCI(1));
-	(void) xhci_command_configure_endpoint(xhcip, xd);
-	mutex_exit(&xd->xd_imtx);
-#endif
 
 	return (0);
 }

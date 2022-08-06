@@ -2337,30 +2337,6 @@ hubd_setdevconfig(hubd_t *hubd, usb_port_t port)
 	if ((rval = usb_pipe_open(child_dip, NULL, NULL,
 	    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, &ph)) ==
 	    USB_SUCCESS) {
-		uint_t tries = 0;
-
-		/* XXX get the config? */
-		mblk_t *data;
-onemore:
-		data = NULL;
-		int rr;
-		rr = usb_pipe_sync_ctrl_xfer(child_dip, ph,
-		    USB_DEV_REQ_DEV_TO_HOST | USB_DEV_REQ_RCPT_DEV,
-		    USB_REQ_GET_CFG,
-		    0,
-		    0,
-		    1,
-		    &data, 0,
-		    &completion_reason, &cb_flags, 0);
-		freemsg(data);
-		if (tries++ == 0 && (rr != USB_SUCCESS ||
-		    completion_reason == USB_CR_STALL)) {
-			/*
-			 * XXX lol
-			 */
-			delay(drv_usectohz(50 * 1000));
-			goto onemore;
-		}
 
 		/* Set the default configuration of the device */
 		if ((rval = usb_pipe_sync_ctrl_xfer(child_dip, ph,
@@ -4376,7 +4352,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 		(void) hubd_enable_port(hubd, port);
 
 		/* we skip this delay in the first iteration */
-		// if (retry > 0) {
+		if (retry) {
 			/*
 			 * delay for device to signal disconnect/connect so
 			 * that hub properly recognizes the speed of the device
@@ -4393,7 +4369,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 			 * So enable it again.
 			 */
 			(void) hubd_enable_port(hubd, port);
-		// }
+		}
 
 		if ((rval = hubd_determine_port_status(hubd, port, &status,
 		    &change, &speed, 0)) != USB_SUCCESS) {
@@ -6070,20 +6046,6 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
 
 	def_ph = usba_get_dflt_pipe_handle(child_dip);
 
-	{
-		/* XXX get the config? */
-		mblk_t *data = NULL;
-		(void) usb_pipe_sync_ctrl_xfer(child_dip, def_ph,
-		    USB_DEV_REQ_DEV_TO_HOST | USB_DEV_REQ_RCPT_DEV,
-		    USB_REQ_GET_CFG,
-		    0,
-		    0,
-		    1,
-		    &data, 0,
-		    &completion_reason, &cb_flags, 0);
-		freemsg(data);
-	}
-
 	/* Set the configuration */
 	(void) usb_pipe_sync_ctrl_xfer(child_dip, def_ph,
 	    USB_DEV_REQ_HOST_TO_DEV,
@@ -6096,20 +6058,6 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
 	    &completion_reason,
 	    &cb_flags,
 	    0);
-
-	{
-		/* XXX get the config? */
-		mblk_t *data = NULL;
-		(void) usb_pipe_sync_ctrl_xfer(child_dip, def_ph,
-		    USB_DEV_REQ_DEV_TO_HOST | USB_DEV_REQ_RCPT_DEV,
-		    USB_REQ_GET_CFG,
-		    0,
-		    0,
-		    1,
-		    &data, 0,
-		    &completion_reason, &cb_flags, 0);
-		freemsg(data);
-	}
 
 	mutex_enter(&child_ud->usb_mutex);
 	child_ud->usb_active_cfg_ndx	= config_index;
