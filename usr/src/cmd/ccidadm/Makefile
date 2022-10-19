@@ -20,7 +20,7 @@ include ../Makefile.ctf
 
 CFLAGS += $(CCVERBOSE)
 LDLIBS += -lofmt -lcmdutils
-SRCS = ccidadm.c atr.c
+SRCS = ccidadm.c atr.c ilstr.c
 OBJS = $(SRCS:%.c=%.o)
 CPPFLAGS += -I$(SRC)/common/ccid
 
@@ -35,6 +35,10 @@ $(PROG): $(OBJS)
 	$(POST_PROCESS_O)
 
 %.o: $(SRC)/common/ccid/%.c
+	$(COMPILE.c) $<
+	$(POST_PROCESS_O)
+
+%.o: $(SRC)/common/ilstr/%.c
 	$(COMPILE.c) $<
 	$(POST_PROCESS_O)
 

@@ -31,6 +31,7 @@
 #include <limits.h>
 #include <libcmdutils.h>
 #include <fts.h>
+#include <sys/ilstr.h>
 
 #include <sys/usb/clients/ccid/uccid.h>
 #include <atr.h>
@@ -220,6 +221,7 @@ static boolean_t
 ccidadm_list_slot_usable_str(uccid_cmd_status_t *ucs, char *buf,
     uint_t buflen)
 {
+	ilstr_t str;
 	boolean_t first = B_TRUE;
 	ccid_class_features_t feat;
 	uint_t prot = CCID_CLASS_F_SHORT_APDU_XCHG | CCID_CLASS_F_EXT_APDU_XCHG;
@@ -230,33 +232,40 @@ ccidadm_list_slot_usable_str(uccid_cmd_status_t *ucs, char *buf,
 
 	feat = ucs->ucs_class.ccd_dwFeatures;
 
+	ilstr_init_prealloc(&str, buf, buflen);
+
 	if ((feat & prot) == 0 || (feat & pps) == 0 || (feat & param) == 0 ||
 	    (feat & clock) != clock) {
-		(void) strlcpy(buf, "no (", buflen);
+		ilstr_append_str(&str, "no (");
 	} else {
-		return (strlcpy(buf, "yes", buflen) < buflen);
+		ilstr_append_str(&str, "yes");
+		goto done;
 	}
 
 	if ((feat & prot) == 0) {
-		return (strlcat(buf, "non-APDU)", buflen) < buflen);
+		ilstr_append_str(&str, "non-APDU)");
+		goto done;
 	}
 	if ((feat & pps) == 0) {
-		(void) strlcat(buf, "PPS", buflen);
+		ilstr_append_str(&str, "PPS");
 		first = B_FALSE;
 	}
 	if ((feat & param) == 0) {
 		if (!first)
-			(void) strlcat(buf, ", ", buflen);
-		(void) strlcat(buf, "params", buflen);
+			ilstr_append_str(&str, ", ");
+		ilstr_append_str(&str, "params");
 		first = B_FALSE;
 	}
 	if ((feat & clock) != clock) {
 		if (!first)
-			(void) strlcat(buf, ", ", buflen);
-		(void) strlcat(buf, "clock", buflen);
+			ilstr_append_str(&str, ", ");
+		ilstr_append_str(&str, "clock");
 		first = B_FALSE;
 	}
-	return (strlcat(buf, ")", buflen) < buflen);
+	ilstr_append_str(&str, ")");
+
+done:
+	return (ilstr_errno(&str) == ILSTR_ERROR_OK);
 }
 
 static boolean_t
