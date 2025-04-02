@@ -65,6 +65,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "vec.h"
 
 #include "man.h"
 
@@ -222,15 +223,15 @@ extern const char	*__progname;
 int
 main(int argc, char **argv)
 {
-	int		c, i;
-	char		**pathv;
-	char		*manpath = NULL;
+	int c, i;
+	vec_t *pathv;
+	char *manpath = NULL;
 	static struct man_node *mandirs = NULL;
-	int		bmp_flags = 0;
-	int		ret = 0;
-	char		*opts;
-	char		*mwstr;
-	int		catman = 0;
+	int bmp_flags = 0;
+	int ret = 0;
+	char *opts;
+	char *mwstr;
+	int catman = 0;
 
 	(void) setlocale(LC_ALL, "");
 	(void) strcpy(language, setlocale(LC_MESSAGES, (char *)NULL));
@@ -383,9 +384,9 @@ main(int argc, char **argv)
 	DPRINTF("-- Using pager: %s\n", pager);
 
 	for (i = 0; i < argc; i++) {
-		char		*cmd;
-		static struct man_node *mp;
-		char		*pv[2] = {NULL, NULL};
+		char *cmd;
+		struct man_node *mp;
+		char *pv[2] = {NULL, NULL};
 
 		/*
 		 * If full path to command specified, customize
@@ -451,46 +452,46 @@ main(int argc, char **argv)
 }
 
 /*
- * This routine builds the manpage structure from MANPATH or PATH,
- * depending on flags.  See BMP_* definitions above for valid
- * flags.
+ * This routine builds the manpage structure from MANPATH or PATH, depending on
+ * flags.  See BMP_* definitions above for valid flags.
  */
 static struct man_node *
-build_manpath(char **pathv, char *sec, int flags)
+build_manpath(vec_t *pathv, char *sec, int flags)
 {
 	struct man_node *manpage = NULL;
 	struct man_node *currp = NULL;
 	struct man_node *lastp = NULL;
-	char		**p;
-	char		**q;
-	char		*mand = NULL;
-	char		*mandir = DEFMANDIR;
-	int		s;
-	struct dupnode	*didup = NULL;
-	struct stat	sb;
+	char **p;
+	char **q;
+	char *mand = NULL;
+	char *mandir = DEFMANDIR;
+	struct dupnode *didup = NULL;
+	struct stat sb;
 
-	s = sizeof (struct man_node);
-	for (p = pathv; *p != NULL; ) {
+	for (size_t i = 0; i < vec_len(pathv); i++) {
+		const char *p = vec_get(pathv, i);
+
 		if (flags & BMP_ISPATH) {
-			if ((mand = path_to_manpath(*p)) == NULL)
+			if ((mand = path_to_manpath(p)) == NULL)
 				goto next;
 			free(*p);
 			*p = mand;
 		}
-		q = split(*p, ',');
-		if (stat(q[0], &sb) != 0 || (sb.st_mode & S_IFDIR) == 0) {
+
+		vec_t *q = split(p, ',');
+		if (stat(vec_get(q, 0), &sb) != 0 || !S_ISDIR(sb.st_mode)) {
 			freev(q);
 			goto next;
 		}
 
-		if (access(q[0], R_OK | X_OK) == 0) {
+		if (access(vec_get(q, 0), R_OK | X_OK) == 0) {
 			/*
 			 * Some element exists.  Do not append DEFMANDIR as a
 			 * fallback.
 			 */
 			flags &= ~BMP_FALLBACK_DEFMANDIR;
 
-			if ((currp = (struct man_node *)calloc(1, s)) == NULL)
+			if ((currp = calloc(1, sizeof (*currp))) == NULL)
 				err(1, "calloc");
 
 			currp->frompath = (flags & BMP_ISPATH);
@@ -516,6 +517,7 @@ build_manpath(char **pathv, char *sec, int flags)
 			}
 		}
 		freev(q);
+
 next:
 		/*
 		 * Special handling of appending DEFMANDIR. After all pathv
@@ -602,7 +604,7 @@ getsect(struct man_node *manp, char **pv, char *explicit_sec)
 }
 
 /*
- * Get suffices of all sub-mandir directories in a mandir.
+ * Get suffixes of all sub-mandir directories in a mandir.
  */
 static void
 get_all_sect(struct man_node *manp)
@@ -816,66 +818,56 @@ search_whatis(char *whatpath, char *word)
 /*
  * Split a string by specified separator.
  */
-static char **
+static vec_t *
 split(char *s1, char sep)
 {
-	char	**tokv, **vp;
-	char	*mp = s1, *tp;
-	int	maxentries = MAXTOKENS;
-	int	entries = 0;
+	vec_t *tokv;
+	char *tp;
 
-	if ((tokv = vp = malloc(maxentries * sizeof (char *))) == NULL)
-		err(1, "malloc");
+	if ((tokv = vec_alloc()) == NULL) {
+		err(1, "could not allocate memory");
+	}
 
-	for (; mp && *mp; mp = tp) {
+	for (char *mp = s1; mp != NULL && *mp != '\0'; mp = tp) {
 		tp = strchr(mp, sep);
 		if (mp == tp) {
+			/*
+			 * Skip empty components in the input string.
+			 */
 			tp++;
 			continue;
 		}
-		if (tp) {
-			size_t	len;
 
-			len = tp - mp;
-			if ((*vp = (char *)malloc(sizeof (char) *
-			    len + 1)) == NULL)
-				err(1, "malloc");
-			(void) strncpy(*vp, mp, len);
-			*(*vp + len) = '\0';
-			tp++;
-			vp++;
+		char *val;
+		if (tp != NULL) {
+			val = strndup(mp, tp - mp);
 		} else {
-			if ((*vp = strdup(mp)) == NULL)
-				err(1, "strdup");
-			vp++;
+			val = strdup(mp);
 		}
-		entries++;
-		if (entries == maxentries) {
-			maxentries += MAXTOKENS;
-			if ((tokv = realloc(tokv,
-			    maxentries * sizeof (char *))) == NULL)
-				err(1, "realloc");
-			vp = tokv + entries;
+		if (val == NULL || vec_push(tokv, val) != 0) {
+			err(1, "could not allocate memory");
 		}
 	}
-	*vp = 0;
 
 	return (tokv);
 }
 
 /*
- * Free a vector allocated by split()
+ * Free a vector of strings.
  */
 static void
-freev(char **v)
+freev(vec_t *v)
 {
-	int i;
-	if (v != NULL) {
-		for (i = 0; v[i] != NULL; i++) {
-			free(v[i]);
-		}
-		free(v);
+	char *s;
+
+	if (v == NULL) {
+		return;
 	}
+
+	while ((s = vec_pop(v)) != NULL) {
+		free(s);
+	}
+	vec_free(v);
 }
 
 /*
@@ -930,12 +922,7 @@ free_manp(struct man_node *manp)
 	char	**p;
 
 	free(manp->path);
-	p = manp->secv;
-	while ((p != NULL) && (*p != NULL)) {
-		free(*p);
-		p++;
-	}
-	free(manp->secv);
+	freev(manp->secv);
 	free(manp);
 }
 
@@ -1411,12 +1398,11 @@ init_bintoman(void)
 static int
 dupcheck(struct man_node *mnp, struct dupnode **dnp)
 {
-	struct dupnode	*curdnp;
-	struct secnode	*cursnp;
-	struct stat	sb;
-	int		i;
-	int		rv = 1;
-	int		dupfound;
+	struct dupnode *curdnp;
+	struct secnode *cursnp;
+	struct stat sb;
+	int rv = 1;
+	int dupfound;
 
 	/* If the path doesn't exist, treat it as a duplicate */
 	if (stat(mnp->path, &sb) != 0)
@@ -1445,7 +1431,7 @@ dupcheck(struct man_node *mnp, struct dupnode **dnp)
 	if (curdnp == NULL) {
 		if ((curdnp = calloc(1, sizeof (struct dupnode))) == NULL)
 			err(1, "calloc");
-		for (i = 0; mnp->secv[i] != NULL; i++) {
+		for (uint_t i = 0; mnp->secv[i] != NULL; i++) {
 			if ((cursnp = calloc(1, sizeof (struct secnode)))
 			    == NULL)
 				err(1, "calloc");
@@ -1465,7 +1451,7 @@ dupcheck(struct man_node *mnp, struct dupnode **dnp)
 	 * Traverse the section vector in the man_node and the section list
 	 * in dupnode cache to eliminate all duplicates from man_node.
 	 */
-	for (i = 0; mnp->secv[i] != NULL; i++) {
+	for (uint_t i = 0; mnp->secv[i] != NULL; i++) {
 		dupfound = 0;
 		for (cursnp = curdnp->secl; cursnp != NULL;
 		    cursnp = cursnp->next) {
@@ -1502,29 +1488,30 @@ dupcheck(struct man_node *mnp, struct dupnode **dnp)
 static char *
 path_to_manpath(char *bindir)
 {
-	char		*mand, *p;
-	int		i;
-	struct stat	sb;
+	char *mand, *p;
+	struct stat sb;
 
 	/* First look for known translations for specific bin paths */
 	if (stat(bindir, &sb) != 0) {
 		return (NULL);
 	}
-	for (i = 0; bintoman[i].bindir != NULL; i++) {
-		if (sb.st_dev == bintoman[i].dev &&
-		    sb.st_ino == bintoman[i].ino) {
-			if ((mand = strdup(bintoman[i].mandir)) == NULL)
-				err(1, "strdup");
-			if ((p = strchr(mand, ',')) != NULL)
-				*p = '\0';
-			if (stat(mand, &sb) != 0) {
-				free(mand);
-				return (NULL);
-			}
-			if (p != NULL)
-				*p = ',';
-			return (mand);
+	for (uint_t i = 0; bintoman[i].bindir != NULL; i++) {
+		if (sb.st_dev != bintoman[i].dev ||
+		    sb.st_ino != bintoman[i].ino) {
+			continue;
 		}
+
+		if ((mand = strdup(bintoman[i].mandir)) == NULL)
+			err(1, "strdup");
+		if ((p = strchr(mand, ',')) != NULL)
+			*p = '\0';
+		if (stat(mand, &sb) != 0) {
+			free(mand);
+			return (NULL);
+		}
+		if (p != NULL)
+			*p = ',';
+		return (mand);
 	}
 
 	/*
@@ -1564,7 +1551,7 @@ path_to_manpath(char *bindir)
 		return (NULL);
 	}
 
-	if ((stat(mand, &sb) == 0) && S_ISDIR(sb.st_mode)) {
+	if (stat(mand, &sb) == 0 && S_ISDIR(sb.st_mode)) {
 		return (mand);
 	}
 

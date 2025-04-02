@@ -18,9 +18,10 @@
 PROG=		man
 LINKS=		apropos whatis catman
 LIBLINKS =	makewhatis
-OBJS=		makewhatis.o man.o stringlist.o
+OBJS=		makewhatis.o man.o stringlist.o vec.o
 MANIFEST=	update-man-index.xml
 SVCMETHOD=	update-man-index
+CPPFLAGS +=	-I$(SRC)/common/util
 
 include		$(SRC)/cmd/Makefile.cmd
 
@@ -44,6 +45,10 @@ check:		$(CHKMANIFEST)
 $(PROG):	$(OBJS)
 		$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 		$(POST_PROCESS)
+
+%.o: $(SRC)/common/util/%.c
+	$(COMPILE.c) $<
+	$(POST_PROCESS_O)
 
 $(ROOTLINKS):	$(ROOTPROG)
 		$(RM) $@; $(LN) $(ROOTPROG) $@
