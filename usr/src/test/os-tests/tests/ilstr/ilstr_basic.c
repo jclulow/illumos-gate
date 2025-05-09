@@ -257,6 +257,53 @@ ist_printf_2(ilstr_t *ils)
 }
 
 int
+ist_printf_3(ilstr_t *ils)
+{
+	const char *want = "a\nb\n1000\ntest string\n";
+
+	ilstr_pprintf(ils, "a\nb\n%u\n%s\n", 1000, "test string");
+	VERIFY3U(ilstr_errno(ils), ==, ILSTR_ERROR_OK);
+	VERIFYSTRING(ils, want);
+
+	return (0);
+}
+
+int
+ist_printf_4(ilstr_t *ils)
+{
+	int r = 0;
+
+	const char *lorem = "Lorem ipsum dolor sit amet, consectetur "
+	    "adipiscing elit, sed do eiusmod tempor incididunt ut labore "
+	    "et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud "
+	    "exercitation ullamco laboris nisi ut aliquip ex ea commodo "
+	    "consequat.";
+	char *want;
+
+	if (asprintf(&want, "%s\n\tnumber 1\n%s\n\n%s\n   number 100000000\n",
+	    lorem, lorem, lorem) < 0) {
+		return (errno);
+	}
+
+	ilstr_pprintf(ils, "\n   number %lld\n", (long long)100000000);
+	ilstr_prepend_str(ils, lorem);
+	ilstr_pprintf(ils, " %u\n%s\n\n", 1, lorem);
+	ilstr_prepend_str(ils, "number");
+	ilstr_pprintf(ils, "%s\n\t", lorem);
+
+	VERIFY3U(ilstr_errno(ils), ==, ILSTR_ERROR_OK);
+	if (strcmp(ilstr_cstr(ils), want) != 0) {
+		printf("want: %s\n", want);
+		printf("got:  %s\n", ilstr_cstr(ils));
+		r = ENOENT;
+	}
+
+	free(want);
+
+	return (r);
+}
+
+int
 ist_resets(ilstr_t *ils)
 {
 	VERIFYSTRING(ils, "");
@@ -438,6 +485,8 @@ static const ilstr_test_t ilstr_tests[] = {
 	{ "resets",		ist_resets,		1,	ITT_ALL },
 	{ "printf-1",		ist_printf_1,		1,	ITT_ALL },
 	{ "printf-2",		ist_printf_2,		1,	ITT_ALL },
+	{ "printf-3",		ist_printf_3,		1,	ITT_ALL },
+	{ "printf-4",		ist_printf_4,		1,	ITT_ALL },
 	{ "prealloc_toobig",	ist_prealloc_toobig,	1,	ITT_PRE },
 	{ "standard_toobig",	ist_standard_toobig,	1,	ITT_STD },
 	{ "prepend_char",	ist_prepend_char,	1,	ITT_ALL },
@@ -456,12 +505,37 @@ static const ilstr_test_t ilstr_tests[] = {
 };
 
 int
-main(void)
+main(int argc, char *argv[])
 {
 	uint_t nfails = 0;
 
 	for (uint_t i = 0; i < ARRAY_SIZE(ilstr_tests); i++) {
-		nfails += ist_drive_test(&ilstr_tests[i]);
+		const ilstr_test_t *ist = &ilstr_tests[i];
+
+		/*
+		 * If run by hand, allow arguments that limit the set of test
+		 * cases we run.
+		 */
+		bool run = false;
+		if (argc <= 1) {
+			/*
+			 * Without arguments, always run all test cases:
+			 */
+			run = true;
+		} else {
+			for (uint_t n = 1; n < argc; n--) {
+				if (strcmp(argv[n],  ist->ist_name) == 0) {
+					run = true;
+					break;
+				}
+			}
+		}
+
+		if (!run) {
+			continue;
+		}
+
+		nfails += ist_drive_test(ist);
 	}
 
 	char *aoe;

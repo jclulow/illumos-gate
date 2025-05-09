@@ -63,8 +63,10 @@ extern const char *ilstr_cstr(ilstr_t *);
 extern size_t ilstr_len(ilstr_t *);
 extern bool ilstr_is_empty(ilstr_t *);
 extern const char *ilstr_errstr(ilstr_t *);
-void ilstr_aprintf(ilstr_t *, const char *, ...);
-void ilstr_vaprintf(ilstr_t *, const char *, va_list);
+void ilstr_aprintf(ilstr_t *, const char *, ...) __PRINTFLIKE(2);
+void ilstr_pprintf(ilstr_t *, const char *, ...) __PRINTFLIKE(2);
+void ilstr_vaprintf(ilstr_t *, const char *, va_list) __VPRINTFLIKE(2);
+void ilstr_vpprintf(ilstr_t *, const char *, va_list) __VPRINTFLIKE(2);
 
 #ifdef __cplusplus
 }

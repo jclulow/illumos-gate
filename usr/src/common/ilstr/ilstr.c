@@ -267,6 +267,20 @@ ilstr_have_space(ilstr_t *ils, size_t needbytes)
 }
 
 void
+ilstr_pprintf(ilstr_t *ils, const char *fmt, ...)
+{
+	va_list ap;
+
+	if (ils->ils_errno != ILSTR_ERROR_OK) {
+		return;
+	}
+
+	va_start(ap, fmt);
+	ilstr_vpprintf(ils, fmt, ap);
+	va_end(ap);
+}
+
+void
 ilstr_aprintf(ilstr_t *ils, const char *fmt, ...)
 {
 	va_list ap;
@@ -281,7 +295,7 @@ ilstr_aprintf(ilstr_t *ils, const char *fmt, ...)
 }
 
 void
-ilstr_vaprintf(ilstr_t *ils, const char *fmt, va_list ap)
+ilstr_vprintf_impl(ilstr_t *ils, const char *fmt, va_list ap, bool prepend)
 {
 	if (ils->ils_errno != ILSTR_ERROR_OK) {
 		return;
@@ -293,9 +307,9 @@ ilstr_vaprintf(ilstr_t *ils, const char *fmt, va_list ap)
 	va_list tap;
 	va_copy(tap, ap);
 #ifdef _KERNEL
-	size_t len;
+	size_t len, nlen;
 #else
-	int len;
+	int len, nlen;
 #endif
 
 	len = vsnprintf(NULL, 0, fmt, tap);
@@ -313,10 +327,33 @@ ilstr_vaprintf(ilstr_t *ils, const char *fmt, va_list ap)
 		return;
 	}
 
+	char *start;
+	char keep;
+	if (prepend) {
+		/*
+		 * Move the existing string, including the terminating byte, to
+		 * make room for the incoming prefix:
+		 */
+		bmove(ils->ils_data, ils->ils_data + len, ils->ils_strlen + 1);
+
+		/*
+		 * vsnprintf() will write a NUL byte after writing the output
+		 * string, which will destroy the first byte of the rest of
+		 * the string to which we are prepending.  Save that byte
+		 * so that we can restore it afterwards:
+		 */
+		keep = ils->ils_data[len];
+		start = ils->ils_data;
+	} else {
+		start = ils->ils_data + ils->ils_strlen;
+	}
+
 	/*
-	 * Now, render the string into the buffer space we have made available:
+	 * Now, render the string into the buffer space we have made available.
+	 * Make sure we used exactly as many bytes as initially predicted.
 	 */
-	len = vsnprintf(ils->ils_data + ils->ils_strlen, len + 1, fmt, ap);
+	nlen = vsnprintf(start, len + 1, fmt, ap);
+	VERIFY3S(len, ==, nlen);
 #ifndef _KERNEL
 	if (len < 0) {
 		ils->ils_errno = ILSTR_ERROR_PRINTF;
@@ -324,6 +361,22 @@ ilstr_vaprintf(ilstr_t *ils, const char *fmt, va_list ap)
 	}
 #endif
 	ils->ils_strlen += len;
+
+	if (prepend) {
+		ils->ils_data[len] = keep;
+	}
+}
+
+void
+ilstr_vaprintf(ilstr_t *ils, const char *fmt, va_list ap)
+{
+	ilstr_vprintf_impl(ils, fmt, ap, false);
+}
+
+void
+ilstr_vpprintf(ilstr_t *ils, const char *fmt, va_list ap)
+{
+	ilstr_vprintf_impl(ils, fmt, ap, true);
 }
 
 void
