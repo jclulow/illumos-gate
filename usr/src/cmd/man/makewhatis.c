@@ -35,6 +35,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/debug.h>
 
 #include <ctype.h>
 #include <dirent.h>
@@ -47,7 +48,6 @@
 #include <unistd.h>
 
 #include "man.h"
-#include "stringlist.h"
 
 
 /* Information collected about each man page in a section */
@@ -77,20 +77,24 @@ typedef char *edited_copy(char *from, char *to, int length);
  * When finished, it is reformatted into whatis_final and then appended
  * to whatis_lines.
  */
-static struct sbuf	*whatis_proto;
-static struct sbuf	*whatis_final;
-static stringlist	*whatis_lines;	/* collected output lines */
+static ilstr_t whatis_proto;
+static ilstr_t whatis_final;
+static strset_t *whatis_lines;	/* collected output lines */
 
 static char tempfile[MAXPATHLEN];	/* path of temporary file, if any */
 
 #define	MDOC_COMMANDS	"ArDvErEvFlLiNmPa"
 
+static bool
+starts_with(const char *check, const char *prefix)
+{
+	return (strncmp(check, prefix, strlen(prefix)) == 0);
+}
 
 /* Free a struct page_info and its content */
 static void
 free_page_info(struct page_info *info)
 {
-
 	free(info->filename);
 	free(info->name);
 	free(info->suffix);
@@ -142,67 +146,6 @@ new_page_info(char *dir, struct dirent *dirent)
 }
 
 /*
- * Reset sbuf length to 0.
- */
-static void
-sbuf_clear(struct sbuf *sbuf)
-{
-
-	sbuf->end = sbuf->content;
-}
-
-/*
- * Allocate a new sbuf.
- */
-static struct sbuf *
-new_sbuf(void)
-{
-	struct sbuf	*sbuf;
-
-	if ((sbuf = malloc(sizeof (struct sbuf))) == NULL)
-		err(1, "malloc");
-	if ((sbuf->content = (char *)malloc(LINE_ALLOC)) == NULL)
-		err(1, "malloc");
-	sbuf->last = sbuf->content + LINE_ALLOC - 1;
-	sbuf_clear(sbuf);
-
-	return (sbuf);
-}
-
-/*
- * Ensure that there is enough room in the sbuf
- * for nchars more characters.
- */
-static void
-sbuf_need(struct sbuf *sbuf, int nchars)
-{
-	char *new_content;
-	size_t size, cntsize;
-	size_t grow = 128;
-
-	while (grow < nchars) {
-		grow += 128;	/* we grow in chunks of 128 bytes */
-	}
-
-	/* Grow if the buffer isn't big enough */
-	if (sbuf->end + nchars > sbuf->last) {
-		size = sbuf->last + 1 - sbuf->content;
-		size += grow;
-		cntsize = sbuf->end - sbuf->content;
-
-		if ((new_content = realloc(sbuf->content, size)) == NULL) {
-			perror("realloc");
-			if (tempfile[0] != '\0')
-				(void) unlink(tempfile);
-			exit(1);
-		}
-		sbuf->content = new_content;
-		sbuf->end = new_content + cntsize;
-		sbuf->last = new_content + size - 1;
-	}
-}
-
-/*
  * Append a string of a given length to the sbuf.
  */
 static void
@@ -245,51 +188,54 @@ sbuf_append_edited(struct sbuf *sbuf, char *text, edited_copy copy)
 static void
 sbuf_strip(struct sbuf *sbuf, const char *set)
 {
-
 	while (sbuf->end > sbuf->content && strchr(set, sbuf->end[-1]) != NULL)
 		sbuf->end--;
 }
 
-/*
- * Return the null-terminated string built by the sbuf.
- */
-static char *
-sbuf_content(struct sbuf *sbuf)
+static strset_walk_t
+page_exists_walk(strset_t *ss, const char *name, void *arg0, void *arg1)
 {
+	//page_exists_walk_t pew = arg0;
+	const char *dir = arg0;
+	const char *suffix = arg1;
+	const char *suffixes[] = { "", ".gz", ".bz2" };
 
-	*sbuf->end = '\0';
-	return (sbuf->content);
+	for (uint_t i = 0; i < ARRAY_SIZE(suffixes); i++) {
+		char path[MAXPATHLEN];
+
+		(void) snprintf(path, sizeof (path), "%s/%s.%s%s",
+		    dir, name, suffix, suffixes[i]);
+		if (access(path, F_OK) == 0) {
+			/*
+			 * Signal that we've found the page in question by
+			 * cancelling the walk.
+			 */
+			return (STRSET_WALK_CANCEL);
+		}
+	}
+
+	return (STRSET_WALK_NEXT);
 }
 
 /*
  * Return true if no man page exists in the directory with
  * any of the names in the stringlist.
  */
-static int
-no_page_exists(char *dir, stringlist *names, char *suffix)
+static bool
+no_page_exists(char *dir, strset_t *names, char *suffix)
 {
-	char	path[MAXPATHLEN];
-	char	*suffixes[] = { "", ".gz", ".bz2", NULL };
-	size_t	i;
-	int	j;
-
-	for (i = 0; i < names->sl_cur; i++) {
-		for (j = 0; suffixes[j] != NULL; j++) {
-			(void) snprintf(path, MAXPATHLEN, "%s/%s.%s%s",
-			    dir, names->sl_str[i], suffix, suffixes[j]);
-			if (access(path, F_OK) == 0) {
-				return (0);
-			}
-		}
+	if (strset_walk(names, page_exists_walk, dir, suffix) != 0) {
+		VERIFY3S(errno, ==, ECANCELED);
+		return (false);
 	}
-	return (1);
+
+	return (true);
 }
 
 /* ARGSUSED sig */
 static void
 trap_signal(int sig)
 {
-
 	if (tempfile[0] != '\0')
 		(void) unlink(tempfile);
 
@@ -297,15 +243,18 @@ trap_signal(int sig)
 }
 
 /*
- * Attempt to open an output file.
- * Return NULL if unsuccessful.
+ * Attempt to open an output file.  Return NULL if unsuccessful.
  */
 static FILE *
 open_output(char *name)
 {
-	FILE	*output;
+	FILE *output;
 
-	whatis_lines = sl_init();
+	VERIFY0(whatis_lines);
+	if (strset_alloc(&whatis_lines, STRSET_IGNORE_DUPLICATES) != 0) {
+		err(1, "strset_alloc");
+	}
+
 	(void) snprintf(tempfile, MAXPATHLEN, "%s.tmp", name);
 	name = tempfile;
 	if ((output = fopen(name, "w")) == NULL) {
@@ -315,11 +264,14 @@ open_output(char *name)
 	return (output);
 }
 
-static int
-linesort(const void *a, const void *b)
+static void
+print_walk(strset_s *ss, const char *line, void *arg0, void *arg1)
 {
+	FILE *output = arg0;
 
-	return (strcmp((*(const char * const *)a), (*(const char * const *)b)));
+	(void) fprintf(output, "%s\n", line);
+
+	return (STRSET_WALK_NEXT);
 }
 
 /*
@@ -328,21 +280,15 @@ linesort(const void *a, const void *b)
 static void
 finish_output(FILE *output, char *name)
 {
-	size_t	i;
-	char	*prev = NULL;
+	size_t i;
+	char *prev = NULL;
 
-	qsort(whatis_lines->sl_str, whatis_lines->sl_cur, sizeof (char *),
-	    linesort);
-	for (i = 0; i < whatis_lines->sl_cur; i++) {
-		char *line = whatis_lines->sl_str[i];
-		if (i > 0 && strcmp(line, prev) == 0)
-			continue;
-		prev = line;
-		(void) fputs(line, output);
-		(void) putc('\n', output);
-	}
+	strset_walk(whatis_lines, print_walk, output, NULL);
+
+	strset_free(whatis_lines);
+	whatis_lines = NULL;
+
 	(void) fclose(output);
-	sl_free(whatis_lines, 1);
 	(void) rename(tempfile, name);
 	(void) unlink(tempfile);
 }
@@ -387,7 +333,6 @@ trim_rhs(char *str)
 static char *
 skip_spaces(char *s)
 {
-
 	while (*s != '\0' && isspace(*s))
 		s++;
 
@@ -404,10 +349,11 @@ skip_spaces(char *s)
 static int
 name_section_line(char *line, const char *section_start)
 {
-	char		*rhs;
+	char *rhs;
 
-	if (strncmp(line, section_start, 3) != 0)
+	if (starts_with(line, section_start)) {
 		return (0);
+	}
 	line = skip_spaces(line + 3);
 	rhs = trim_rhs(line);
 	if (*line == '"') {
@@ -430,15 +376,15 @@ name_section_line(char *line, const char *section_start)
 static char *
 de_nroff_copy(char *from, char *to, int fromlen)
 {
-	char	*from_end = &from[fromlen];
+	char *from_end = &from[fromlen];
 
 	while (from < from_end) {
 		switch (*from) {
 		case '\\':
 			switch (*++from) {
 			case '(':
-				if (strncmp(&from[1], "em", 2) == 0 ||
-				    strncmp(&from[1], "mi", 2) == 0) {
+				if (starts_with(&from[1], "em") ||
+				    starts_with(&from[1], "mi")) {
 					from += 3;
 					continue;
 				}
@@ -479,23 +425,25 @@ de_nroff_copy(char *from, char *to, int fromlen)
 static void
 add_nroff(char *text)
 {
-
 	sbuf_append_edited(whatis_proto, text, de_nroff_copy);
 }
 
 /*
  * Appends "name(suffix), " to whatis_final
  */
-static void
-add_whatis_name(char *name, char *suffix)
+static strset_walk_t
+add_whatis_name(strset_t *ss, const char *name, void *arg0, void *arg1)
 {
+	const char *suffix = arg0;
 
 	if (*name != '\0') {
-		sbuf_append_str(whatis_final, name);
-		sbuf_append(whatis_final, "(", 1);
-		sbuf_append_str(whatis_final, suffix);
-		sbuf_append(whatis_final, "), ", 3);
+		if (!ilstr_is_empty(whatis_final)) {
+			ilstr_append_str(whatis_final, ", ");
+		}
+		ilstr_aprintf(whatis_final, "%s(%s)", name, suffix);
 	}
+
+	return (STRSET_WALK_NEXT);
 }
 
 /*
@@ -505,7 +453,7 @@ add_whatis_name(char *name, char *suffix)
 static void
 process_man_line(char *line)
 {
-	char	*p;
+	char *p;
 
 	if (*line == '.') {
 		while (isalpha(*++line))
@@ -522,7 +470,7 @@ process_man_line(char *line)
 		line = skip_spaces(line);
 	if (*line != '\0') {
 		add_nroff(line);
-		sbuf_append(whatis_proto, " ", 1);
+		ilstr_append_char(whatis_proto, ' ');
 	}
 }
 
@@ -532,20 +480,20 @@ process_man_line(char *line)
 static void
 process_mdoc_line(char *line)
 {
-	int	xref;
-	int	arg = 0;
-	char	*line_end = &line[strlen(line)];
-	int	orig_length = sbuf_length(whatis_proto);
-	char	*next;
+	bool xref;
+	int arg = 0;
+	char *line_end = &line[strlen(line)];
+	int orig_length = ilstr_len(whatis_proto);
+	char *next;
 
 	if (*line == '\0')
 		return;
 	if (line[0] != '.' || !isupper(line[1]) || !islower(line[2])) {
 		add_nroff(skip_spaces(line));
-		sbuf_append(whatis_proto, " ", 1);
+		ilstr_append_char(whatis_proto, ' ');
 		return;
 	}
-	xref = strncmp(line, ".Xr", 3) == 0;
+	xref = starts_with(line, ".Xr");
 	line += 3;
 	while ((line = skip_spaces(line)) < line_end) {
 		if (*line == '"') {
@@ -580,36 +528,36 @@ process_mdoc_line(char *line)
 		}
 		if (arg > 0 && strchr(",.:;?!)]", *line) == 0) {
 			if (xref) {
-				sbuf_append(whatis_proto, "(", 1);
-				add_nroff(line);
-				sbuf_append(whatis_proto, ")", 1);
-				xref = 0;
+				ilstr_append_char(whatis_proto, '(');
+				add_nroff(line); /* XXX */
+				ilstr_append_char(whatis_proto, ')');
+				xref = false;
 			} else {
-				sbuf_append(whatis_proto, " ", 1);
+				ilstr_append_char(whatis_proto, ' ');
 			}
 		}
 		add_nroff(line);
 		arg++;
 		line = next;
 	}
-	if (sbuf_length(whatis_proto) > orig_length)
-		sbuf_append(whatis_proto, " ", 1);
+	if (ilstr_len(whatis_proto) > orig_length)
+		ilstr_append_char(whatis_proto, ' ');
 }
 
 /*
  * Collect a list of comma-separated names from the text.
  */
 static void
-collect_names(stringlist *names, char *text)
+collect_names(strset_t *names, char *text)
 {
-	char	*arg;
-
 	for (;;) {
-		arg = text;
+		char *arg = text;
 		text = strchr(text, ',');
 		if (text != NULL)
 			*text++ = '\0';
-		(void) sl_add(names, arg);
+		if (strset_add(names, arg) != 0) {
+			err("strset_add");
+		}
 		if (text == NULL)
 			return;
 		if (*text == ' ')
@@ -626,23 +574,24 @@ enum { STATE_UNKNOWN, STATE_MANSTYLE, STATE_MDOCNAME, STATE_MDOCDESC };
 static void
 process_page(struct page_info *page, char *section_dir)
 {
-	FILE		*fp;
-	stringlist	*names;
-	char		*descr;
-	int		state = STATE_UNKNOWN;
-	size_t		i;
-	char		*line = NULL;
-	size_t		linecap = 0;
+	FILE *fp;
+	char *descr;
+	int state = STATE_UNKNOWN;
+	size_t i;
+	char *line = NULL;
+	size_t linecap = 0;
 
-	sbuf_clear(whatis_proto);
+	ilstr_reset(whatis_proto);
 	if ((fp = fopen(page->filename, "r")) == NULL) {
 		warn("%s", page->filename);
 		return;
 	}
 	while (getline(&line, &linecap, fp) > 0) {
 		/* Skip comments */
-		if (strncmp(line, ".\\\"", 3) == 0)
+		if (starts_with(line, ".\\\"")) {
 			continue;
+		}
+
 		switch (state) {
 		/* Haven't reached the NAME section yet */
 		case STATE_UNKNOWN:
@@ -655,14 +604,15 @@ process_page(struct page_info *page, char *section_dir)
 		case STATE_MANSTYLE: {
 			char *altline;
 
-			if (strncmp(line, ".SH", 3) == 0 ||
-			    strncmp(line, ".SS", 3) == 0)
+			if (starts_with(line, ".SH") ||
+			    starts_with(line, ".SS")) {
 				break;
+			}
 			(void) trim_rhs(line);
 			if (strcmp(line, ".") == 0)
 				continue;
 			altline = line;
-			if (strncmp(altline, ".IX", 3) == 0) {
+			if (starts_with(altline, ".IX")) {
 				altline += 3;
 				altline = skip_spaces(altline);
 			}
@@ -678,13 +628,13 @@ process_page(struct page_info *page, char *section_dir)
 			} else {
 				if (strcmp(line, ".") == 0)
 					continue;
-				sbuf_append(whatis_proto, "- ", 2);
+				ilstr_append_str(whatis_proto, "- ");
 				state = STATE_MDOCDESC;
 			}
 			/* FALLTHROUGH */
 		/* Inside a new-style .Sh NAME section (after the .Nm-s) */
 		case STATE_MDOCDESC:
-			if (strncmp(line, ".Sh", 3) == 0)
+			if (starts_with(line, ".Sh"))
 				break;
 			(void) trim_rhs(line);
 			if (strcmp(line, ".") == 0)
@@ -696,7 +646,7 @@ process_page(struct page_info *page, char *section_dir)
 	}
 	(void) fclose(fp);
 	sbuf_strip(whatis_proto, " \t.-");
-	line = sbuf_content(whatis_proto);
+	// XXX line = sbuf_content(whatis_proto);
 	/*
 	 * Line now contains the appropriate data, but without the
 	 * proper indentation or the section appended to each name.
@@ -711,27 +661,45 @@ process_page(struct page_info *page, char *section_dir)
 		*descr = '\0';
 		descr += 3;
 	}
-	names = sl_init();
-	collect_names(names, line);
-	sbuf_clear(whatis_final);
-	if (!sl_find(names, page->name) &&
+
+	strset_t *names = NULL;
+	if (strset_alloc(&names, STRSET_IGNORE_DUPLICATES) != 0) {
+		err(1, "strset_alloc");
+	}
+	collect_names(names, ilstr_cstr(whatis_proto));
+
+	ilstr_reset(whatis_final);
+	if (!strset_contains(names, page->name) &&
 	    no_page_exists(section_dir, names, page->suffix)) {
 		/*
-		 * Add the page name since that's the only
-		 * thing that man(1) will find.
+		 * Add the page name since that's the only thing that man(1)
+		 * will find.
 		 */
-		add_whatis_name(page->name, page->suffix);
+		if (strset_add(names, page->name) != 0) {
+			err(1, "strset_add");
+		}
 	}
-	for (i = 0; i < names->sl_cur; i++)
-		add_whatis_name(names->sl_str[i], page->suffix);
-	sl_free(names, 0);
-	/* Remove last ", " */
-	sbuf_retract(whatis_final, 2);
-	while (sbuf_length(whatis_final) < INDENT)
-		sbuf_append(whatis_final, " ", 1);
-	sbuf_append(whatis_final, " - ", 3);
-	sbuf_append_str(whatis_final, skip_spaces(descr));
-	(void) sl_add(whatis_lines, strdup(sbuf_content(whatis_final)));
+
+	VERIFY0(strset_walk(names, add_whatis_name, page->suffix, NULL));
+
+	strset_free(names);
+
+	if (ilstr_len(whatis_final) < INDENT) {
+		size_t indent = INDENT - ilstr_len(whatis_final);
+
+		while (indent-- > 0) {
+			ilstr_append_char(whatis_final, ' ');
+		}
+	}
+	ilstr_aprintf(whatis_final, " - %s", skip_spaces(descr));
+
+	if (ilstr_errno(whatis_final) != ILSTR_ERROR_OK) {
+		errx(1, "building whatis line");
+	}
+
+	if (strset_add(whatis_lines, ilstr_cstr(whatis_final)) != 0) {
+		err(1, "strset_add");
+	}
 }
 
 /*
@@ -795,9 +763,9 @@ process_section(char *section_dir)
 static int
 select_sections(const struct dirent *entry)
 {
-	const char	*p = &entry->d_name[3];
+	const char *p = &entry->d_name[3];
 
-	if (strncmp(entry->d_name, "man", 3) != 0)
+	if (starts_with(entry->d_name, "man"))
 		return (0);
 	while (*p != '\0') {
 		if (!isalnum(*p++))
@@ -813,24 +781,24 @@ select_sections(const struct dirent *entry)
 void
 mwpath(char *path)
 {
-	FILE		*fp = NULL;
-	struct dirent	**entries;
-	int		nsections;
-	int		i;
+	FILE *fp = NULL;
+	struct dirent **entries;
+	int nsections;
+	int i;
 
 	(void) signal(SIGINT, trap_signal);
 	(void) signal(SIGHUP, trap_signal);
 	(void) signal(SIGQUIT, trap_signal);
 	(void) signal(SIGTERM, trap_signal);
 
-	whatis_proto = new_sbuf();
-	whatis_final = new_sbuf();
+	ilstr_init(&whatis_proto, 0);
+	ilstr_init(&whatis_final, 0);
 
 	nsections = scandir(path, &entries, select_sections, alphasort);
 	if ((fp = open_whatis(path)) == NULL)
 		return;
 	for (i = 0; i < nsections; i++) {
-		char	section_dir[MAXPATHLEN];
+		char section_dir[MAXPATHLEN];
 
 		(void) snprintf(section_dir, MAXPATHLEN, "%s/%s",
 		    path, entries[i]->d_name);

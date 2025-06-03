@@ -18,15 +18,15 @@
 PROG=		man
 LINKS=		apropos whatis catman
 LIBLINKS =	makewhatis
-OBJS=		makewhatis.o man.o stringlist.o vec.o
+OBJS=		makewhatis.o man.o stringlist.o strset.o vec.o
 MANIFEST=	update-man-index.xml
 SVCMETHOD=	update-man-index
-CPPFLAGS +=	-I$(SRC)/common/util
 
 include		$(SRC)/cmd/Makefile.cmd
 
 ROOTMANIFESTDIR=	$(ROOTSVCSYSTEM)
 
+CPPFLAGS +=	-I$(SRC)/common/strset -I$(SRC)/common/vec
 CFLAGS +=	$(CCVERBOSE)
 
 ROOTLINKS=	$(LINKS:%=$(ROOTBIN)/%) $(LIBLINKS:%=$(ROOTLIB)/%)
@@ -46,7 +46,11 @@ $(PROG):	$(OBJS)
 		$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 		$(POST_PROCESS)
 
-%.o: $(SRC)/common/util/%.c
+%.o: $(SRC)/common/strset/%.c
+	$(COMPILE.c) $<
+	$(POST_PROCESS_O)
+
+%.o: $(SRC)/common/vec/%.c
 	$(COMPILE.c) $<
 	$(POST_PROCESS_O)
 
