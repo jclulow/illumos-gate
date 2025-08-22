@@ -1835,7 +1835,13 @@ kmem_log_walk_init(mdb_walk_state_t *wsp)
 	}
 
 	klw->klw_sorted = mdb_alloc(maxndx * lhp->lh_nchunks *
-	    sizeof (kmem_bufctl_audit_t *), UM_SLEEP);
+	    sizeof (kmem_bufctl_audit_t *), UM_NOSLEEP);
+	if (klw->klw_sorted == NULL) {
+		mdb_warn("failed to allocate for sorting log at %p", lp);
+		mdb_free(klw->klw_base, klw->klw_size);
+		mdb_free(klw, sizeof (kmem_log_walk_t));
+		return (WALK_ERR);
+	}
 
 	for (i = 0, k = 0; i < lhp->lh_nchunks; i++) {
 		kmem_bufctl_audit_t *chunk = (kmem_bufctl_audit_t *)
