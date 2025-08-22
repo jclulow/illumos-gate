@@ -87,5 +87,5 @@ install:	$(INSTALL_DEPS)
 #
 #	Include common targets.
 #
-include $(UTSBASE)/Makefile.mapfile
+#include $(UTSBASE)/Makefile.mapfile
 include $(UTSBASE)/intel/Makefile.targ

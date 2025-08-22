@@ -420,6 +420,10 @@ _info(struct modinfo *modinfop)
 	return (status);
 }
 
+volatile int igb_which = 0;
+volatile int igb_all = 1;
+volatile int igb_intr_force = IGB_INTR_MSI; //IGB_INTR_MSI;
+
 /*
  * igb_attach - driver attach
  *
@@ -460,6 +464,11 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/* Get the device instance */
 	instance = ddi_get_instance(devinfo);
 
+	if (!igb_all && instance != igb_which) {
+		return (DDI_FAILURE);
+	}
+	printf("igb: attach %d\n", instance);
+
 	/* Allocate memory for the instance data structure */
 	igb = kmem_zalloc(sizeof (igb_t), KM_SLEEP);
 
@@ -486,6 +495,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Map PCI config space registers
 	 */
+	//printf("igb%d: setup pci...\n", instance);
 	if (pci_config_setup(devinfo, &osdep->cfg_handle) != DDI_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to map PCI configurations");
 		goto attach_fail;
@@ -495,6 +505,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Identify the chipset family
 	 */
+	//printf("igb%d: identify hardware...\n", instance);
 	if (igb_identify_hardware(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to identify hardware");
 		goto attach_fail;
@@ -503,6 +514,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Map device registers
 	 */
+	//printf("igb%d: map registers...\n", instance);
 	if (igb_regs_map(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to map device registers");
 		goto attach_fail;
@@ -512,12 +524,14 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Initialize driver parameters
 	 */
+	//printf("igb%d: init properties...\n", instance);
 	igb_init_properties(igb);
 	igb->attach_progress |= ATTACH_PROGRESS_PROPS;
 
 	/*
 	 * Allocate interrupts
 	 */
+	//printf("igb%d: alloc intrs...\n", instance);
 	if (igb_alloc_intrs(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to allocate interrupts");
 		goto attach_fail;
@@ -530,6 +544,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * allocated interrupt vectors, so we should allocate the rings after
 	 * interrupts are allocated.
 	 */
+	//printf("igb%d: alloc rings...\n", instance);
 	if (igb_alloc_rings(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR,
 		    "Failed to allocate rx/tx rings or groups");
@@ -540,6 +555,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Add interrupt handlers
 	 */
+	//printf("igb%d: att intr handlers...\n", instance);
 	if (igb_add_intr_handlers(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to add interrupt handlers");
 		goto attach_fail;
@@ -549,12 +565,14 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Initialize driver parameters
 	 */
+	//printf("igb%d: init driver settings...\n", instance);
 	if (igb_init_driver_settings(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR,
 		    "Failed to initialize driver settings");
 		goto attach_fail;
 	}
 
+	//printf("igb%d: check acc handle...\n", instance);
 	if (igb_check_acc_handle(igb->osdep.cfg_handle) != DDI_FM_OK) {
 		ddi_fm_service_impact(igb->dip, DDI_SERVICE_LOST);
 		goto attach_fail;
@@ -566,12 +584,14 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * register the softint to avoid the condition where
 	 * interrupt handler can try using uninitialized mutex
 	 */
+	//printf("igb%d: init locks...\n", instance);
 	igb_init_locks(igb);
 	igb->attach_progress |= ATTACH_PROGRESS_LOCKS;
 
 	/*
 	 * Initialize the adapter
 	 */
+	//printf("igb%d: init adapter...\n", instance);
 	if (igb_init(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to initialize adapter");
 		goto attach_fail;
@@ -582,11 +602,13 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Initialize sensors. This swallows any errors to ensure that access to
 	 * the network is still available.
 	 */
+	//printf("igb%d: init sensors...\n", instance);
 	igb_init_sensors(igb);
 
 	/*
 	 * Initialize statistics
 	 */
+	//printf("igb%d: init stats...\n", instance);
 	if (igb_init_stats(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to initialize statistics");
 		goto attach_fail;
@@ -596,6 +618,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	/*
 	 * Register the driver to the MAC
 	 */
+	//printf("igb%d: register mac...\n", instance);
 	if (igb_register_mac(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to register MAC");
 		goto attach_fail;
@@ -606,6 +629,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Now that mutex locks are initialized, and the chip is also
 	 * initialized, enable interrupts.
 	 */
+	//printf("igb%d: enable intrs...\n", instance);
 	if (igb_enable_intrs(igb) != IGB_SUCCESS) {
 		igb_log(igb, IGB_LOG_ERROR, "Failed to enable DDI interrupts");
 		goto attach_fail;
@@ -617,6 +641,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * are always device wide.
 	 */
 	if (igb->hw.bus.func == 0) {
+		//printf("igb%d: init ufm...\n", instance);
 		if (ddi_ufm_init(devinfo, DDI_UFM_CURRENT_VERSION, &igb_ufm_ops,
 		    &igb->igb_ufmh, igb) != 0) {
 			igb_log(igb, IGB_LOG_ERROR, "Failed to enable DDI UFM "
@@ -627,6 +652,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 		ddi_ufm_update(igb->igb_ufmh);
 	}
 
+	//printf("igb%d: set state ok...\n", instance);
 	igb_log(igb, IGB_LOG_INFO, "%s", igb_version);
 	atomic_or_32(&igb->igb_state, IGB_INITIALIZED);
 
@@ -634,11 +660,15 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Newer models have Energy Efficient Ethernet, let's disable this by
 	 * default.
 	 */
-	if (igb->hw.mac.type == e1000_i350)
+	if (igb->hw.mac.type == e1000_i350) {
+		//printf("igb%d: disable eee...\n", instance);
 		(void) e1000_set_eee_i350(&igb->hw, false, false);
-	else if (igb->hw.mac.type == e1000_i354)
+	} else if (igb->hw.mac.type == e1000_i354) {
+		//printf("igb%d: disable eee...\n", instance);
 		(void) e1000_set_eee_i354(&igb->hw, false, false);
+	}
 
+	printf("igb%d: ATTACH OK\n", instance);
 	return (DDI_SUCCESS);
 
 attach_fail:
@@ -680,6 +710,8 @@ igb_detach(dev_info_t *devinfo, ddi_detach_cmd_t cmd)
 		break;
 	}
 
+	int instance = ddi_get_instance(devinfo);
+	printf("igb%d: detach\n", instance);
 
 	/*
 	 * Get the pointer to the driver private data structure
@@ -725,6 +757,7 @@ igb_detach(dev_info_t *devinfo, ddi_detach_cmd_t cmd)
 	 */
 	igb_unconfigure(devinfo, igb);
 
+	printf("igb%d: DETACH OK\n", instance);
 	return (DDI_SUCCESS);
 }
 
@@ -3033,8 +3066,9 @@ igb_get_conf(igb_t *igb)
 	 * 2 = force interrupt type MSI
 	 * 3 = force interrupt type Legacy
 	 */
-	igb->intr_force = igb_get_prop(igb, PROP_INTR_FORCE,
-	    IGB_INTR_NONE, IGB_INTR_LEGACY, IGB_INTR_NONE);
+	igb->intr_force = igb_intr_force;
+	// igb->intr_force = igb_get_prop(igb, PROP_INTR_FORCE,
+	//     IGB_INTR_NONE, IGB_INTR_LEGACY, IGB_INTR_NONE);
 
 	igb->tx_hcksum_enable = igb_get_prop(igb, PROP_TX_HCKSUM_ENABLE,
 	    0, 1, 1);
