@@ -34,16 +34,12 @@
 
 #define	RGE_DBG		RGE_DBG_RECV	/* debug flag for this code	*/
 
-static uint32_t rge_atomic_reserve(uint32_t *count_p, uint32_t n);
-#pragma	inline(rge_atomic_reserve)
-
 static uint32_t
 rge_atomic_reserve(uint32_t *count_p, uint32_t n)
 {
 	uint32_t oldval;
 	uint32_t newval;
 
-	/* ATOMICALLY */
 	do {
 		oldval = *count_p;
 		newval = oldval - n;
@@ -57,16 +53,12 @@ rge_atomic_reserve(uint32_t *count_p, uint32_t n)
 /*
  * Atomically increment a counter
  */
-static void rge_atomic_renounce(uint32_t *count_p, uint32_t n);
-#pragma	inline(rge_atomic_renounce)
-
 static void
 rge_atomic_renounce(uint32_t *count_p, uint32_t n)
 {
 	uint32_t oldval;
 	uint32_t newval;
 
-	/* ATOMICALLY */
 	do {
 		oldval = *count_p;
 		newval = oldval + n;
@@ -95,8 +87,9 @@ rge_rx_recycle(caddr_t arg)
 	 * there'll be memory leak.
 	 */
 	if (rgep->rge_mac_state == RGE_MAC_UNATTACH ||
-	    rgep->rge_mac_state == RGE_MAC_ATTACH)
+	    rgep->rge_mac_state == RGE_MAC_ATTACH) {
 		return;
+	}
 
 	/*
 	 * Recycle the data buffer again
@@ -108,23 +101,20 @@ rge_rx_recycle(caddr_t arg)
 		rge_problem(rgep, "rge_rx_recycle: desballoc() failed");
 		return;
 	}
-	mutex_enter(rgep->rc_lock);
+	mutex_enter(&rgep->rc_lock);
 	slot_recy = rgep->rc_next;
 	free_srbdp = &rgep->free_srbds[slot_recy];
 
-	ASSERT(free_srbdp->rx_buf == NULL);
+	ASSERT3P(free_srbdp->rx_buf, ==, NULL);
 	free_srbdp->rx_buf = rx_buf;
 	rgep->rc_next = NEXT(slot_recy, RGE_BUF_SLOTS);
 	rge_atomic_renounce(&rgep->rx_free, 1);
 	if (rgep->rx_bcopy && rgep->rx_free == RGE_BUF_SLOTS)
 		rgep->rx_bcopy = B_FALSE;
-	ASSERT(rgep->rx_free <= RGE_BUF_SLOTS);
+	ASSERT3U(rgep->rx_free, <=, RGE_BUF_SLOTS);
 
-	mutex_exit(rgep->rc_lock);
+	mutex_exit(&rgep->rc_lock);
 }
-
-static int rge_rx_refill(rge_t *rgep, uint32_t slot);
-#pragma	inline(rge_rx_refill)
 
 static int
 rge_rx_refill(rge_t *rgep, uint32_t slot)
@@ -157,9 +147,6 @@ rge_rx_refill(rge_t *rgep, uint32_t slot)
 		return (0);
 	}
 }
-
-static mblk_t *rge_receive_packet(rge_t *rgep, uint32_t slot);
-#pragma	inline(rge_receive_packet)
 
 static mblk_t *
 rge_receive_packet(rge_t *rgep, uint32_t slot)
@@ -204,9 +191,9 @@ rge_receive_packet(rge_t *rgep, uint32_t slot)
 		 */
 		RGE_DEBUG(("rge_receive_packet: error packet, status = %x",
 		    rx_status));
-		mutex_enter(rgep->genlock);
+		mutex_enter(&rgep->genlock);
 		rgep->rge_chip_state = RGE_CHIP_ERROR;
-		mutex_exit(rgep->genlock);
+		mutex_exit(&rgep->genlock);
 		return (NULL);
 	}
 
@@ -286,11 +273,12 @@ rge_receive_packet(rge_t *rgep, uint32_t slot)
 	pflags = 0;
 	proto = rx_status & RBD_FLAG_PROTOCOL;
 	if ((proto == RBD_FLAG_TCP && !(rx_status & RBD_TCP_CKSUM_ERR)) ||
-	    (proto == RBD_FLAG_UDP && !(rx_status & RBD_UDP_CKSUM_ERR)))
+	    (proto == RBD_FLAG_UDP && !(rx_status & RBD_UDP_CKSUM_ERR))) {
 		pflags |= HCK_FULLCKSUM_OK;
+	}
 	if (proto != RBD_FLAG_NONE_IP && !(rx_status & RBD_IP_CKSUM_ERR))
 		pflags |= HCK_IPV4_HDRCKSUM_OK;
-	if (pflags != 0)  {
+	if (pflags != 0) {
 		mac_hcksum_set(mp, 0, 0, 0, 0, pflags);
 	}
 
@@ -300,16 +288,11 @@ rge_receive_packet(rge_t *rgep, uint32_t slot)
 /*
  * Accept the packets received in rx ring.
  *
- * Returns a chain of mblks containing the received data, to be
- * passed up to mac_rx().
- * The routine returns only when a complete scan has been performed
- * without finding any packets to receive.
- * This function must SET the OWN bit of BD to indicate the packets
- * it has accepted from the ring.
+ * Returns a chain of mblks containing the received data, to be passed up to
+ * mac_rx().  The routine returns only when a complete scan has been performed
+ * without finding any packets to receive.  This function must SET the OWN bit
+ * of BD to indicate the packets it has accepted from the ring.
  */
-static mblk_t *rge_receive_ring(rge_t *rgep);
-#pragma	inline(rge_receive_ring)
-
 static mblk_t *
 rge_receive_ring(rge_t *rgep)
 {
@@ -319,7 +302,7 @@ rge_receive_ring(rge_t *rgep)
 	mblk_t *mp;
 	uint32_t slot;
 
-	ASSERT(mutex_owned(rgep->rx_lock));
+	ASSERT(MUTEX_HELD(&rgep->rx_lock));
 
 	/*
 	 * Sync (all) the receive ring descriptors
@@ -354,17 +337,14 @@ rge_receive_ring(rge_t *rgep)
 /*
  * Receive all ready packets.
  */
-void rge_receive(rge_t *rgep);
-#pragma	no_inline(rge_receive)
-
 void
 rge_receive(rge_t *rgep)
 {
 	mblk_t *mp;
 
-	mutex_enter(rgep->rx_lock);
+	mutex_enter(&rgep->rx_lock);
 	mp = rge_receive_ring(rgep);
-	mutex_exit(rgep->rx_lock);
+	mutex_exit(&rgep->rx_lock);
 
 	if (mp != NULL)
 		mac_rx(rgep->mh, NULL, mp);
@@ -378,21 +358,18 @@ rge_receive(rge_t *rgep)
 /*
  * ========== Send-side recycle routines ==========
  */
-static uint32_t rge_send_claim(rge_t *rgep);
-#pragma	inline(rge_send_claim)
-
 static uint32_t
 rge_send_claim(rge_t *rgep)
 {
 	uint32_t slot;
 	uint32_t next;
 
-	mutex_enter(rgep->tx_lock);
+	mutex_enter(&rgep->tx_lock);
 	slot = rgep->tx_next;
 	next = NEXT(slot, RGE_SEND_SLOTS);
 	rgep->tx_next = next;
 	rgep->tx_flow++;
-	mutex_exit(rgep->tx_lock);
+	mutex_exit(&rgep->tx_lock);
 
 	/*
 	 * We check that our invariants still hold:
@@ -401,9 +378,9 @@ rge_send_claim(rge_t *rgep)
 	 *	index must not match the next-recycle index), 'cos
 	 *	there must always be at least one free slot in a ring
 	 */
-	ASSERT(slot < RGE_SEND_SLOTS);
-	ASSERT(next < RGE_SEND_SLOTS);
-	ASSERT(next != rgep->tc_next);
+	ASSERT3U(slot, <, RGE_SEND_SLOTS);
+	ASSERT3U(next, <, RGE_SEND_SLOTS);
+	ASSERT3U(next, !=, rgep->tc_next);
 
 	return (slot);
 }
@@ -413,9 +390,6 @@ rge_send_claim(rge_t *rgep)
  * h/w transmit done in ISR.  Instead, we call this function in the
  * rge_send() when there're few or no free tx BDs remained.
  */
-void rge_send_recycle(rge_t *rgep);
-#pragma	inline(rge_send_recycle)
-
 void
 rge_send_recycle(rge_t *rgep)
 {
@@ -424,7 +398,7 @@ rge_send_recycle(rge_t *rgep)
 	uint32_t tc_head;
 	uint32_t n;
 
-	mutex_enter(rgep->tc_lock);
+	mutex_enter(&rgep->tc_lock);
 	tc_head = rgep->tc_next;
 	tc_tail = rgep->tc_tail;
 	if (tc_head == tc_tail)
@@ -443,7 +417,7 @@ rge_send_recycle(rge_t *rgep)
 				 */
 				if (rgep->watchdog == 0)
 					rgep->watchdog = 1;
-				mutex_exit(rgep->tc_lock);
+				mutex_exit(&rgep->tc_lock);
 				return;
 			}
 			break;
@@ -459,10 +433,10 @@ rge_send_recycle(rge_t *rgep)
 		n += RGE_SEND_SLOTS;
 	rge_atomic_renounce(&rgep->tx_free, n);
 	rgep->watchdog = 0;
-	ASSERT(rgep->tx_free <= RGE_SEND_SLOTS);
+	ASSERT3U(rgep->tx_free, <=, RGE_SEND_SLOTS);
 
 resched:
-	mutex_exit(rgep->tc_lock);
+	mutex_exit(&rgep->tc_lock);
 	if (rgep->resched_needed &&
 	    rgep->rge_mac_state == RGE_MAC_STARTED) {
 		rgep->resched_needed = B_FALSE;
@@ -473,9 +447,6 @@ resched:
 /*
  * Send a message by copying it into a preallocated (and premapped) buffer
  */
-static void rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci);
-#pragma	inline(rge_send_copy)
-
 static void
 rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci)
 {
@@ -487,8 +458,6 @@ rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci)
 	size_t totlen;
 	size_t mblen;
 	uint32_t pflags;
-	struct ether_header *ethhdr;
-	struct ip *ip_hdr;
 
 	/*
 	 * IMPORTANT:
@@ -506,13 +475,13 @@ rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci)
 	ssbdp = &rgep->sw_sbds[slot];
 
 	/*
-	 * Copy the data into a pre-mapped buffer, which avoids the
-	 * overhead (and complication) of mapping/unmapping STREAMS
-	 * buffers and keeping hold of them until the DMA has completed.
+	 * Copy the data into a pre-mapped buffer, which avoids the overhead
+	 * (and complication) of mapping/unmapping STREAMS buffers and keeping
+	 * hold of them until the DMA has completed.
 	 *
-	 * Because all buffers are the same size, and larger than the
-	 * longest single valid message, we don't have to bother about
-	 * splitting the message across multiple buffers either.
+	 * Because all buffers are the same size, and larger than the longest
+	 * single valid message, we don't have to bother about splitting the
+	 * message across multiple buffers either.
 	 */
 	txb = DMA_VPTR(ssbdp->pbuf);
 	totlen = 0;
@@ -525,7 +494,7 @@ rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci)
 		txb += 2 * ETHERADDRL;
 		totlen += 2 * ETHERADDRL;
 		mblen = MBLKL(bp);
-		ASSERT(mblen >= 2 * ETHERADDRL + VLAN_TAGSZ);
+		ASSERT3U(mblen, >=, 2 * ETHERADDRL + VLAN_TAGSZ);
 		mblen -= 2 * ETHERADDRL + VLAN_TAGSZ;
 		if ((totlen += mblen) <= rgep->ethmax_size) {
 			bcopy(bp->b_rptr + 2 * ETHERADDRL + VLAN_TAGSZ,
@@ -550,18 +519,18 @@ rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci)
 		rgep->stats.tx_cur_ismax = B_FALSE;
 
 	/*
-	 * We'e reached the end of the chain; and we should have
-	 * collected no more than ETHERMAX bytes into our buffer.
+	 * We'e reached the end of the chain; and we should have collected no
+	 * more than ETHERMAX bytes into our buffer.
 	 */
-	ASSERT(bp == NULL);
-	ASSERT(totlen <= rgep->ethmax_size);
+	ASSERT3P(bp, ==, NULL);
+	ASSERT3U(totlen, <=, rgep->ethmax_size);
 	DMA_SYNC(ssbdp->pbuf, DDI_DMA_SYNC_FORDEV);
 
 	/*
 	 * Update the hardware send buffer descriptor flags
 	 */
 	hw_sbd_p = &rgep->tx_ring[slot];
-	ASSERT(hw_sbd_p == ssbdp->desc.mem_va);
+	ASSERT3P(hw_sbd_p, ==, ssbdp->desc.mem_va);
 	hw_sbd_p->flags_len = RGE_BSWAP_32(totlen & SBD_LEN_MASK);
 	if (tci != 0) {
 		tci = TCI_OS2CHIP(tci);
@@ -576,22 +545,25 @@ rge_send_copy(rge_t *rgep, mblk_t *mp, uint16_t tci)
 	 */
 	mac_hcksum_get(mp, NULL, NULL, NULL, NULL, &pflags);
 	if (pflags & HCK_FULLCKSUM) {
-		ASSERT(totlen >= sizeof (struct ether_header) +
-		    sizeof (struct ip));
-		ethhdr = (struct ether_header *)(DMA_VPTR(ssbdp->pbuf));
+		ASSERT3U(totlen, >=,
+		    sizeof (struct ether_header) + sizeof (struct ip));
+		struct ether_header *ethhdr = DMA_VPTR(ssbdp->pbuf);
+
 		/*
 		 * Is the packet an IP(v4) packet?
 		 */
 		if (ntohs(ethhdr->ether_type) == ETHERTYPE_IP) {
-			ip_hdr = (struct ip *)
+			struct ip *ip_hdr = (struct ip *)
 			    ((uint8_t *)DMA_VPTR(ssbdp->pbuf) +
 			    sizeof (struct ether_header));
-			if (ip_hdr->ip_p == IPPROTO_TCP)
+
+			if (ip_hdr->ip_p == IPPROTO_TCP) {
 				hw_sbd_p->flags_len |=
 				    RGE_BSWAP_32(SBD_FLAG_TCP_CKSUM);
-			else if (ip_hdr->ip_p == IPPROTO_UDP)
+			} else if (ip_hdr->ip_p == IPPROTO_UDP) {
 				hw_sbd_p->flags_len |=
 				    RGE_BSWAP_32(SBD_FLAG_UDP_CKSUM);
+			}
 		}
 	}
 	if (pflags & HCK_IPV4_HDRCKSUM)
@@ -613,7 +585,7 @@ rge_send(rge_t *rgep, mblk_t *mp)
 	struct ether_vlan_header *ehp;
 	uint16_t tci;
 
-	ASSERT(mp->b_next == NULL);
+	ASSERT3P(mp->b_next, ==, NULL);
 
 	/*
 	 * Try to reserve a place in the transmit ring.
@@ -628,7 +600,7 @@ rge_send(rge_t *rgep, mblk_t *mp)
 	/*
 	 * Determine if the packet is VLAN tagged.
 	 */
-	ASSERT(MBLKL(mp) >= sizeof (struct ether_header));
+	ASSERT3U(MBLKL(mp), >=, sizeof (struct ether_header));
 	tci = 0;
 	ehp = (struct ether_vlan_header *)mp->b_rptr;
 	if (ehp->ether_tpid == htons(ETHERTYPE_VLAN))
@@ -640,19 +612,19 @@ rge_send(rge_t *rgep, mblk_t *mp)
 	 *	there must still be at least one free place
 	 *	there must be at least one place NOT free (ours!)
 	 */
-	ASSERT(rgep->tx_free < RGE_SEND_SLOTS);
+	ASSERT3U(rgep->tx_free, <, RGE_SEND_SLOTS);
 	rge_send_copy(rgep, mp, tci);
 
 	/*
 	 * Trigger chip h/w transmit ...
 	 */
-	mutex_enter(rgep->tx_lock);
+	mutex_enter(&rgep->tx_lock);
 	if (--rgep->tx_flow == 0) {
 		DMA_SYNC(rgep->tx_desc, DDI_DMA_SYNC_FORDEV);
 		rgep->tc_tail = rgep->tx_next;
 	}
 	rgep->stats.opackets++;
-	mutex_exit(rgep->tx_lock);
+	mutex_exit(&rgep->tx_lock);
 
 	return (B_TRUE);
 }
@@ -660,10 +632,7 @@ rge_send(rge_t *rgep, mblk_t *mp)
 uint_t
 rge_reschedule(caddr_t arg1, caddr_t arg2)
 {
-	rge_t *rgep;
-
-	rgep = (rge_t *)arg1;
-	_NOTE(ARGUNUSED(arg2))
+	rge_t *rgep = (rge_t *)arg1;
 
 	rge_send_recycle(rgep);
 
@@ -695,11 +664,11 @@ rge_m_tx(void *arg, mblk_t *mp)
 
 	ASSERT(mp != NULL);
 
-	rw_enter(rgep->errlock, RW_READER);
+	rw_enter(&rgep->errlock, RW_READER);
 	if ((rgep->rge_mac_state != RGE_MAC_STARTED) ||
 	    (rgep->rge_chip_state != RGE_CHIP_RUNNING) ||
 	    (rgep->param_link_up != LINK_STATE_UP)) {
-		rw_exit(rgep->errlock);
+		rw_exit(&rgep->errlock);
 		RGE_DEBUG(("rge_m_tx: tx doesn't work"));
 		freemsgchain(mp);
 		return (NULL);
@@ -719,7 +688,7 @@ rge_m_tx(void *arg, mblk_t *mp)
 	if (mp != mp_org) {
 		rge_tx_trigger(rgep);
 	}
-	rw_exit(rgep->errlock);
+	rw_exit(&rgep->errlock);
 
 	return (mp);
 }

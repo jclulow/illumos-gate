@@ -34,7 +34,7 @@ uint32_t rge_debug;
 /*
  * Global mutex used by logging routines below
  */
-kmutex_t rge_log_mutex[1];
+kmutex_t rge_log_mutex;
 
 /*
  * Static data used by logging routines; protected by <rge_log_mutex>
@@ -54,7 +54,7 @@ rge_vprt(const char *fmt, va_list args)
 {
 	char buf[128];
 
-	ASSERT(mutex_owned(rge_log_mutex));
+	ASSERT(MUTEX_HELD(&rge_log_mutex));
 
 	(void) vsnprintf(buf, sizeof (buf), fmt, args);
 	cmn_err(rge_log_data.level, rge_log_data.fmt, rge_log_data.who, buf);
@@ -68,7 +68,7 @@ rge_notice(rge_t *rgep, const char *fmt, ...)
 {
 	va_list args;
 
-	mutex_enter(rge_log_mutex);
+	mutex_enter(&rge_log_mutex);
 	rge_log_data.who = rgep->ifname;
 	rge_log_data.fmt = "%s: %s";
 	rge_log_data.level = CE_NOTE;
@@ -77,7 +77,7 @@ rge_notice(rge_t *rgep, const char *fmt, ...)
 	rge_vprt(fmt, args);
 	va_end(args);
 
-	mutex_exit(rge_log_mutex);
+	mutex_exit(&rge_log_mutex);
 }
 
 /*
@@ -88,7 +88,7 @@ rge_log(rge_t *rgep, const char *fmt, ...)
 {
 	va_list args;
 
-	mutex_enter(rge_log_mutex);
+	mutex_enter(&rge_log_mutex);
 	rge_log_data.who = rgep->ifname;
 	rge_log_data.fmt = "!%s: %s";
 	rge_log_data.level = CE_NOTE;
@@ -97,7 +97,7 @@ rge_log(rge_t *rgep, const char *fmt, ...)
 	rge_vprt(fmt, args);
 	va_end(args);
 
-	mutex_exit(rge_log_mutex);
+	mutex_exit(&rge_log_mutex);
 }
 
 /*
@@ -108,7 +108,7 @@ rge_problem(rge_t *rgep, const char *fmt, ...)
 {
 	va_list args;
 
-	mutex_enter(rge_log_mutex);
+	mutex_enter(&rge_log_mutex);
 	rge_log_data.who = rgep->ifname;
 	rge_log_data.fmt = "!%s: %s";
 	rge_log_data.level = CE_WARN;
@@ -117,7 +117,7 @@ rge_problem(rge_t *rgep, const char *fmt, ...)
 	rge_vprt(fmt, args);
 	va_end(args);
 
-	mutex_exit(rge_log_mutex);
+	mutex_exit(&rge_log_mutex);
 }
 
 /*
@@ -128,7 +128,7 @@ rge_error(rge_t *rgep, const char *fmt, ...)
 {
 	va_list args;
 
-	mutex_enter(rge_log_mutex);
+	mutex_enter(&rge_log_mutex);
 	rge_log_data.who = rgep->ifname;
 	rge_log_data.fmt = "!%s: %s";
 	rge_log_data.level = CE_WARN;
@@ -137,7 +137,7 @@ rge_error(rge_t *rgep, const char *fmt, ...)
 	rge_vprt(fmt, args);
 	va_end(args);
 
-	mutex_exit(rge_log_mutex);
+	mutex_exit(&rge_log_mutex);
 }
 
 #if	RGE_DEBUGGING
@@ -147,19 +147,19 @@ rge_prt(const char *fmt, ...)
 {
 	va_list args;
 
-	ASSERT(mutex_owned(rge_log_mutex));
+	ASSERT(MUTEX_HELD(&rge_log_mutex));
 
 	va_start(args, fmt);
 	rge_vprt(fmt, args);
 	va_end(args);
 
-	mutex_exit(rge_log_mutex);
+	mutex_exit(&rge_log_mutex);
 }
 
 void
 (*rge_gdb(void))(const char *fmt, ...)
 {
-	mutex_enter(rge_log_mutex);
+	mutex_enter(&rge_log_mutex);
 	rge_log_data.who = "rge";
 	rge_log_data.fmt = "?%s: %s\n";
 	rge_log_data.level = CE_CONT;
@@ -170,7 +170,7 @@ void
 void
 (*rge_db(rge_t *rgep))(const char *fmt, ...)
 {
-	mutex_enter(rge_log_mutex);
+	mutex_enter(&rge_log_mutex);
 	rge_log_data.who = rgep->ifname;
 	rge_log_data.fmt = "?%s: %s\n";
 	rge_log_data.level = CE_CONT;

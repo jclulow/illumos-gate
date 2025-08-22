@@ -336,6 +336,23 @@ typedef struct sw_sbd {
 }
 
 /*
+ * 'Progress' bit flags ...
+ */
+typedef enum rge_progress {
+	PROGRESS_CFG =		0x0001,	/* config space mapped */
+	PROGRESS_REGS =		0x0002,	/* registers mapped */
+	PROGRESS_RESCHED =	0x0010,	/* resched softint registered */
+	PROGRESS_FACTOTUM =	0x0020,	/* factotum softint registered */
+	PROGRESS_INTR =		0x0040,	/* h/w interrupt registered */
+					/* and mutexes initialised */
+	PROGRESS_INIT =		0x0080,	/* rx/buf/tx ring initialised */
+	PROGRESS_PHY =		0x0100,	/* PHY initialised */
+	PROGRESS_NDD =		0x1000,	/* NDD parameters set up */
+	PROGRESS_KSTATS =	0x2000,	/* kstats created */
+	PROGRESS_READY =	0x8000,	/* ready for work */
+} rge_progress_t;
+
+/*
  * Describes the characteristics of a specific chip
  */
 typedef struct {
@@ -401,7 +418,7 @@ typedef struct rge {
 	uint32_t		head_room;
 	char			ifname[8];	/* "rge0" ... "rge999"	*/
 	int32_t			instance;
-	uint32_t		progress;	/* attach tracking	*/
+	rge_progress_t		progress;	/* attach tracking	*/
 	uint32_t		debug;		/* per-instance debug	*/
 	chip_id_t		chipid;
 
@@ -446,12 +463,12 @@ typedef struct rge {
 	sw_sbd_t		*sw_sbds;
 
 	/* mutex */
-	kmutex_t		genlock[1];	/* i/o reg access	*/
-	krwlock_t		errlock[1];	/* rge restart */
-	kmutex_t		tx_lock[1];	/* send access		*/
-	kmutex_t		tc_lock[1];	/* send recycle access */
-	kmutex_t		rx_lock[1];	/* receive access	*/
-	kmutex_t		rc_lock[1];	/* receive recycle access */
+	kmutex_t		genlock;	/* i/o reg access	*/
+	krwlock_t		errlock;	/* rge restart */
+	kmutex_t		tx_lock;	/* send access		*/
+	kmutex_t		tc_lock;	/* send recycle access */
+	kmutex_t		rx_lock;	/* receive access	*/
+	kmutex_t		rc_lock;	/* receive recycle access */
 
 	/*
 	 * Miscellaneous operating variables (not synchronised)
@@ -497,21 +514,6 @@ typedef struct rge {
 	uint64_t		last_rpackets;
 	uint32_t		rx_fifo_ovf;
 } rge_t;
-
-/*
- * 'Progress' bit flags ...
- */
-#define	PROGRESS_CFG		0x0001	/* config space mapped		*/
-#define	PROGRESS_REGS		0x0002	/* registers mapped		*/
-#define	PROGRESS_RESCHED	0x0010	/* resched softint registered	*/
-#define	PROGRESS_FACTOTUM	0x0020	/* factotum softint registered	*/
-#define	PROGRESS_INTR		0X0040	/* h/w interrupt registered	*/
-					/* and mutexen initialised	*/
-#define	PROGRESS_INIT		0x0080	/* rx/buf/tx ring initialised	*/
-#define	PROGRESS_PHY		0x0100	/* PHY initialised		*/
-#define	PROGRESS_NDD		0x1000	/* NDD parameters set up	*/
-#define	PROGRESS_KSTATS		0x2000	/* kstats created		*/
-#define	PROGRESS_READY		0x8000	/* ready for work		*/
 
 /*
  * Special chip flags
@@ -748,7 +750,7 @@ void rge_problem(rge_t *rgep, const char *fmt, ...);
 void rge_notice(rge_t *rgep, const char *fmt, ...);
 void rge_log(rge_t *rgep, const char *fmt, ...);
 void rge_error(rge_t *rgep, const char *fmt, ...);
-extern kmutex_t rge_log_mutex[1];
+extern kmutex_t rge_log_mutex;
 extern uint32_t rge_debug;
 
 /* rge_main.c */

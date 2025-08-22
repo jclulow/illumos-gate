@@ -156,9 +156,9 @@ rge_m_stat(void *arg, uint_t stat, uint64_t *val)
 	rge_t *rgep = arg;
 	rge_hw_stats_t *bstp;
 
-	mutex_enter(rgep->genlock);
+	mutex_enter(&rgep->genlock);
 	rge_hw_stats_dump(rgep);
-	mutex_exit(rgep->genlock);
+	mutex_exit(&rgep->genlock);
 	bstp = rgep->hw_stats;
 
 	switch (stat) {
@@ -227,11 +227,11 @@ rge_m_stat(void *arg, uint_t stat, uint64_t *val)
 		break;
 
 	case ETHER_STAT_XCVR_ID:
-		mutex_enter(rgep->genlock);
+		mutex_enter(&rgep->genlock);
 		*val = rge_mii_get16(rgep, MII_PHYIDH);
 		*val <<= 16;
 		*val |= rge_mii_get16(rgep, MII_PHYIDL);
-		mutex_exit(rgep->genlock);
+		mutex_exit(&rgep->genlock);
 		break;
 
 	case ETHER_STAT_XCVR_INUSE:

@@ -147,8 +147,6 @@ rge_param_get(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
 {
 	nd_param_t *ndp;
 
-	_NOTE(ARGUNUSED(q, credp))
-
 	ndp = (nd_param_t *)cp;
 	(void) mi_mpprintf(mp, "%d", ndp->ndp_val);
 
@@ -166,8 +164,6 @@ rge_param_set(queue_t *q, mblk_t *mp, char *value, caddr_t cp, cred_t *credp)
 {
 	nd_param_t *ndp;
 	long new_value;
-
-	_NOTE(ARGUNUSED(q, mp, credp))
 
 	ndp = (nd_param_t *)cp;
 	(void) ddi_strtol(value, (char **)NULL, 0, &new_value);
@@ -187,16 +183,13 @@ static int
 rge_param_register(rge_t *rgep)
 {
 	const nd_param_t *tmplp;
-	dev_info_t *dip;
+	dev_info_t *dip = rgep->devinfo;
 	nd_param_t *ndp;
-	caddr_t *nddpp;
 	pfi_t setfn;
 	char *nm;
 	int pval;
 
-	dip = rgep->devinfo;
-	nddpp = &rgep->nd_data_p;
-	ASSERT(*nddpp == NULL);
+	ASSERT3P(rgep->nd_data_p, ==, NULL);
 
 	if (rgep->chipid.mac_ver == MAC_VER_8101E)
 		tmplp = nd_template_100;
@@ -227,8 +220,10 @@ rge_param_register(rge_t *rgep)
 			break;
 		}
 
-		if (!nd_load(nddpp, ++nm, rge_param_get, setfn, (caddr_t)ndp))
+		if (!nd_load(&rgep->nd_data_p, ++nm, rge_param_get, setfn,
+		    (caddr_t)ndp)) {
 			goto nd_fail;
+		}
 
 		/*
 		 * If the parameter is writable, and there's a property
@@ -249,12 +244,12 @@ rge_param_register(rge_t *rgep)
 nd_fail:
 	if (rgep->chipid.mac_ver == MAC_VER_8101E) {
 		RGE_DEBUG(("rge_param_register: FAILED at index %d [info %d]",
-		    tmplp-nd_template_100, tmplp->ndp_info));
+		    tmplp - nd_template_100, tmplp->ndp_info));
 	} else {
 		RGE_DEBUG(("rge_param_register: FAILED at index %d [info %d]",
-		    tmplp-nd_template_1000, tmplp->ndp_info));
+		    tmplp - nd_template_1000, tmplp->ndp_info));
 	}
-	nd_free(nddpp);
+	nd_free(&rgep->nd_data_p);
 	return (DDI_FAILURE);
 }
 
@@ -344,10 +339,8 @@ rge_nd_init(rge_t *rgep)
 
 		speed = RGE_PROP_GET_INT(dip, speed_propname);
 		duplex = RGE_PROP_GET_INT(dip, duplex_propname);
-		rge_log(rgep, "%s property is %d",
-		    speed_propname, speed);
-		rge_log(rgep, "%s property is %d",
-		    duplex_propname, duplex);
+		rge_log(rgep, "%s property is %d", speed_propname, speed);
+		rge_log(rgep, "%s property is %d", duplex_propname, duplex);
 
 		switch (speed) {
 		case 1000:
@@ -414,12 +407,11 @@ rge_nd_ioctl(rge_t *rgep, queue_t *wq, mblk_t *mp, struct iocblk *iocp)
 	RGE_TRACE(("rge_nd_ioctl($%p, $%p, $%p, $%p)",
 	    (void *)rgep, (void *)wq, (void *)mp, (void *)iocp));
 
-	ASSERT(mutex_owned(rgep->genlock));
+	ASSERT(MUTEX_HELD(&rgep->genlock));
 
 	cmd = iocp->ioc_cmd;
 	switch (cmd) {
 	default:
-		/* NOTREACHED */
 		rge_error(rgep, "rge_nd_ioctl: invalid cmd 0x%x", cmd);
 		return (IOC_INVAL);
 
