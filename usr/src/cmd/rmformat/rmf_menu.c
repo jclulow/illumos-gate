@@ -1146,7 +1146,7 @@ process_b_flag(int32_t fd)
 			}
 		}
 		if (efi_write(fd, vtoc64) != 0) {
-			(void) efi_err_check(vtoc64);
+			efi_err_check(vtoc64);
 			(void) fprintf(stderr,
 			    gettext("Could not write label.\n"));
 		}

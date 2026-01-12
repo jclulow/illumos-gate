@@ -27,7 +27,7 @@
 
 LIBRARY =	libefi.a
 VERS =		.1
-OBJECTS =	rdwr_efi.o crc32_efi.o
+OBJECTS =	rdwr_efi.o crc32_efi.o ilstr.o vec.o
 
 include ../../Makefile.lib
 
@@ -39,6 +39,8 @@ SRCDIR =	../common
 LIBS =		$(DYNLIB)
 LDLIBS +=	-luuid -lsmbios -lc
 CFLAGS +=	$(CCVERBOSE)
+CPPFLAGS +=	-I$(SRC)/common/vec
+CSTD =		$(CSTD_GNU17)
 
 
 SMOFF += kmalloc_wrong_size
@@ -47,5 +49,12 @@ SMOFF += kmalloc_wrong_size
 
 all: $(LIBS)
 
+objs/%.o pics/%.o: $(SRC)/common/vec/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
+objs/%.o pics/%.o: $(SRC)/common/ilstr/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
 
 include ../../Makefile.targ

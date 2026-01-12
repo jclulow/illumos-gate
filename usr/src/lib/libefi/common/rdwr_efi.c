@@ -27,10 +27,13 @@
  * Copyright 2019 Joyent, Inc.
  * Copyright 2022 Jason King
  * Copyright 2024 MNX Cloud, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <limits.h>
 #include <errno.h>
 #include <strings.h>
 #include <unistd.h>
@@ -47,6 +50,21 @@
 #include <sys/efi_partition.h>
 #include <sys/byteorder.h>
 #include <sys/ddi.h>
+#include <sys/sysmacros.h>
+#include <sys/ilstr.h>
+#include <vec.h>
+
+typedef struct dk_check_msg {
+	uint_t			dkm_partition;
+	bool			dkm_error;
+	ilstr_t			dkm_msg;
+} dk_check_msg_t;
+
+struct dk_check {
+	vec_t			*dkc_msgs;
+	bool			dkc_failed;
+	int			dkc_resv_part;
+};
 
 /*
  * The original conversion array used simple array index, but since
@@ -56,72 +74,64 @@
  * Still we will fabricate the missing p_tag values.
  */
 static struct uuid_to_ptag {
-	struct uuid	uuid;
-	ushort_t	p_tag;
-} conversion_array[] = {
-	{ EFI_UNUSED, V_UNASSIGNED },
-	{ EFI_BOOT, V_BOOT },
-	{ EFI_ROOT, V_ROOT },
-	{ EFI_SWAP, V_SWAP },
-	{ EFI_USR, V_USR },
-	{ EFI_BACKUP, V_BACKUP },
-	{ EFI_VAR, V_VAR },
-	{ EFI_HOME, V_HOME },
-	{ EFI_ALTSCTR, V_ALTSCTR },
-	{ EFI_RESERVED, V_RESERVED },
-	{ EFI_SYSTEM, V_SYSTEM },		/* V_SYSTEM is 0xc */
-	{ EFI_LEGACY_MBR, 0x10 },
-	{ EFI_SYMC_PUB, 0x11 },
-	{ EFI_SYMC_CDS, 0x12 },
-	{ EFI_MSFT_RESV, 0x13 },
-	{ EFI_DELL_BASIC, 0x14 },
-	{ EFI_DELL_RAID, 0x15 },
-	{ EFI_DELL_SWAP, 0x16 },
-	{ EFI_DELL_LVM, 0x17 },
-	{ EFI_DELL_RESV, 0x19 },
-	{ EFI_AAPL_HFS, 0x1a },
-	{ EFI_AAPL_UFS, 0x1b },
-	{ EFI_AAPL_ZFS, 0x1c },
-	{ EFI_AAPL_APFS, 0x1d },
-	{ EFI_BIOS_BOOT, V_BIOS_BOOT },		/* V_BIOS_BOOT is 0x18 */
-	{ EFI_FREEBSD_BOOT,  V_FREEBSD_BOOT },
-	{ EFI_FREEBSD_SWAP, V_FREEBSD_SWAP },
-	{ EFI_FREEBSD_UFS, V_FREEBSD_UFS },
-	{ EFI_FREEBSD_VINUM, V_FREEBSD_VINUM },
-	{ EFI_FREEBSD_ZFS, V_FREEBSD_ZFS },
-	{ EFI_FREEBSD_NANDFS, V_FREEBSD_NANDFS }
+	struct uuid		uuid;
+	ushort_t		p_tag;
+} conversions[] = {
+	{ EFI_UNUSED,		V_UNASSIGNED },
+	{ EFI_BOOT,		V_BOOT },
+	{ EFI_ROOT,		V_ROOT },
+	{ EFI_SWAP,		V_SWAP },
+	{ EFI_USR,		V_USR },
+	{ EFI_BACKUP,		V_BACKUP },
+	{ EFI_VAR,		V_VAR },
+	{ EFI_HOME,		V_HOME },
+	{ EFI_ALTSCTR,		V_ALTSCTR },
+	{ EFI_RESERVED,		V_RESERVED },
+	{ EFI_SYSTEM,		V_SYSTEM },
+	{ EFI_LEGACY_MBR,	V_LEGACY_MBR },
+	{ EFI_SYMC_PUB,		V_SYMC_PUB },
+	{ EFI_SYMC_CDS,		V_SYMC_CDS },
+	{ EFI_MSFT_RESV,	V_MSFT_RESV },
+	{ EFI_DELL_BASIC,	V_DELL_BASIC },
+	{ EFI_DELL_RAID,	V_DELL_RAID },
+	{ EFI_DELL_SWAP,	V_DELL_SWAP },
+	{ EFI_DELL_LVM,		V_DELL_LVM },
+	{ EFI_DELL_RESV,	V_DELL_RESV },
+	{ EFI_AAPL_HFS,		V_AAPL_HFS },
+	{ EFI_AAPL_UFS,		V_AAPL_UFS },
+	{ EFI_AAPL_ZFS,		V_AAPL_ZFS },
+	{ EFI_AAPL_APFS,	V_AAPL_APFS },
+	{ EFI_BIOS_BOOT,	V_BIOS_BOOT },
+	{ EFI_FREEBSD_BOOT,	V_FREEBSD_BOOT },
+	{ EFI_FREEBSD_SWAP,	V_FREEBSD_SWAP },
+	{ EFI_FREEBSD_UFS,	V_FREEBSD_UFS },
+	{ EFI_FREEBSD_VINUM,	V_FREEBSD_VINUM },
+	{ EFI_FREEBSD_ZFS,	V_FREEBSD_ZFS },
+	{ EFI_FREEBSD_NANDFS,	V_FREEBSD_NANDFS }
 };
 
+#define	NCONVERSIONS	ARRAY_SIZE(conversions)
+
 /*
- * Default vtoc information for non-SVr4 partitions
+ * Default VTOC tags for EFI partition tables created by rmformat(1):
  */
-struct dk_map2  default_vtoc_map[NDKMAP] = {
-	{	V_ROOT,		0	},		/* a - 0 */
-	{	V_SWAP,		V_UNMNT	},		/* b - 1 */
-	{	V_BACKUP,	V_UNMNT	},		/* c - 2 */
-	{	V_UNASSIGNED,	0	},		/* d - 3 */
-	{	V_UNASSIGNED,	0	},		/* e - 4 */
-	{	V_UNASSIGNED,	0	},		/* f - 5 */
-	{	V_USR,		0	},		/* g - 6 */
-	{	V_UNASSIGNED,	0	},		/* h - 7 */
-
-#if defined(_SUNOS_VTOC_16)
-
-#if defined(i386) || defined(__amd64)
-	{	V_BOOT,		V_UNMNT	},		/* i - 8 */
-	{	V_ALTSCTR,	0	},		/* j - 9 */
-
-#else
-#error No VTOC format defined.
-#endif			/* defined(i386) */
-
-	{	V_UNASSIGNED,	0	},		/* k - 10 */
-	{	V_UNASSIGNED,	0	},		/* l - 11 */
-	{	V_UNASSIGNED,	0	},		/* m - 12 */
-	{	V_UNASSIGNED,	0	},		/* n - 13 */
-	{	V_UNASSIGNED,	0	},		/* o - 14 */
-	{	V_UNASSIGNED,	0	},		/* p - 15 */
-#endif			/* defined(_SUNOS_VTOC_16) */
+struct dk_map2 default_vtoc_map_rmformat[NDKMAP] = {
+	{ V_ROOT,		0	},		/* a - 0 */
+	{ V_SWAP,		V_UNMNT	},		/* b - 1 */
+	{ V_UNASSIGNED,		V_UNMNT	},		/* c - 2 */
+	{ V_UNASSIGNED,		0	},		/* d - 3 */
+	{ V_UNASSIGNED,		0	},		/* e - 4 */
+	{ V_UNASSIGNED,		0	},		/* f - 5 */
+	{ V_USR,		0	},		/* g - 6 */
+	{ V_UNASSIGNED,		0	},		/* h - 7 */
+	{ V_BOOT,		V_UNMNT	},		/* i - 8 */
+	{ V_ALTSCTR,		0	},		/* j - 9 */
+	{ V_UNASSIGNED,		0	},		/* k - 10 */
+	{ V_UNASSIGNED,		0	},		/* l - 11 */
+	{ V_UNASSIGNED,		0	},		/* m - 12 */
+	{ V_UNASSIGNED,		0	},		/* n - 13 */
+	{ V_UNASSIGNED,		0	},		/* o - 14 */
+	{ V_UNASSIGNED,		0	},		/* p - 15 */
 };
 
 #ifdef DEBUG
@@ -129,16 +139,45 @@ int efi_debug = 1;
 #else
 int efi_debug = 0;
 #endif
+boolean_t efi_debug_env_checked = B_FALSE;
 
 #define	EFI_FIXES_DB "/usr/share/hwdata/efi.fixes"
 
-extern unsigned int	efi_crc32(const unsigned char *, unsigned int);
-static int		efi_read(int, struct dk_gpt *);
+extern unsigned int efi_crc32(const unsigned char *, unsigned int);
+static int efi_read(int, struct dk_gpt *);
+static void efi_debugf(const char *, ...) __PRINTFLIKE(1);
+
+
+static void
+efi_debugf(const char *format, ...)
+{
+	char buf[LINE_MAX];
+	va_list ap;
+
+	if (efi_debug == 0 && !efi_debug_env_checked) {
+		efi_debug_env_checked = B_TRUE;
+
+		char *val = getenv("EFI_DEBUG");
+		if (val != NULL && *val != '\0') {
+			efi_debug = 1;
+		}
+	}
+
+	if (efi_debug == 0) {
+		return;
+	}
+
+	va_start(ap, format);
+	(void) vsnprintf(buf, sizeof (buf), format, ap);
+	va_end(ap);
+
+	(void) fprintf(stderr, "libefi: %s\n", buf);
+}
 
 static int
 read_disk_info(int fd, diskaddr_t *capacity, uint_t *lbsize)
 {
-	struct dk_minfo		disk_info;
+	struct dk_minfo disk_info;
 
 	if ((ioctl(fd, DKIOCGMEDIAINFO, (caddr_t)&disk_info)) == -1)
 		return (errno);
@@ -158,6 +197,25 @@ read_disk_info(int fd, diskaddr_t *capacity, uint_t *lbsize)
 			    sizeof (struct dk_part))
 
 /*
+ * Return the highest LBA covered by this partition.
+ */
+static diskaddr_t
+part_end(struct dk_part *part)
+{
+	return (part->p_start + part->p_size - 1);
+}
+
+static struct dk_part *
+partn(struct dk_gpt *vtoc, uint_t n)
+{
+	if (n >= vtoc->efi_nparts) {
+		return (NULL);
+	}
+
+	return (&vtoc->efi_parts[n]);
+}
+
+/*
  * The EFI reserved partition size is 8 MiB. This calculates the number of
  * sectors required to store 8 MiB, taking into account the device's sector
  * size.
@@ -173,17 +231,15 @@ efi_reserved_sectors(dk_gpt_t *efi)
 int
 efi_alloc_and_init(int fd, uint32_t nparts, struct dk_gpt **vtoc)
 {
-	diskaddr_t	capacity;
-	uint_t		lbsize;
-	uint_t		nblocks;
-	size_t		length;
-	struct dk_gpt	*vptr;
-	struct uuid	uuid;
+	diskaddr_t capacity;
+	uint_t lbsize;
+	uint_t nblocks;
+	size_t length;
+	struct dk_gpt *vptr;
+	struct uuid uuid;
 
 	if (read_disk_info(fd, &capacity, &lbsize) != 0) {
-		if (efi_debug)
-			(void) fprintf(stderr,
-			    "couldn't read disk information\n");
+		efi_debugf("couldn't read disk information");
 		return (-1);
 	}
 
@@ -194,11 +250,8 @@ efi_alloc_and_init(int fd, uint32_t nparts, struct dk_gpt **vtoc)
 	}
 
 	if (nparts > MAX_PARTS) {
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			"the maximum number of partitions supported is %lu\n",
-			    MAX_PARTS);
-		}
+		efi_debugf("the maximum number of partitions supported "
+		    "is %lu\n", MAX_PARTS);
 		return (-1);
 	}
 
@@ -234,14 +287,14 @@ efi_alloc_and_init(int fd, uint32_t nparts, struct dk_gpt **vtoc)
 int
 efi_alloc_and_read(int fd, struct dk_gpt **vtoc)
 {
-	int			rval;
-	uint32_t		nparts;
-	int			length;
-	struct mboot		*mbr;
-	struct ipart		*ipart;
-	diskaddr_t		capacity;
-	uint_t			lbsize;
-	int			i;
+	int rval;
+	uint32_t nparts;
+	int length;
+	struct mboot *mbr;
+	struct ipart *ipart;
+	diskaddr_t capacity;
+	uint_t lbsize;
+	int i;
 
 	if (read_disk_info(fd, &capacity, &lbsize) != 0)
 		return (VT_ERROR);
@@ -279,14 +332,14 @@ efi_alloc_and_read(int fd, struct dk_gpt **vtoc)
 	(*vtoc)->efi_nparts = nparts;
 	rval = efi_read(fd, *vtoc);
 
-	if ((rval == VT_EINVAL) && (*vtoc)->efi_nparts > nparts) {
+	if (rval == VT_EINVAL && (*vtoc)->efi_nparts > nparts) {
 		void *tmp;
 		length = (int) sizeof (struct dk_gpt) +
 		    (int) sizeof (struct dk_part) *
 		    ((*vtoc)->efi_nparts - 1);
 		nparts = (*vtoc)->efi_nparts;
 		if ((tmp = realloc(*vtoc, length)) == NULL) {
-			free (*vtoc);
+			free(*vtoc);
 			*vtoc = NULL;
 			return (VT_ERROR);
 		} else {
@@ -296,11 +349,8 @@ efi_alloc_and_read(int fd, struct dk_gpt **vtoc)
 	}
 
 	if (rval < 0) {
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			    "read of EFI table failed, rval=%d\n", rval);
-		}
-		free (*vtoc);
+		efi_debugf("read of EFI table failed, rval=%d", rval);
+		free(*vtoc);
 		*vtoc = NULL;
 	}
 
@@ -320,11 +370,152 @@ efi_ioctl(int fd, int cmd, dk_efi_t *dk_ioc)
 	return (error);
 }
 
+
+int
+efi_check_ok(const dk_check_t *dkc)
+{
+	if (dkc == NULL || dkc->dkc_failed) {
+		return (0);
+	}
+
+	for (uint_t i = 0; i < efi_check_nmsg(dkc); i++) {
+		if (efi_check_msg_is_error(dkc, i)) {
+			return (0);
+		}
+	}
+
+	return (1);
+}
+
+uint_t
+efi_check_nmsg(const dk_check_t *dkc)
+{
+	return (vec_len(dkc->dkc_msgs));
+}
+
+int
+efi_check_msg_is_error(const dk_check_t *dkc, uint_t n)
+{
+	if (n >= vec_len(dkc->dkc_msgs)) {
+		return (0);
+	}
+
+	dk_check_msg_t *dkm = vec_get(dkc->dkc_msgs, n);
+
+	return (dkm->dkm_error == true);
+}
+
+const char *
+efi_check_msg(const dk_check_t *dkc, uint_t n)
+{
+	if (n >= vec_len(dkc->dkc_msgs)) {
+		return (NULL);
+	}
+
+	dk_check_msg_t *dkm = vec_get(dkc->dkc_msgs, n);
+	return (ilstr_cstr(&dkm->dkm_msg));
+}
+
+static void
+efi_dkm_free(dk_check_msg_t *dkm)
+{
+	if (dkm == NULL) {
+		return;
+	}
+
+	ilstr_fini(&dkm->dkm_msg);
+	free(dkm);
+}
+
+void
+efi_check_free(dk_check_t *dkc)
+{
+	if (dkc == NULL) {
+		return;
+	}
+
+	dk_check_msg_t *dkm;
+	while ((dkm = vec_pop(dkc->dkc_msgs)) != NULL) {
+		efi_dkm_free(dkm);
+	}
+	vec_free(dkc->dkc_msgs);
+
+	free(dkc);
+}
+
+static dk_check_t *
+efi_check_alloc(void)
+{
+	dk_check_t *dkc = malloc(sizeof (*dkc));
+	if (dkc == NULL || (dkc->dkc_msgs = vec_alloc()) == NULL) {
+		free(dkc);
+		return (NULL);
+	}
+
+	dkc->dkc_failed = false;
+	dkc->dkc_resv_part = -1;
+
+	return (dkc);
+}
+
+dk_check_t *
+efi_check(struct dk_gpt *vtoc)
+{
+	/*
+	 * XXX
+	 */
+	return (NULL);
+}
+
+#define	MISC	UINT_MAX
+
+static void
+efi_checkf_add(dk_check_t *dkc, uint_t part, bool error, const char *fmt, ...)
+{
+	va_list ap;
+
+	dk_check_msg_t *dkm = calloc(1, sizeof (*dkm));
+	if (dkm == NULL) {
+		goto bail;
+	}
+	ilstr_init(&dkm->dkm_msg, 0);
+	dkm->dkm_partition = part;
+	dkm->dkm_error = error;
+
+	va_start(ap, fmt);
+	ilstr_vaprintf(&dkm->dkm_msg, fmt, ap);
+	va_end(ap);
+
+	if (ilstr_errno(&dkm->dkm_msg) != ILSTR_ERROR_OK) {
+		goto bail;
+	}
+
+	const char *level = error ? "error" : "warning";
+	if (part != MISC) {
+		efi_debugf("check: %s: partition %u: %s", level, part, 
+		    ilstr_cstr(&dkm->dkm_msg));
+
+		ilstr_pprintf(&dkm->dkm_msg, "Partition %u ", part);
+	} else {
+		efi_debugf("check: %s: %s", level, ilstr_cstr(&dkm->dkm_msg));
+	}
+
+	if (vec_push(dkc->dkc_msgs, dkm) != 0) {
+		goto bail;
+	}
+
+	return;
+
+bail:
+	dkc->dkc_failed = true;
+	efi_dkm_free(dkm);
+}
+
 static int
 check_label(int fd, dk_efi_t *dk_ioc)
 {
-	efi_gpt_t		*efi;
-	uint_t			crc;
+	efi_gpt_t *efi;
+	uint_t crc;
 
 	if (efi_ioctl(fd, DKIOCGETEFI, dk_ioc) == -1) {
 		switch (errno) {
@@ -336,11 +527,9 @@ check_label(int fd, dk_efi_t *dk_ioc)
 	}
 	efi = dk_ioc->dki_data;
 	if (efi->efi_gpt_Signature != LE_64(EFI_SIGNATURE)) {
-		if (efi_debug)
-			(void) fprintf(stderr,
-			    "Bad EFI signature: 0x%llx != 0x%llx\n",
-			    (long long)efi->efi_gpt_Signature,
-			    (long long)LE_64(EFI_SIGNATURE));
+		efi_debugf("Bad EFI signature: 0x%llx != 0x%llx",
+		    (long long)efi->efi_gpt_Signature,
+		    (long long)LE_64(EFI_SIGNATURE));
 		return (VT_EINVAL);
 	}
 
@@ -354,11 +543,9 @@ check_label(int fd, dk_efi_t *dk_ioc)
 	if (((len_t)LE_32(efi->efi_gpt_HeaderSize) > dk_ioc->dki_length) ||
 	    crc != LE_32(efi_crc32((unsigned char *)efi,
 	    LE_32(efi->efi_gpt_HeaderSize)))) {
-		if (efi_debug)
-			(void) fprintf(stderr,
-			    "Bad EFI CRC: 0x%x != 0x%x\n",
-			    crc, LE_32(efi_crc32((unsigned char *)efi,
-			    LE_32(efi->efi_gpt_HeaderSize))));
+		efi_debugf("Bad EFI CRC: 0x%x != 0x%x",
+		    crc, LE_32(efi_crc32((unsigned char *)efi,
+		    LE_32(efi->efi_gpt_HeaderSize))));
 		return (VT_EINVAL);
 	}
 
@@ -368,25 +555,23 @@ check_label(int fd, dk_efi_t *dk_ioc)
 static int
 efi_read(int fd, struct dk_gpt *vtoc)
 {
-	int			i, j;
-	int			label_len;
-	int			rval = 0;
-	int			vdc_flag = 0;
-	struct dk_minfo		disk_info;
-	dk_efi_t		dk_ioc;
-	efi_gpt_t		*efi;
-	efi_gpe_t		*efi_parts;
-	struct dk_cinfo		dki_info;
-	uint32_t		user_length;
-	boolean_t		legacy_label = B_FALSE;
+	int i, j;
+	int label_len;
+	int rval = 0;
+	int vdc_flag = 0;
+	struct dk_minfo disk_info;
+	dk_efi_t dk_ioc;
+	efi_gpt_t *efi;
+	efi_gpe_t *efi_parts;
+	struct dk_cinfo dki_info;
+	uint32_t user_length;
+	boolean_t legacy_label = B_FALSE;
 
 	/*
 	 * get the partition number for this file descriptor.
 	 */
 	if (ioctl(fd, DKIOCINFO, (caddr_t)&dki_info) == -1) {
-		if (efi_debug) {
-			(void) fprintf(stderr, "DKIOCINFO errno 0x%x\n", errno);
-		}
+		efi_debugf("DKIOCINFO errno 0x%x", errno);
 		switch (errno) {
 		case EIO:
 			return (VT_EIO);
@@ -408,18 +593,11 @@ efi_read(int fd, struct dk_gpt *vtoc)
 
 	/* get the LBA size */
 	if (ioctl(fd, DKIOCGMEDIAINFO, (caddr_t)&disk_info) == -1) {
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			    "assuming LBA 512 bytes %d\n",
-			    errno);
-		}
+		efi_debugf("assuming LBA 512 bytes %d", errno);
 		disk_info.dki_lbsize = DEV_BSIZE;
 	}
 	if (disk_info.dki_lbsize == 0) {
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			    "efi_read: assuming LBA 512 bytes\n");
-		}
+		efi_debugf("efi_read: assuming LBA 512 bytes");
 		disk_info.dki_lbsize = DEV_BSIZE;
 	}
 	/*
@@ -474,17 +652,14 @@ efi_read(int fd, struct dk_gpt *vtoc)
 			rval = check_label(fd, &dk_ioc);
 			if (rval == 0) {
 				legacy_label = B_TRUE;
-				if (efi_debug)
-					(void) fprintf(stderr,
-					    "efi_read: primary label corrupt; "
-					    "using EFI backup label located on"
-					    " the last block\n");
+				efi_debugf("efi_read: primary label corrupt; "
+				    "using EFI backup label located on the "
+				    "last block");
 			}
-		} else {
-			if ((efi_debug) && (rval == 0))
-				(void) fprintf(stderr, "efi_read: primary label"
-				    " corrupt; using legacy EFI backup label "
-				    " located on the next to last block\n");
+		} else if (rval == 0) {
+			efi_debugf("efi_read: primary label "
+			    "corrupt; using legacy EFI backup label "
+			    "located on the next to last block");
 		}
 
 		if (rval == 0) {
@@ -500,15 +675,15 @@ efi_read(int fd, struct dk_gpt *vtoc)
 			 * dk_ioc.dki_data, we try to get GUID partition
 			 * entry array here.
 			 */
-			/* LINTED */
 			dk_ioc.dki_data = (efi_gpt_t *)((char *)dk_ioc.dki_data
 			    + disk_info.dki_lbsize);
-			if (legacy_label)
+			if (legacy_label) {
 				dk_ioc.dki_length = disk_info.dki_capacity - 1 -
 				    dk_ioc.dki_lba;
-			else
+			} else {
 				dk_ioc.dki_length = disk_info.dki_capacity - 2 -
 				    dk_ioc.dki_lba;
+			}
 			dk_ioc.dki_length *= disk_info.dki_lbsize;
 			if (dk_ioc.dki_length >
 			    ((len_t)label_len - sizeof (*dk_ioc.dki_data))) {
@@ -522,9 +697,7 @@ efi_read(int fd, struct dk_gpt *vtoc)
 		}
 
 	} else if (rval == 0) {
-
 		dk_ioc.dki_lba = LE_64(efi->efi_gpt_PartitionEntryLBA);
-		/* LINTED */
 		dk_ioc.dki_data = (efi_gpt_t *)((char *)dk_ioc.dki_data
 		    + disk_info.dki_lbsize);
 		dk_ioc.dki_length = label_len - disk_info.dki_lbsize;
@@ -551,7 +724,6 @@ efi_read(int fd, struct dk_gpt *vtoc)
 		return (rval);
 	}
 
-	/* LINTED -- always longlong aligned */
 	efi_parts = (efi_gpe_t *)(((char *)efi) + disk_info.dki_lbsize);
 
 	/*
@@ -577,19 +749,15 @@ efi_read(int fd, struct dk_gpt *vtoc)
 	}
 
 	for (i = 0; i < vtoc->efi_nparts; i++) {
-
 		UUID_LE_CONVERT(vtoc->efi_parts[i].p_guid,
 		    efi_parts[i].efi_gpe_PartitionTypeGUID);
 
-		for (j = 0;
-		    j < sizeof (conversion_array)
-		    / sizeof (struct uuid_to_ptag); j++) {
-
+		for (j = 0; j < NCONVERSIONS; j++) {
 			if (bcmp(&vtoc->efi_parts[i].p_guid,
-			    &conversion_array[j].uuid,
+			    &conversions[j].uuid,
 			    sizeof (struct uuid)) == 0) {
 				vtoc->efi_parts[i].p_tag =
-				    conversion_array[j].p_tag;
+				    conversions[j].p_tag;
 				break;
 			}
 		}
@@ -630,20 +798,19 @@ hardware_workarounds(int *slot, int *active)
 		return;
 
 	if ((shp = smbios_open(NULL, SMB_VERSION, 0, &err)) == NULL) {
-		if (efi_debug)
-			(void) fprintf(stderr,
-			    "libefi failed to load SMBIOS: %s\n",
-			    smbios_errmsg(err));
+		efi_debugf("failed to load SMBIOS: %s", smbios_errmsg(err));
 		(void) fclose(fp);
 		return;
 	}
 
 	if (smbios_lookup_type(shp, SMB_TYPE_SYSTEM, &s_sys) == SMB_ERR ||
-	    smbios_info_common(shp, s_sys.smbstr_id, &sys) == SMB_ERR)
+	    smbios_info_common(shp, s_sys.smbstr_id, &sys) == SMB_ERR) {
 		(void) memset(&sys, '\0', sizeof (sys));
+	}
 	if (smbios_lookup_type(shp, SMB_TYPE_BASEBOARD, &s_mb) == SMB_ERR ||
-	    smbios_info_common(shp, s_mb.smbstr_id, &mb) == SMB_ERR)
+	    smbios_info_common(shp, s_mb.smbstr_id, &mb) == SMB_ERR) {
 		(void) memset(&mb, '\0', sizeof (mb));
+	}
 
 	while (fgets(buf, sizeof (buf), fp) != NULL) {
 		char *tok, *val, *end;
@@ -666,45 +833,47 @@ hardware_workarounds(int *slot, int *active)
 
 			if (strcmp(tok, "sys.manufacturer") == 0 &&
 			    (sys.smbi_manufacturer == NULL ||
-			    strcasecmp(val, sys.smbi_manufacturer)))
+			    strcasecmp(val, sys.smbi_manufacturer))) {
 				break;
+			}
 			if (strcmp(tok, "sys.product") == 0 &&
 			    (sys.smbi_product == NULL ||
-			    strcasecmp(val, sys.smbi_product)))
+			    strcasecmp(val, sys.smbi_product))) {
 				break;
+			}
 			if (strcmp(tok, "sys.version") == 0 &&
 			    (sys.smbi_version == NULL ||
-			    strcasecmp(val, sys.smbi_version)))
+			    strcasecmp(val, sys.smbi_version))) {
 				break;
+			}
 			if (strcmp(tok, "mb.manufacturer") == 0 &&
 			    (mb.smbi_manufacturer == NULL ||
-			    strcasecmp(val, mb.smbi_manufacturer)))
+			    strcasecmp(val, mb.smbi_manufacturer))) {
 				break;
+			}
 			if (strcmp(tok, "mb.product") == 0 &&
 			    (mb.smbi_product == NULL ||
-			    strcasecmp(val, mb.smbi_product)))
+			    strcasecmp(val, mb.smbi_product))) {
 				break;
+			}
 			if (strcmp(tok, "mb.version") == 0 &&
 			    (mb.smbi_version == NULL ||
-			    strcasecmp(val, mb.smbi_version)))
+			    strcasecmp(val, mb.smbi_version))) {
 				break;
+			}
 
 			if (strcmp(tok, "pmbr_slot") == 0) {
 				*slot = atoi(val);
 				if (*slot < 0 || *slot > 3)
 					*slot = 0;
-				if (efi_debug)
-					(void) fprintf(stderr,
-					    "Using slot %d\n", *slot);
+				efi_debugf("using slot %d", *slot);
 			}
 
 			if (strcmp(tok, "pmbr_active") == 0) {
 				*active = atoi(val);
 				if (*active < 0 || *active > 1)
 					*active = 0;
-				if (efi_debug)
-					(void) fprintf(stderr,
-					    "Using active %d\n", *active);
+				efi_debugf("using active %d", *active);
 			}
 
 			tok = end;
@@ -718,12 +887,12 @@ hardware_workarounds(int *slot, int *active)
 static int
 write_pmbr(int fd, struct dk_gpt *vtoc)
 {
-	dk_efi_t	dk_ioc;
-	struct mboot	mb;
-	uchar_t		*cp;
-	diskaddr_t	size_in_lba;
-	uchar_t		*buf;
-	int		len, slot, active;
+	dk_efi_t dk_ioc;
+	struct mboot mb;
+	uchar_t *cp;
+	diskaddr_t size_in_lba;
+	uchar_t *buf;
+	int len, slot, active;
 
 	slot = active = 0;
 
@@ -738,7 +907,6 @@ write_pmbr(int fd, struct dk_gpt *vtoc)
 	 */
 	dk_ioc.dki_lba = 0;
 	dk_ioc.dki_length = len;
-	/* LINTED -- always longlong aligned */
 	dk_ioc.dki_data = (efi_gpt_t *)buf;
 	if (efi_ioctl(fd, DKIOCGETEFI, &dk_ioc) == -1) {
 		(void) memcpy(&mb, buf, sizeof (mb));
@@ -786,7 +954,6 @@ write_pmbr(int fd, struct dk_gpt *vtoc)
 	}
 
 	(void) memcpy(buf, &mb, sizeof (mb));
-	/* LINTED -- always longlong aligned */
 	dk_ioc.dki_data = (efi_gpt_t *)buf;
 	dk_ioc.dki_lba = 0;
 	dk_ioc.dki_length = len;
@@ -805,105 +972,128 @@ write_pmbr(int fd, struct dk_gpt *vtoc)
 	return (0);
 }
 
-/* make sure the user specified something reasonable */
-static int
-check_input(struct dk_gpt *vtoc)
+static void
+check_input_one(struct dk_gpt *vtoc, struct dk_part *part, uint_t i,
+    dk_check_t *dkc)
 {
-	int			resv_part = -1;
-	int			i, j;
-	diskaddr_t		istart, jstart, isize, jsize, endsect;
+	switch (part->p_tag) {
+	case V_UNASSIGNED:
+		if (part->p_size != 0) {
+			efi_checkf_add(dkc, i, true,
+			    "is \"unassigned\" but with size %llu",
+			    part->p_size);
+			return;
+		}
+
+		if (uuid_is_null((uchar_t *)&part->p_guid)) {
+			efi_debugf("partition %u: unassigned with no UUID", i);
+			return;
+		}
+
+		efi_checkf_add(dkc, i, false, "has unknown EFI GUID");
+		vtoc->efi_parts[i].p_tag = V_UNKNOWN;
+		break;
+
+	case V_RESERVED:
+		if (dkc->dkc_resv_part != -1) {
+			efi_checkf_add(dkc, i, true,
+			    "duplicate reserved partition");
+		} else {
+			dkc->dkc_resv_part = i;
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	if (part->p_start < vtoc->efi_first_u_lba ||
+	    part->p_start > vtoc->efi_last_u_lba) {
+		efi_checkf_add(dkc, i, true, "starts at %llu, but must be "
+		    "between %llu and %llu (inclusive)", part->p_start,
+		    vtoc->efi_first_u_lba, vtoc->efi_last_u_lba);
+	}
+
+	if (part_end(part) < vtoc->efi_first_u_lba ||
+	    part_end(part) > vtoc->efi_last_u_lba) {
+		efi_checkf_add(dkc, i, true, "ends at %llu, but must be "
+		    "between %llu and %llu (inclusive)", part_end(part),
+		    vtoc->efi_first_u_lba, vtoc->efi_last_u_lba);
+	}
+
+	if (part->p_size == 0) {
+		/*
+		 * This partition does not cover any blocks, and thus cannot
+		 * overlap with any other partition.
+		 */
+		return;
+	}
 
 	/*
-	 * Sanity-check the input (make sure no partitions overlap)
+	 * Check for overlapping partitions.  Note that we start the sweep
+	 * above the diagnonal in the matrix, so that we do at most one
+	 * comparison per pair.
 	 */
-	for (i = 0; i < vtoc->efi_nparts; i++) {
-		/* It can't be unassigned and have an actual size */
-		if ((vtoc->efi_parts[i].p_tag == V_UNASSIGNED) &&
-		    (vtoc->efi_parts[i].p_size != 0)) {
-			if (efi_debug) {
-				(void) fprintf(stderr,
-"partition %d is \"unassigned\" but has a size of %llu",
-				    i,
-				    vtoc->efi_parts[i].p_size);
-			}
-			return (VT_EINVAL);
-		}
-		if (vtoc->efi_parts[i].p_tag == V_UNASSIGNED) {
-			if (uuid_is_null((uchar_t *)&vtoc->efi_parts[i].p_guid))
-				continue;
-			/* we have encountered an unknown uuid */
-			vtoc->efi_parts[i].p_tag = 0xff;
-		}
-		if (vtoc->efi_parts[i].p_tag == V_RESERVED) {
-			if (resv_part != -1) {
-				if (efi_debug) {
-					(void) fprintf(stderr,
-"found duplicate reserved partition at %d\n",
-					    i);
-				}
-				return (VT_EINVAL);
-			}
-			resv_part = i;
-		}
-		if ((vtoc->efi_parts[i].p_start < vtoc->efi_first_u_lba) ||
-		    (vtoc->efi_parts[i].p_start > vtoc->efi_last_u_lba)) {
-			if (efi_debug) {
-				(void) fprintf(stderr,
-				    "Partition %d starts at %llu.  ",
-				    i,
-				    vtoc->efi_parts[i].p_start);
-				(void) fprintf(stderr,
-				    "It must be between %llu and %llu.\n",
-				    vtoc->efi_first_u_lba,
-				    vtoc->efi_last_u_lba);
-			}
-			return (VT_EINVAL);
-		}
-		if ((vtoc->efi_parts[i].p_start +
-		    vtoc->efi_parts[i].p_size <
-		    vtoc->efi_first_u_lba) ||
-		    (vtoc->efi_parts[i].p_start +
-		    vtoc->efi_parts[i].p_size >
-		    vtoc->efi_last_u_lba + 1)) {
-			if (efi_debug) {
-				(void) fprintf(stderr,
-				    "Partition %d ends at %llu.  ",
-				    i,
-				    vtoc->efi_parts[i].p_start +
-				    vtoc->efi_parts[i].p_size);
-				(void) fprintf(stderr,
-				    "It must be between %llu and %llu.\n",
-				    vtoc->efi_first_u_lba,
-				    vtoc->efi_last_u_lba);
-			}
-			return (VT_EINVAL);
+	for (uint_t other = i + 1; other < vtoc->efi_nparts; other++) {
+		diskaddr_t other_start = vtoc->efi_parts[other].p_start;
+		diskaddr_t other_end = part_end(&vtoc->efi_parts[other]);
+
+		if (vtoc->efi_parts[other].p_size == 0) {
+			/*
+			 * The other partition does not cover any blocks, and
+			 * thus cannot overlap with this partition.
+			 */
+			continue;
 		}
 
-		for (j = 0; j < vtoc->efi_nparts; j++) {
-			isize = vtoc->efi_parts[i].p_size;
-			jsize = vtoc->efi_parts[j].p_size;
-			istart = vtoc->efi_parts[i].p_start;
-			jstart = vtoc->efi_parts[j].p_start;
-			if ((i != j) && (isize != 0) && (jsize != 0)) {
-				endsect = jstart + jsize -1;
-				if ((jstart <= istart) &&
-				    (istart <= endsect)) {
-					if (efi_debug) {
-						(void) fprintf(stderr,
-"Partition %d overlaps partition %d.",
-						    i, j);
-					}
-					return (VT_EINVAL);
-				}
+		if (part->p_start < other_start) {
+			if (part_end(part) < other_start) {
+				/*
+				 * This partition is entirely before the other
+				 * partition.
+				 */
+				continue;
 			}
+		} else if (part->p_start > other_end) {
+			/*
+			 * This partition is entirely after the other
+			 * partition.
+			 */
+			continue;
 		}
+
+		efi_checkf_add(dkc, i, true, "[%llu, %llu] overlaps with "
+		    "partition %d [%llu, %llu]",
+		    part->p_start, part_end(part),
+		    other, other_start, other_end);
 	}
-	/* just a warning for now */
-	if ((resv_part == -1) && efi_debug) {
-		(void) fprintf(stderr,
-		    "no reserved partition found\n");
+}
+
+/*
+ * Perform a series of consistency checks so that we can reject invalid labels;
+ * e.g., those with overlapping partitions.
+ */
+static dk_check_t *
+check_input(struct dk_gpt *vtoc)
+{
+	/*
+	 * Allocate the check object we will use to track issues with the
+	 * provided label:
+	 */
+	dk_check_t *dkc;
+	if ((dkc = efi_check_alloc()) == NULL) {
+		return (NULL);
 	}
-	return (0);
+
+	for (uint_t i = 0; i < vtoc->efi_nparts; i++) {
+		check_input_one(vtoc, &vtoc->efi_parts[i], i, dkc);
+	}
+
+	if (dkc->dkc_resv_part == -1) {
+		efi_checkf_add(dkc, MISC, false, "no reserved partition found");
+	}
+
+	return (dkc);
 }
 
 /*
@@ -922,10 +1112,8 @@ efi_use_whole_disk_get_last(struct dk_gpt *l, struct dk_part **lastp_p,
 	uint_t i;
 
 	if (l->efi_nparts < 2) {
-		if (efi_debug) {
-			(void) fprintf(stderr, "%s: too few (%u) partitions",
-			    __func__, l->efi_nparts);
-		}
+		efi_debugf("%s: too few (%u) partitions", __func__,
+		    l->efi_nparts);
 		return (-1);
 	}
 
@@ -939,16 +1127,8 @@ efi_use_whole_disk_get_last(struct dk_gpt *l, struct dk_part **lastp_p,
 		diskaddr_t end;
 
 		if (p->p_tag == V_RESERVED) {
-			if (efi_debug) {
-				/*
-				 * Output the error message now so we can
-				 * indicate which partition is the problem.
-				 * We'll return failure later.
-				 */
-				(void) fprintf(stderr, "%s: reserved partition "
-				    "found at unexpected position (%u)\n",
-				    __func__, i);
-			}
+			efi_debugf("%s: reserved partition found at "
+			    "unexpected position (%u)", __func__, i);
 			return (-1);
 		}
 
@@ -956,7 +1136,7 @@ efi_use_whole_disk_get_last(struct dk_gpt *l, struct dk_part **lastp_p,
 		if (p->p_size == 0)
 			continue;
 
-		end = p->p_start + p->p_size - 1;
+		end = part_end(p);
 		if (last_ulba < end) {
 			last_p = p;
 			last_ulba = end;
@@ -964,10 +1144,7 @@ efi_use_whole_disk_get_last(struct dk_gpt *l, struct dk_part **lastp_p,
 	}
 
 	if (l->efi_parts[l->efi_nparts - 1].p_tag != V_RESERVED) {
-		if (efi_debug) {
-			(void) fprintf(stderr, "%s: no reserved partition\n",
-			    __func__);
-		}
+		efi_debugf("%s: no reserved partition", __func__);
 		return (-1);
 	}
 
@@ -978,10 +1155,8 @@ efi_use_whole_disk_get_last(struct dk_gpt *l, struct dk_part **lastp_p,
 	 * LBA used by any other partition.
 	 */
 	if (resv_p->p_start <= last_ulba) {
-		if (efi_debug) {
-			(void) fprintf(stderr, "%s: reserved partition not "
-			    "after other partitions\n", __func__);
-		}
+		efi_debugf("%s: reserved partition not after other partitions", 
+		    __func__);
 		return (-1);
 	}
 
@@ -991,7 +1166,7 @@ efi_use_whole_disk_get_last(struct dk_gpt *l, struct dk_part **lastp_p,
 }
 
 /*
- * add all the unallocated space to the current label
+ * Add all the unallocated space to the current label.
  */
 int
 efi_use_whole_disk(int fd)
@@ -1058,10 +1233,8 @@ efi_use_whole_disk(int fd)
 		    efi_label->efi_last_u_lba - resv_p->p_size + 1;
 
 		if (resv_p->p_start > new_start) {
-			if (efi_debug) {
-				(void) fprintf(stderr, "%s: reserved partition "
-				    "size mismatch\n", __func__);
-			}
+			efi_debugf("%s: reserved partition size mismatch", 
+			    __func__);
 			efi_free(efi_label);
 			return (VT_EINVAL);
 		}
@@ -1086,11 +1259,8 @@ efi_use_whole_disk(int fd)
 
 	rval = efi_write(fd, efi_label);
 	if (rval < 0) {
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			    "efi_use_whole_disk:fail to write label, rval=%d\n",
-			    rval);
-		}
+		efi_debugf("efi_use_whole_disk: fail to write label, rval=%d",
+		    rval);
 		efi_free(efi_label);
 		return (rval);
 	}
@@ -1101,22 +1271,27 @@ efi_use_whole_disk(int fd)
 
 
 /*
- * write EFI label and backup label
+ * Write an EFI label and backup label.  The caller will receive errors and
+ * warnings through "dkcp", and is responsible for checking and freeing the
+ * pointer.  Even if this routine succeeds, non-fatal warnings may be provided
+ * via the check object.
  */
 int
-efi_write(int fd, struct dk_gpt *vtoc)
+efi_write_with_errors(int fd, struct dk_gpt *vtoc, dk_check_t **dkcp)
 {
-	dk_efi_t		dk_ioc;
-	efi_gpt_t		*efi;
-	efi_gpe_t		*efi_parts;
-	int			i, j;
-	struct dk_cinfo		dki_info;
-	int			nblocks;
-	diskaddr_t		lba_backup_gpt_hdr;
+	dk_efi_t dk_ioc;
+	efi_gpt_t *efi;
+	efi_gpe_t *efi_parts;
+	int i, j;
+	struct dk_cinfo dki_info;
+	int nblocks;
+	diskaddr_t lba_backup_gpt_hdr;
+
+	*dkcp = NULL;
 
 	if (ioctl(fd, DKIOCINFO, (caddr_t)&dki_info) == -1) {
-		if (efi_debug)
-			(void) fprintf(stderr, "DKIOCINFO errno 0x%x\n", errno);
+		efi_debugf("DKIOCINFO errno 0x%x", errno);
+
 		switch (errno) {
 		case EIO:
 			return (VT_EIO);
@@ -1127,8 +1302,13 @@ efi_write(int fd, struct dk_gpt *vtoc)
 		}
 	}
 
-	if (check_input(vtoc))
+	if ((*dkcp = check_input(vtoc)) == NULL) {
+		return (VT_ERROR);
+	}
+
+	if (!efi_check_ok(*dkcp)) {
 		return (VT_EINVAL);
+	}
 
 	dk_ioc.dki_lba = 1;
 	if (NBLOCKS(vtoc->efi_nparts, vtoc->efi_lbasize) < 34) {
@@ -1169,55 +1349,43 @@ efi_write(int fd, struct dk_gpt *vtoc)
 	efi->efi_gpt_SizeOfPartitionEntry = LE_32(sizeof (struct efi_gpe));
 	UUID_LE_CONVERT(efi->efi_gpt_DiskGUID, vtoc->efi_disk_uguid);
 
-	/* LINTED -- always longlong aligned */
 	efi_parts = (efi_gpe_t *)((char *)dk_ioc.dki_data + vtoc->efi_lbasize);
 
 	for (i = 0; i < vtoc->efi_nparts; i++) {
-		for (j = 0;
-		    j < sizeof (conversion_array) /
-		    sizeof (struct uuid_to_ptag); j++) {
+		struct dk_part *p = &vtoc->efi_parts[i];
 
-			if (vtoc->efi_parts[i].p_tag ==
-			    conversion_array[j].p_tag) {
+		for (j = 0; j < NCONVERSIONS; j++) {
+			if (p->p_tag == conversions[j].p_tag) {
 				UUID_LE_CONVERT(
 				    efi_parts[i].efi_gpe_PartitionTypeGUID,
-				    conversion_array[j].uuid);
+				    conversions[j].uuid);
 				break;
 			}
 		}
 
-		if (j == sizeof (conversion_array) /
-		    sizeof (struct uuid_to_ptag)) {
+		if (j == NCONVERSIONS) {
 			/*
 			 * If we didn't have a matching uuid match, bail here.
 			 * Don't write a label with unknown uuid.
 			 */
-			if (efi_debug) {
-				(void) fprintf(stderr,
-				    "Unknown uuid for p_tag %d\n",
-				    vtoc->efi_parts[i].p_tag);
-			}
+			efi_debugf("unknown uuid for p_tag %d\n", p->p_tag);
 			return (VT_EINVAL);
 		}
 
-		efi_parts[i].efi_gpe_StartingLBA =
-		    LE_64(vtoc->efi_parts[i].p_start);
-		efi_parts[i].efi_gpe_EndingLBA =
-		    LE_64(vtoc->efi_parts[i].p_start +
-		    vtoc->efi_parts[i].p_size - 1);
+		efi_parts[i].efi_gpe_StartingLBA = LE_64(p->p_start);
+		efi_parts[i].efi_gpe_EndingLBA = LE_64(part_end(p));
 		efi_parts[i].efi_gpe_Attributes.PartitionAttrs =
-		    LE_16(vtoc->efi_parts[i].p_flag);
+		    LE_16(p->p_flag);
 		for (j = 0; j < EFI_PART_NAME_LEN; j++) {
 			efi_parts[i].efi_gpe_PartitionName[j] =
-			    LE_16((ushort_t)vtoc->efi_parts[i].p_name[j]);
+			    LE_16((ushort_t)p->p_name[j]);
 		}
-		if ((vtoc->efi_parts[i].p_tag != V_UNASSIGNED) &&
-		    uuid_is_null((uchar_t *)&vtoc->efi_parts[i].p_uguid)) {
+		if (p->p_tag != V_UNASSIGNED &&
+		    uuid_is_null((uchar_t *)&p->p_uguid)) {
 			(void) uuid_generate((uchar_t *)
 			    &vtoc->efi_parts[i].p_uguid);
 		}
-		bcopy(&vtoc->efi_parts[i].p_uguid,
-		    &efi_parts[i].efi_gpe_UniquePartitionGUID,
+		bcopy(&p->p_uguid, &efi_parts[i].efi_gpe_UniquePartitionGUID,
 		    sizeof (uuid_t));
 	}
 	efi->efi_gpt_PartitionEntryArrayCRC32 =
@@ -1241,29 +1409,23 @@ efi_write(int fd, struct dk_gpt *vtoc)
 	/* write backup partition array */
 	dk_ioc.dki_lba = vtoc->efi_last_u_lba + 1;
 	dk_ioc.dki_length -= vtoc->efi_lbasize;
-	/* LINTED */
 	dk_ioc.dki_data = (efi_gpt_t *)((char *)dk_ioc.dki_data +
 	    vtoc->efi_lbasize);
 
 	if (efi_ioctl(fd, DKIOCSETEFI, &dk_ioc) == -1) {
 		/*
-		 * we wrote the primary label okay, so don't fail
+		 * We wrote the primary label okay, so don't fail.
 		 */
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			    "write of backup partitions to block %llu "
-			    "failed, errno %d\n",
-			    vtoc->efi_last_u_lba + 1,
-			    errno);
-		}
+		efi_debugf("write of backup partitions to block %llu "
+		    "failed, errno %d", vtoc->efi_last_u_lba + 1, errno);
 	}
+
 	/*
 	 * now swap MyLBA and AlternateLBA fields and write backup
 	 * partition table header
 	 */
 	dk_ioc.dki_lba = lba_backup_gpt_hdr;
 	dk_ioc.dki_length = vtoc->efi_lbasize;
-	/* LINTED */
 	dk_ioc.dki_data = (efi_gpt_t *)((char *)dk_ioc.dki_data -
 	    vtoc->efi_lbasize);
 	efi->efi_gpt_AlternateLBA = LE_64(1ULL);
@@ -1274,18 +1436,30 @@ efi_write(int fd, struct dk_gpt *vtoc)
 	    LE_32(efi_crc32((unsigned char *)dk_ioc.dki_data, EFI_HEADER_SIZE));
 
 	if (efi_ioctl(fd, DKIOCSETEFI, &dk_ioc) == -1) {
-		if (efi_debug) {
-			(void) fprintf(stderr,
-			    "write of backup header to block %llu failed, "
-			    "errno %d\n",
-			    lba_backup_gpt_hdr,
-			    errno);
-		}
+		efi_debugf("write of backup header to block %llu failed, "
+		    "errno %d", lba_backup_gpt_hdr, errno);
 	}
-	/* write the PMBR */
+
 	(void) write_pmbr(fd, vtoc);
+
 	free(dk_ioc.dki_data);
 	return (0);
+}
+
+/*
+ * Write an EFI label and backup label.  This is the original Committed
+ * entrypoint which does not offer any specifics on label validation errors.
+ */
+int
+efi_write(int fd, struct dk_gpt *vtoc)
+{
+	dk_check_t *dkcp = NULL;
+
+	int r = efi_write_with_errors(fd, vtoc, &dkcp);
+
+	efi_check_free(dkcp);
+
+	return (r);
 }
 
 void
@@ -1306,161 +1480,76 @@ efi_type(int fd)
 	struct extvtoc extvtoc;
 
 	if (ioctl(fd, DKIOCGEXTVTOC, &extvtoc) == -1) {
-		if (errno == ENOTSUP)
+		switch (errno) {
+		case ENOTSUP:
 			return (1);
-		else if (errno == ENOTTY) {
-			if (ioctl(fd, DKIOCGVTOC, &vtoc) == -1)
+		case ENOTTY:
+			if (ioctl(fd, DKIOCGVTOC, &vtoc) == -1) {
 				if (errno == ENOTSUP)
 					return (1);
+			}
+			break;
 		}
 	}
+
 	return (0);
 }
 
-void
-efi_err_check(struct dk_gpt *vtoc)
-{
-	int			resv_part = -1;
-	int			i, j;
-	diskaddr_t		istart, jstart, isize, jsize, endsect;
-	int			overlap = 0;
-	uint_t			reserved;
-
-	/*
-	 * make sure no partitions overlap
-	 */
-	reserved = efi_reserved_sectors(vtoc);
-	for (i = 0; i < vtoc->efi_nparts; i++) {
-		/* It can't be unassigned and have an actual size */
-		if ((vtoc->efi_parts[i].p_tag == V_UNASSIGNED) &&
-		    (vtoc->efi_parts[i].p_size != 0)) {
-			(void) fprintf(stderr,
-			    "partition %d is \"unassigned\" but has a size "
-			    "of %llu\n", i, vtoc->efi_parts[i].p_size);
-		}
-		if (vtoc->efi_parts[i].p_tag == V_UNASSIGNED) {
-			continue;
-		}
-		if (vtoc->efi_parts[i].p_tag == V_RESERVED) {
-			if (resv_part != -1) {
-				(void) fprintf(stderr,
-				    "found duplicate reserved partition at "
-				    "%d\n", i);
-			}
-			resv_part = i;
-			if (vtoc->efi_parts[i].p_size != reserved)
-				(void) fprintf(stderr,
-				    "Warning: reserved partition size must "
-				    "be %u sectors\n", reserved);
-		}
-		if ((vtoc->efi_parts[i].p_start < vtoc->efi_first_u_lba) ||
-		    (vtoc->efi_parts[i].p_start > vtoc->efi_last_u_lba)) {
-			(void) fprintf(stderr,
-			    "Partition %d starts at %llu\n",
-			    i,
-			    vtoc->efi_parts[i].p_start);
-			(void) fprintf(stderr,
-			    "It must be between %llu and %llu.\n",
-			    vtoc->efi_first_u_lba,
-			    vtoc->efi_last_u_lba);
-		}
-		if ((vtoc->efi_parts[i].p_start +
-		    vtoc->efi_parts[i].p_size <
-		    vtoc->efi_first_u_lba) ||
-		    (vtoc->efi_parts[i].p_start +
-		    vtoc->efi_parts[i].p_size >
-		    vtoc->efi_last_u_lba + 1)) {
-			(void) fprintf(stderr,
-			    "Partition %d ends at %llu\n",
-			    i,
-			    vtoc->efi_parts[i].p_start +
-			    vtoc->efi_parts[i].p_size);
-			(void) fprintf(stderr,
-			    "It must be between %llu and %llu.\n",
-			    vtoc->efi_first_u_lba,
-			    vtoc->efi_last_u_lba);
-		}
-
-		for (j = 0; j < vtoc->efi_nparts; j++) {
-			isize = vtoc->efi_parts[i].p_size;
-			jsize = vtoc->efi_parts[j].p_size;
-			istart = vtoc->efi_parts[i].p_start;
-			jstart = vtoc->efi_parts[j].p_start;
-			if ((i != j) && (isize != 0) && (jsize != 0)) {
-				endsect = jstart + jsize -1;
-				if ((jstart <= istart) &&
-				    (istart <= endsect)) {
-					if (!overlap) {
-					(void) fprintf(stderr,
-					    "label error: EFI Labels do not "
-					    "support overlapping partitions\n");
-					}
-					(void) fprintf(stderr,
-					    "Partition %d overlaps partition "
-					    "%d.\n", i, j);
-					overlap = 1;
-				}
-			}
-		}
-	}
-	/* make sure there is a reserved partition */
-	if (resv_part == -1) {
-		(void) fprintf(stderr,
-		    "no reserved partition found\n");
-	}
-}
-
 /*
- * We need to get information necessary to construct a *new* efi
- * label type
+ * Construct a default EFI partition table for a blank disk, with partitions
+ * sized automatically to fill the disk.  The default partition layout here is
+ * largely historical, and only used by rmformat(1) for automatically
+ * formatting removable media.
  */
 int
-efi_auto_sense(int fd, struct dk_gpt **vtoc)
+efi_auto_sense(int fd, struct dk_gpt **vtocp)
 {
+	struct dk_gpt *vtoc;
 
-	int	i;
-
-	/*
-	 * Now build the default partition table
-	 */
-	if (efi_alloc_and_init(fd, EFI_NUMPAR, vtoc) != 0) {
-		if (efi_debug) {
-			(void) fprintf(stderr, "efi_alloc_and_init failed.\n");
-		}
+	if (efi_alloc_and_init(fd, EFI_NUMPAR, &vtoc) != 0) {
+		efi_debugf("efi_alloc_and_init() failed");
+		*vtocp = NULL;
 		return (-1);
 	}
 
-	for (i = 0; i < min((*vtoc)->efi_nparts, V_NUMPAR); i++) {
-		(*vtoc)->efi_parts[i].p_tag = default_vtoc_map[i].p_tag;
-		(*vtoc)->efi_parts[i].p_flag = default_vtoc_map[i].p_flag;
-		(*vtoc)->efi_parts[i].p_start = 0;
-		(*vtoc)->efi_parts[i].p_size = 0;
+	for (uint_t i = 0; i < min(vtoc->efi_nparts, V_NUMPAR); i++) {
+		partn(vtoc, i)->p_tag = default_vtoc_map_rmformat[i].p_tag;
+		partn(vtoc, i)->p_flag = default_vtoc_map_rmformat[i].p_flag;
+		partn(vtoc, i)->p_start = 0;
+		partn(vtoc, i)->p_size = 0;
 	}
 
-	/* root partition - s0 128 MB */
-	(*vtoc)->efi_parts[0].p_start =
-	    EFI_MIN_ARRAY_SIZE / (*vtoc)->efi_lbasize + 2;
-	(*vtoc)->efi_parts[0].p_size =
-	    (128 * 1024 * 1024) / (*vtoc)->efi_lbasize;
+	/*
+	 * Create partition 0 for the root file system at the first available
+	 * offset, and make it 128 MB:
+	 */
+	partn(vtoc, 0)->p_start = EFI_MIN_ARRAY_SIZE / vtoc->efi_lbasize + 2;
+	partn(vtoc, 0)->p_size = (128 * 1024 * 1024) / vtoc->efi_lbasize;
 
-	/* partition - s1  128 MB */
-	(*vtoc)->efi_parts[1].p_start = (*vtoc)->efi_parts[0].p_start +
-	    (*vtoc)->efi_parts[0].p_size;
-	(*vtoc)->efi_parts[1].p_size = (*vtoc)->efi_parts[0].p_size;
+	/*
+	 * Place partition 1 directly after partition 0, and make it the same
+	 * size:
+	 */
+	partn(vtoc, 1)->p_start = part_end(partn(vtoc, 0)) + 1;
+	partn(vtoc, 1)->p_size = partn(vtoc, 0)->p_size;
 
-	/* partition -s2 is NOT the Backup disk */
-	(*vtoc)->efi_parts[2].p_tag = V_UNASSIGNED;
+	/*
+	 * Partition 6 for /usr is next, and should use the bulk of the
+	 * available space:
+	 */
+	/* partition - s6 /usr partition - HOG */
+	partn(vtoc, 6)->p_start = part_end(partn(vtoc, 1)) + 1;
+	partn(vtoc, 6)->p_size = vtoc->efi_last_u_lba + 1 -
+	    partn(vtoc, 6)->p_start - efi_reserved_sectors(vtoc);
 
-	/* partition -s6 /usr partition - HOG */
-	(*vtoc)->efi_parts[6].p_start = (*vtoc)->efi_parts[1].p_start +
-	    (*vtoc)->efi_parts[1].p_size;
-	(*vtoc)->efi_parts[6].p_size = (*vtoc)->efi_last_u_lba + 1 -
-	    (*vtoc)->efi_parts[6].p_start - efi_reserved_sectors(*vtoc);
+	/*
+	 * Partition 8 is the EFI reserved partition, at the end of the useable
+	 * space:
+	 */
+	partn(vtoc, 8)->p_start = part_end(partn(vtoc, 6)) + 1;
+	partn(vtoc, 8)->p_size = efi_reserved_sectors(vtoc);
+	partn(vtoc, 8)->p_tag = V_RESERVED;
 
-	/* efi reserved partition - s9 16K */
-	(*vtoc)->efi_parts[8].p_start = (*vtoc)->efi_parts[6].p_start +
-	    (*vtoc)->efi_parts[6].p_size;
-	(*vtoc)->efi_parts[8].p_size = efi_reserved_sectors(*vtoc);
-	(*vtoc)->efi_parts[8].p_tag = V_RESERVED;
+	*vtocp = vtoc;
 	return (0);
 }

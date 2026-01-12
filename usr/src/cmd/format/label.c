@@ -244,10 +244,10 @@ SMI_vtoc_to_EFI(int fd, struct dk_gpt **new_vtoc)
 }
 
 /*
- * This routine constructs and writes a label on the disk.  It writes both
- * the primary and backup labels.  It assumes that there is a current
- * partition map already defined.  It also notifies the SunOS kernel of
- * the label and partition information it has written on the disk.
+ * This routine constructs and writes a label on the disk.  It writes both the
+ * primary and backup labels.  It assumes that there is a current partition map
+ * already defined.  It also notifies the kernel of the label and partition
+ * information it has written on the disk.
  */
 int
 write_label(void)
@@ -282,11 +282,11 @@ write_label(void)
 	if (cur_label == L_TYPE_EFI) {
 		enter_critical();
 		vtoc64 = cur_parts->etoc;
-		efi_err_check(vtoc64);
 		if (efi_write(cur_file, vtoc64) != 0) {
+			efi_err_check(vtoc64);
 			err_print("Warning: error writing EFI.\n");
 			error = -1;
-			}
+		}
 
 		cur_disk->disk_flags |= DSK_LABEL;
 		exit_critical();

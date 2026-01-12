@@ -90,7 +90,23 @@ extern "C" {
 #define	V_VXVM_PUB	0x0e		/* VxVM public region */
 #define	V_VXVM_PRIV	0x0f		/* VxVM private region */
 
+#define	V_LEGACY_MBR	0x10
+
+#define	V_SYMC_PUB	0x11
+#define	V_SYMC_CDS	0x12
+#define	V_MSFT_RESV	0x13
+#define	V_DELL_BASIC	0x14
+#define	V_DELL_RAID	0x15
+#define	V_DELL_SWAP	0x16
+#define	V_DELL_LVM	0x17
+
 #define	V_BIOS_BOOT	0x18		/* Grub2 BIOS Boot partition */
+
+#define	V_DELL_RESV	0x19
+#define	V_AAPL_HFS	0x1a
+#define	V_AAPL_UFS	0x1b
+#define	V_AAPL_ZFS	0x1c
+#define	V_AAPL_APFS	0x1d
 
 /* NetBSD/mips defines this */
 #define	V_NETBSD_FFS	0xff

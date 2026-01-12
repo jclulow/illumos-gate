@@ -29,7 +29,7 @@
 #define	_SYS_EFI_PARTITION_H
 
 #include <sys/uuid.h>
-#include <sys/stddef.h>
+#include <sys/uuid.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -168,7 +168,7 @@ typedef struct efi_gpe_Attrs {
 #define	EFI_BIOS_BOOT		{ 0x21686148, 0x6449, 0x6e6f, 0x74, 0x4e, \
 				    { 0x65, 0x65, 0x64, 0x45, 0x46, 0x49 } }
 
-/* minimum # of bytes for partition table entires, per EFI spec */
+/* minimum # of bytes for partition table entries, per EFI spec */
 #define	EFI_MIN_ARRAY_SIZE	(16 * 1024)
 
 #define	EFI_PART_NAME_LEN	36
@@ -193,7 +193,7 @@ typedef struct efi_gpe {
  * checksums, and perform any necessary byte-swapping to the on-disk
  * format.
  */
-/* Solaris library abstraction for EFI partitons */
+/* illumos library abstraction for EFI partitions */
 typedef struct dk_part	{
 	diskaddr_t	p_start;	/* starting LBA */
 	diskaddr_t	p_size;		/* size in blocks */
@@ -205,7 +205,7 @@ typedef struct dk_part	{
 	uint_t		p_resv[8];	/* future use - set to zero */
 } dk_part_t;
 
-/* Solaris library abstraction for an EFI GPT */
+/* illumos library abstraction for an EFI GPT */
 #define	EFI_VERSION102		0x00010002
 #define	EFI_VERSION100		0x00010000
 #define	EFI_VERSION_CURRENT	EFI_VERSION100
@@ -249,21 +249,37 @@ struct partition64 {
 	diskaddr_t	p_size;
 };
 
+typedef struct dk_check dk_check_t;
+
 /*
  * Number of EFI partitions
  */
 #define	EFI_NUMPAR	9
 
 #ifndef _KERNEL
-extern	uint_t	efi_reserved_sectors(struct dk_gpt *);
-extern	int	efi_alloc_and_init(int, uint32_t, struct dk_gpt **);
-extern	int	efi_alloc_and_read(int, struct dk_gpt **);
-extern	int	efi_write(int, struct dk_gpt *);
-extern	void	efi_free(struct dk_gpt *);
-extern	int	efi_type(int);
-extern	void	efi_err_check(struct dk_gpt *);
-extern	int	efi_auto_sense(int fd, struct dk_gpt **);
-extern	int	efi_use_whole_disk(int fd);
+/*
+ * Committed routines; see libefi(3LIB):
+ */
+extern uint_t efi_reserved_sectors(struct dk_gpt *);
+extern int efi_alloc_and_init(int, uint32_t, struct dk_gpt **);
+extern int efi_alloc_and_read(int, struct dk_gpt **);
+extern int efi_write(int, struct dk_gpt *);
+extern void efi_free(struct dk_gpt *);
+extern int efi_use_whole_disk(int fd);
+
+/*
+ * Private routines:
+ */
+extern int efi_type(int);
+extern int efi_auto_sense(int fd, struct dk_gpt **);
+extern int efi_write_with_errors(int, struct dk_gpt *, dk_check_t **);
+
+extern dk_check_t *efi_check(struct dk_gpt *);
+extern int efi_check_ok(const dk_check_t *);
+extern uint_t efi_check_nmsg(const dk_check_t *);
+extern int efi_check_msg_is_error(const dk_check_t *, uint_t);
+extern const char *efi_check_msg(const dk_check_t *, uint_t);
+extern void efi_check_free(dk_check_t *);
 #endif
 
 #ifdef __cplusplus
