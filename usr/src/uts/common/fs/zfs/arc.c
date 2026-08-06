@@ -775,7 +775,6 @@ enum arc_hdr_alloc_flags {
 	ARC_HDR_DO_ADAPT = 0x2,
 };
 
-
 static abd_t *arc_get_data_abd(arc_buf_hdr_t *, uint64_t, void *, boolean_t);
 typedef enum arc_fill_flags {
 	ARC_FILL_LOCKED		= 1 << 0, /* hdr lock is held */
@@ -816,6 +815,100 @@ static void l2arc_hdr_arcstats_update(arc_buf_hdr_t *hdr, boolean_t incr,
 	l2arc_hdr_arcstats_update((hdr), B_TRUE, B_TRUE)
 #define	l2arc_hdr_arcstats_decrement_state(hdr) \
 	l2arc_hdr_arcstats_update((hdr), B_FALSE, B_TRUE)
+
+typedef struct {
+	kmutex_t *hlh_hash_lock;
+	bool hlh_set_pushpage;
+} hash_lock_hold_t;
+
+static hash_lock_hold_t
+hash_lock_hold_init(void)
+{
+	hash_lock_hold_t hlh = {
+		.hlh_hash_lock = NULL,
+		.hlh_set_pushpage = false,
+	};
+
+	return (hlh);
+}
+
+static void
+hash_lock_pushpage_enable(hash_lock_hold_t *hlh)
+{
+	/*
+	 * Not all ARC operations are part of the machinery reponsible for
+	 * evacuation of memory pages to disk, and some ARC operations retain
+	 * their hash lock while then allocating memory.  If the system is
+	 * under serious memory pressure those allocations can block waiting
+	 * for free memory, while continue to sit on the hash lock.  If pageout
+	 * needs the hash lock in question to make progress on freeing memory,
+	 * the system will hit memory deadlock and come to rest.
+	 *
+	 * Grant this thread temporary access to pages from the pageout reserve
+	 * pool, for as long as it holds a hash lock:
+	 */
+	if (!(curthread->t_flag & T_PUSHPAGE)) {
+		/*
+		 * We may be called recursively, so we need to remember if this
+		 * frame was the one that first set the flag or not.
+		 */
+		VERIFY(!hlh->hlh_set_pushpage);
+		curthread->t_flag |= T_PUSHPAGE;
+		hlh->hlh_set_pushpage = true;
+	}
+}
+
+static void
+hash_lock_pushpage_disable(hash_lock_hold_t *hlh)
+{
+	if (hlh->hlh_set_pushpage) {
+		VERIFY(curthread->t_flag & T_PUSHPAGE);
+		curthread->t_flag &= ~T_PUSHPAGE;
+		hlh->hlh_set_pushpage = false;
+	}
+}
+
+/*
+ * When we find or insert a buffer into the hash, we need to return with the
+ * lock for that bucket held.  If we are not already running in the ZIO
+ * pipeline, we may need to request access to the pageout reserve pool as
+ * well.
+ */
+static void
+hash_lock_hold_keep(hash_lock_hold_t *hlh, kmutex_t *hash_lock)
+{
+	VERIFY3P(hlh->hlh_hash_lock, ==, NULL);
+	VERIFY(MUTEX_HELD(hash_lock));
+	hlh->hlh_hash_lock = hash_lock;
+
+	hash_lock_pushpage_enable(hlh);
+}
+
+/*
+ * Release the hash bucket lock and disable pushpage if we originally enabled
+ * it while taking the lock.
+ */
+static void
+hash_lock_exit(hash_lock_hold_t *hlh)
+{
+	if (hlh->hlh_hash_lock == NULL) {
+		return;
+	}
+
+	mutex_exit(hlh->hlh_hash_lock);
+	hash_lock_pushpage_disable(hlh);
+}
+
+static void
+hash_lock_enter(hash_lock_hold_t *hlh)
+{
+	if (hlh->hlh_hash_lock == NULL) {
+		return;
+	}
+
+	mutex_enter(hlh->hlh_hash_lock);
+	hash_lock_pushpage_enable(hlh);
+}
 
 /*
  * The arc_all_memory function is a ZoL enhancement that lives in their OSL
@@ -863,24 +956,23 @@ buf_discard_identity(arc_buf_hdr_t *hdr)
 }
 
 static arc_buf_hdr_t *
-buf_hash_find(uint64_t spa, const blkptr_t *bp, kmutex_t **lockp)
+buf_hash_find(uint64_t spa, const blkptr_t *bp, hash_lock_hold_t *hlh)
 {
 	const dva_t *dva = BP_IDENTITY(bp);
 	uint64_t birth = BP_PHYSICAL_BIRTH(bp);
 	uint64_t idx = BUF_HASH_INDEX(spa, dva, birth);
 	kmutex_t *hash_lock = BUF_HASH_LOCK(idx);
-	arc_buf_hdr_t *hdr;
+	arc_buf_hdr_t *hdr = NULL;
 
 	mutex_enter(hash_lock);
 	for (hdr = buf_hash_table.ht_table[idx]; hdr != NULL;
 	    hdr = hdr->b_hash_next) {
 		if (HDR_EQUAL(spa, dva, birth, hdr)) {
-			*lockp = hash_lock;
+			hash_lock_keep(hlh, hash_lock);
 			return (hdr);
 		}
 	}
 	mutex_exit(hash_lock);
-	*lockp = NULL;
 	return (NULL);
 }
 
@@ -892,20 +984,24 @@ buf_hash_find(uint64_t spa, const blkptr_t *bp, kmutex_t **lockp)
  * If lockp == NULL, the caller is assumed to already hold the hash lock.
  */
 static arc_buf_hdr_t *
-buf_hash_insert(arc_buf_hdr_t *hdr, kmutex_t **lockp)
+buf_hash_insert(arc_buf_hdr_t *hdr, hash_lock_hold_t *hlh)
 {
 	uint64_t idx = BUF_HASH_INDEX(hdr->b_spa, &hdr->b_dva, hdr->b_birth);
 	kmutex_t *hash_lock = BUF_HASH_LOCK(idx);
 	arc_buf_hdr_t *fhdr;
 	uint32_t i;
 
+	/*
+	 * XXX initial state of ahh?
+	 */
+
 	ASSERT(!DVA_IS_EMPTY(&hdr->b_dva));
 	ASSERT(hdr->b_birth != 0);
 	ASSERT(!HDR_IN_HASH_TABLE(hdr));
 
-	if (lockp != NULL) {
-		*lockp = hash_lock;
+	if (hlh != NULL) {
 		mutex_enter(hash_lock);
+		hash_lock_keep(hlh, hash_lock);
 	} else {
 		ASSERT(MUTEX_HELD(hash_lock));
 	}
