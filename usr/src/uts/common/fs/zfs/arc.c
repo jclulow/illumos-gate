@@ -770,6 +770,11 @@ static uint8_t l2arc_thread_exit;
 static kmutex_t l2arc_rebuild_thr_lock;
 static kcondvar_t l2arc_rebuild_thr_cv;
 
+typedef struct {
+	kmutex_t *hlh_hash_lock;
+	boolean_t hlh_set_pushpage;
+} hash_lock_hold_t;
+
 enum arc_hdr_alloc_flags {
 	ARC_HDR_ALLOC_RDATA = 0x1,
 	ARC_HDR_DO_ADAPT = 0x2,
@@ -791,7 +796,7 @@ static void arc_free_data_buf(arc_buf_hdr_t *, void *, uint64_t, void *);
 static void arc_free_data_impl(arc_buf_hdr_t *hdr, uint64_t size, void *tag);
 static void arc_hdr_free_pabd(arc_buf_hdr_t *, boolean_t);
 static void arc_hdr_alloc_pabd(arc_buf_hdr_t *, int);
-static void arc_access(arc_buf_hdr_t *, kmutex_t *);
+static void arc_access(arc_buf_hdr_t *, hash_lock_hold_t *);
 static boolean_t arc_is_overflowing();
 static void arc_buf_watch(arc_buf_t *);
 static l2arc_dev_t *l2arc_vdev_get(vdev_t *vd);
@@ -816,20 +821,22 @@ static void l2arc_hdr_arcstats_update(arc_buf_hdr_t *hdr, boolean_t incr,
 #define	l2arc_hdr_arcstats_decrement_state(hdr) \
 	l2arc_hdr_arcstats_update((hdr), B_FALSE, B_TRUE)
 
-typedef struct {
-	kmutex_t *hlh_hash_lock;
-	bool hlh_set_pushpage;
-} hash_lock_hold_t;
-
 static hash_lock_hold_t
-hash_lock_hold_init(void)
+hash_lock_hold_init()
 {
 	hash_lock_hold_t hlh = {
 		.hlh_hash_lock = NULL,
-		.hlh_set_pushpage = false,
+		.hlh_set_pushpage = B_FALSE,
 	};
 
 	return (hlh);
+}
+
+static int
+hash_lock_held(hash_lock_hold_t *hlh)
+{
+	return (hlh != NULL && hlh->hlh_hash_lock != NULL &&
+	    MUTEX_HELD(hlh->hlh_hash_lock));
 }
 
 static void
@@ -854,7 +861,7 @@ hash_lock_pushpage_enable(hash_lock_hold_t *hlh)
 		 */
 		VERIFY(!hlh->hlh_set_pushpage);
 		curthread->t_flag |= T_PUSHPAGE;
-		hlh->hlh_set_pushpage = true;
+		hlh->hlh_set_pushpage = B_TRUE;
 	}
 }
 
@@ -864,7 +871,7 @@ hash_lock_pushpage_disable(hash_lock_hold_t *hlh)
 	if (hlh->hlh_set_pushpage) {
 		VERIFY(curthread->t_flag & T_PUSHPAGE);
 		curthread->t_flag &= ~T_PUSHPAGE;
-		hlh->hlh_set_pushpage = false;
+		hlh->hlh_set_pushpage = B_FALSE;
 	}
 }
 
@@ -875,7 +882,7 @@ hash_lock_pushpage_disable(hash_lock_hold_t *hlh)
  * well.
  */
 static void
-hash_lock_hold_keep(hash_lock_hold_t *hlh, kmutex_t *hash_lock)
+hash_lock_hold_select(hash_lock_hold_t *hlh, kmutex_t *hash_lock)
 {
 	VERIFY3P(hlh->hlh_hash_lock, ==, NULL);
 	VERIFY(MUTEX_HELD(hash_lock));
@@ -889,7 +896,7 @@ hash_lock_hold_keep(hash_lock_hold_t *hlh, kmutex_t *hash_lock)
  * it while taking the lock.
  */
 static void
-hash_lock_exit(hash_lock_hold_t *hlh)
+hash_lock_hold_exit(hash_lock_hold_t *hlh)
 {
 	if (hlh->hlh_hash_lock == NULL) {
 		return;
@@ -897,17 +904,59 @@ hash_lock_exit(hash_lock_hold_t *hlh)
 
 	mutex_exit(hlh->hlh_hash_lock);
 	hash_lock_pushpage_disable(hlh);
+
+	/* XXX clear hash lock pointer here? */
 }
 
 static void
-hash_lock_enter(hash_lock_hold_t *hlh)
+hash_lock_hold_enter(hash_lock_hold_t *hlh)
+{
+	//VERIFY3U(hlh->hlh_hash_lock, ==, NULL);
+	//hlh->hlh_hash_lock = BUF_HASH_LOCK(idx);
+
+	mutex_enter(hlh->hlh_hash_lock);
+	hash_lock_pushpage_enable(hlh);
+}
+
+static int
+hash_lock_hold_tryenter(hash_lock_hold_t *hlh)
+{
+	//VERIFY3U(hlh->hlh_hash_lock, ==, NULL);
+	//hlh->hlh_hash_lock = BUF_HASH_LOCK(idx);
+
+	int r = mutex_tryenter(hlh->hlh_hash_lock);
+
+	if (r) {
+		hash_lock_pushpage_enable(hlh);
+	}
+
+	return (r);
+}
+
+static void
+hash_lock_hold_enter_maybe(hash_lock_hold_t *hlh)
+{
+	if (hlh->hlh_hash_lock != NULL) {
+		mutex_enter(hlh->hlh_hash_lock);
+		hash_lock_pushpage_enable(hlh);
+	}
+}
+
+static void
+hash_lock_hold_clear(hash_lock_hold_t *hlh)
 {
 	if (hlh->hlh_hash_lock == NULL) {
 		return;
 	}
 
-	mutex_enter(hlh->hlh_hash_lock);
-	hash_lock_pushpage_enable(hlh);
+	VERIFY(!MUTEX_HELD(hlh->hlh_hash_lock));
+	VERIFY(!hlh->hlh_set_pushpage);
+
+	//VERIFY3U(hlh->hlh_hash_lock, ==, NULL);
+	hlh->hlh_hash_lock = NULL;
+
+	//mutex_enter(hlh->hlh_hash_lock);
+	//hash_lock_pushpage_enable(hlh);
 }
 
 /*
@@ -961,18 +1010,19 @@ buf_hash_find(uint64_t spa, const blkptr_t *bp, hash_lock_hold_t *hlh)
 	const dva_t *dva = BP_IDENTITY(bp);
 	uint64_t birth = BP_PHYSICAL_BIRTH(bp);
 	uint64_t idx = BUF_HASH_INDEX(spa, dva, birth);
-	kmutex_t *hash_lock = BUF_HASH_LOCK(idx);
 	arc_buf_hdr_t *hdr = NULL;
 
-	mutex_enter(hash_lock);
+	hash_lock_hold_select(hlh, BUF_HASH_LOCK(idx));
+
+	hash_lock_hold_enter(hlh);
 	for (hdr = buf_hash_table.ht_table[idx]; hdr != NULL;
 	    hdr = hdr->b_hash_next) {
 		if (HDR_EQUAL(spa, dva, birth, hdr)) {
-			hash_lock_keep(hlh, hash_lock);
 			return (hdr);
 		}
 	}
-	mutex_exit(hash_lock);
+	hash_lock_hold_exit(hlh);
+	hash_lock_hold_clear(hlh);
 	return (NULL);
 }
 
@@ -981,29 +1031,24 @@ buf_hash_find(uint64_t spa, const blkptr_t *bp, hash_lock_hold_t *hlh)
  * equal to elem in the hash table, then the already existing element
  * will be returned and the new element will not be inserted.
  * Otherwise returns NULL.
- * If lockp == NULL, the caller is assumed to already hold the hash lock.
+ * If hlh == NULL, the caller is assumed to already hold the hash lock.
  */
 static arc_buf_hdr_t *
 buf_hash_insert(arc_buf_hdr_t *hdr, hash_lock_hold_t *hlh)
 {
 	uint64_t idx = BUF_HASH_INDEX(hdr->b_spa, &hdr->b_dva, hdr->b_birth);
-	kmutex_t *hash_lock = BUF_HASH_LOCK(idx);
 	arc_buf_hdr_t *fhdr;
 	uint32_t i;
-
-	/*
-	 * XXX initial state of ahh?
-	 */
 
 	ASSERT(!DVA_IS_EMPTY(&hdr->b_dva));
 	ASSERT(hdr->b_birth != 0);
 	ASSERT(!HDR_IN_HASH_TABLE(hdr));
 
 	if (hlh != NULL) {
-		mutex_enter(hash_lock);
-		hash_lock_keep(hlh, hash_lock);
+		hash_lock_hold_select(hlh, BUF_HASH_LOCK(idx));
+		hash_lock_hold_enter(hlh);
 	} else {
-		ASSERT(MUTEX_HELD(hash_lock));
+		ASSERT(MUTEX_HELD(BUF_HASH_LOCK(idx)));
 	}
 
 	for (fhdr = buf_hash_table.ht_table[idx], i = 0; fhdr != NULL;
@@ -1864,15 +1909,12 @@ error:
  * data and decrypting encrypted data into the plaintext abd.
  */
 static int
-arc_fill_hdr_crypt(arc_buf_hdr_t *hdr, kmutex_t *hash_lock, spa_t *spa,
+arc_fill_hdr_crypt(arc_buf_hdr_t *hdr, spa_t *spa,
     const zbookmark_phys_t *zb, boolean_t noauth)
 {
 	int ret;
 
 	ASSERT(HDR_PROTECTED(hdr));
-
-	if (hash_lock != NULL)
-		mutex_enter(hash_lock);
 
 	if (HDR_NOAUTH(hdr) && !noauth) {
 		/*
@@ -1895,15 +1937,9 @@ arc_fill_hdr_crypt(arc_buf_hdr_t *hdr, kmutex_t *hash_lock, spa_t *spa,
 
 	ASSERT3P(hdr->b_l1hdr.b_pabd, !=, NULL);
 
-	if (hash_lock != NULL)
-		mutex_exit(hash_lock);
-
 	return (0);
 
 error:
-	if (hash_lock != NULL)
-		mutex_exit(hash_lock);
-
 	return (ret);
 }
 
@@ -1913,9 +1949,8 @@ error:
  * block, so we use the hash lock here to protect against concurrent calls to
  * arc_buf_fill().
  */
-/* ARGSUSED */
 static void
-arc_buf_untransform_in_place(arc_buf_t *buf, kmutex_t *hash_lock)
+arc_buf_untransform_in_place(arc_buf_t *buf)
 {
 	arc_buf_hdr_t *hdr = buf->b_hdr;
 
@@ -1955,7 +1990,11 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 	boolean_t compressed = (flags & ARC_FILL_COMPRESSED) != 0;
 	boolean_t encrypted = (flags & ARC_FILL_ENCRYPTED) != 0;
 	dmu_object_byteswap_t bswap = hdr->b_l1hdr.b_byteswap;
-	kmutex_t *hash_lock = (flags & ARC_FILL_LOCKED) ? NULL : HDR_LOCK(hdr);
+	hash_lock_hold_t hlh = hash_lock_hold_init();
+
+	if (!(flags & ARC_FILL_LOCKED)) {
+		hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
+	}
 
 	ASSERT3P(buf->b_data, !=, NULL);
 	IMPLY(compressed, hdr_compressed || ARC_BUF_ENCRYPTED(buf));
@@ -1984,16 +2023,19 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 	 * without being marked as an IO error.
 	 */
 	if (HDR_PROTECTED(hdr)) {
-		error = arc_fill_hdr_crypt(hdr, hash_lock, spa,
+		hash_lock_hold_enter_maybe(&hlh);
+
+		error = arc_fill_hdr_crypt(hdr, spa,
 		    zb, !!(flags & ARC_FILL_NOAUTH));
+
+		hash_lock_hold_exit(&hlh);
+
 		if (error == EACCES && (flags & ARC_FILL_IN_PLACE) != 0) {
 			return (error);
 		} else if (error != 0) {
-			if (hash_lock != NULL)
-				mutex_enter(hash_lock);
+			hash_lock_hold_enter_maybe(&hlh);
 			arc_hdr_set_flags(hdr, ARC_FLAG_IO_ERROR);
-			if (hash_lock != NULL)
-				mutex_exit(hash_lock);
+			hash_lock_hold_exit(&hlh);
 			return (error);
 		}
 	}
@@ -2017,11 +2059,9 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 		if (HDR_ENCRYPTED(hdr) && ARC_BUF_ENCRYPTED(buf)) {
 			ASSERT3U(hdr->b_crypt_hdr.b_ot, ==, DMU_OT_DNODE);
 
-			if (hash_lock != NULL)
-				mutex_enter(hash_lock);
-			arc_buf_untransform_in_place(buf, hash_lock);
-			if (hash_lock != NULL)
-				mutex_exit(hash_lock);
+			hash_lock_hold_enter_maybe(&hlh);
+			arc_buf_untransform_in_place(buf);
+			hash_lock_hold_exit(&hlh);
 
 			/* Compute the hdr's checksum if necessary */
 			arc_cksum_compute(buf);
@@ -2096,11 +2136,9 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 				    "hdr %p, compress %d, psize %d, lsize %d",
 				    hdr, arc_hdr_get_compress(hdr),
 				    HDR_GET_PSIZE(hdr), HDR_GET_LSIZE(hdr));
-				if (hash_lock != NULL)
-					mutex_enter(hash_lock);
+				hash_lock_hold_enter_maybe(&hlh);
 				arc_hdr_set_flags(hdr, ARC_FLAG_IO_ERROR);
-				if (hash_lock != NULL)
-					mutex_exit(hash_lock);
+				hash_lock_hold_exit(&hlh);
 				return (SET_ERROR(EIO));
 			}
 		}
@@ -2272,13 +2310,13 @@ add_reference(arc_buf_hdr_t *hdr, void *tag)
  * list making it eligible for eviction.
  */
 static int
-remove_reference(arc_buf_hdr_t *hdr, kmutex_t *hash_lock, void *tag)
+remove_reference(arc_buf_hdr_t *hdr, hash_lock_hold_t *hlh, void *tag)
 {
 	int cnt;
 	arc_state_t *state = hdr->b_l1hdr.b_state;
 
 	ASSERT(HDR_HAS_L1HDR(hdr));
-	ASSERT(state == arc_anon || MUTEX_HELD(hash_lock));
+	ASSERT(state == arc_anon || hash_lock_held(hlh));
 	ASSERT(!GHOST_STATE(state));
 
 	/*
@@ -2300,7 +2338,7 @@ remove_reference(arc_buf_hdr_t *hdr, kmutex_t *hash_lock, void *tag)
  */
 static void
 arc_change_state(arc_state_t *new_state, arc_buf_hdr_t *hdr,
-    kmutex_t *hash_lock)
+    hash_lock_hold_t *hlh)
 {
 	arc_state_t *old_state;
 	int64_t refcnt;
@@ -2330,7 +2368,7 @@ arc_change_state(arc_state_t *new_state, arc_buf_hdr_t *hdr,
 	}
 	update_new = update_old;
 
-	ASSERT(MUTEX_HELD(hash_lock));
+	ASSERT(hash_lock_held(hlh));
 	ASSERT3P(new_state, !=, old_state);
 	ASSERT(!GHOST_STATE(new_state) || bufcnt == 0);
 	ASSERT(old_state != arc_anon || bufcnt <= 1);
@@ -3831,8 +3869,9 @@ arc_hdr_destroy(arc_buf_hdr_t *hdr)
 }
 
 void
-arc_buf_destroy(arc_buf_t *buf, void* tag)
+arc_buf_destroy(arc_buf_t *buf, void *tag)
 {
+	hash_lock_hold_t hlh = hash_lock_hold_init();
 	arc_buf_hdr_t *hdr = buf->b_hdr;
 
 	if (hdr->b_l1hdr.b_state == arc_anon) {
@@ -3843,18 +3882,18 @@ arc_buf_destroy(arc_buf_t *buf, void* tag)
 		return;
 	}
 
-	kmutex_t *hash_lock = HDR_LOCK(hdr);
-	mutex_enter(hash_lock);
+	hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
+	hash_lock_hold_enter(&hlh);
 
 	ASSERT3P(hdr, ==, buf->b_hdr);
 	ASSERT(hdr->b_l1hdr.b_bufcnt > 0);
-	ASSERT3P(hash_lock, ==, HDR_LOCK(hdr));
+	ASSERT3P(hlh->hlh_hash_lock, ==, HDR_LOCK(hdr));
 	ASSERT3P(hdr->b_l1hdr.b_state, !=, arc_anon);
 	ASSERT3P(buf->b_data, !=, NULL);
 
-	(void) remove_reference(hdr, hash_lock, tag);
+	(void) remove_reference(hdr, &hlh, tag);
 	arc_buf_destroy_impl(buf);
-	mutex_exit(hash_lock);
+	hash_lock_hold_exit(&hlh);
 }
 
 /*
@@ -3870,14 +3909,14 @@ arc_buf_destroy(arc_buf_t *buf, void* tag)
  *    - arc_mfu_ghost -> deleted
  */
 static int64_t
-arc_evict_hdr(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
+arc_evict_hdr(arc_buf_hdr_t *hdr, hash_lock_hold_t *hlh)
 {
 	arc_state_t *evicted_state, *state;
 	int64_t bytes_evicted = 0;
 	int min_lifetime = HDR_PRESCIENT_PREFETCH(hdr) ?
 	    zfs_arc_min_prescient_prefetch_ms : zfs_arc_min_prefetch_ms;
 
-	ASSERT(MUTEX_HELD(hash_lock));
+	ASSERT(hash_lock_held(hlh));
 	ASSERT(HDR_HAS_L1HDR(hdr));
 
 	state = hdr->b_l1hdr.b_state;
@@ -3909,7 +3948,7 @@ arc_evict_hdr(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 			 * This buffer is cached on the 2nd Level ARC;
 			 * don't destroy the header.
 			 */
-			arc_change_state(arc_l2c_only, hdr, hash_lock);
+			arc_change_state(arc_l2c_only, hdr, hlh);
 			/*
 			 * dropping from L1+L2 cached to L2-only,
 			 * realloc to remove the L1 header.
@@ -3917,7 +3956,7 @@ arc_evict_hdr(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 			hdr = arc_hdr_realloc(hdr, hdr_full_cache,
 			    hdr_l2only_cache);
 		} else {
-			arc_change_state(arc_anon, hdr, hash_lock);
+			arc_change_state(arc_anon, hdr, hlh);
 			arc_hdr_destroy(hdr);
 		}
 		return (bytes_evicted);
@@ -3991,7 +4030,7 @@ arc_evict_hdr(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 		if (HDR_HAS_RABD(hdr))
 			arc_hdr_free_pabd(hdr, B_TRUE);
 
-		arc_change_state(evicted_state, hdr, hash_lock);
+		arc_change_state(evicted_state, hdr, hlh);
 		ASSERT(HDR_IN_HASH_TABLE(hdr));
 		arc_hdr_set_flags(hdr, ARC_FLAG_IN_HASH_TABLE);
 		DTRACE_PROBE1(arc__evict, arc_buf_hdr_t *, hdr);
@@ -4007,7 +4046,6 @@ arc_evict_state_impl(multilist_t *ml, int idx, arc_buf_hdr_t *marker,
 	multilist_sublist_t *mls;
 	uint64_t bytes_evicted = 0;
 	arc_buf_hdr_t *hdr;
-	kmutex_t *hash_lock;
 	int evict_count = 0;
 
 	ASSERT3P(marker, !=, NULL);
@@ -4017,6 +4055,8 @@ arc_evict_state_impl(multilist_t *ml, int idx, arc_buf_hdr_t *marker,
 
 	for (hdr = multilist_sublist_prev(mls, marker); hdr != NULL;
 	    hdr = multilist_sublist_prev(mls, marker)) {
+		hash_lock_hold_t hlh = hash_lock_hold_init();
+
 		if ((bytes != ARC_EVICT_ALL && bytes_evicted >= bytes) ||
 		    (evict_count >= zfs_arc_evict_batch_limit))
 			break;
@@ -4052,7 +4092,7 @@ arc_evict_state_impl(multilist_t *ml, int idx, arc_buf_hdr_t *marker,
 			continue;
 		}
 
-		hash_lock = HDR_LOCK(hdr);
+		hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
 
 		/*
 		 * We aren't calling this function from any code path
@@ -4063,11 +4103,11 @@ arc_evict_state_impl(multilist_t *ml, int idx, arc_buf_hdr_t *marker,
 		 * below (e.g. if the code changed such that we called
 		 * this function with a hash lock held).
 		 */
-		ASSERT(!MUTEX_HELD(hash_lock));
+		ASSERT(!MUTEX_HELD(hlh->hlh_hash_lock));
 
-		if (mutex_tryenter(hash_lock)) {
-			uint64_t evicted = arc_evict_hdr(hdr, hash_lock);
-			mutex_exit(hash_lock);
+		if (hash_lock_hold_tryenter(&hlh)) {
+			uint64_t evicted = arc_evict_hdr(hdr, &hlh);
+			hash_lock_hold_exit(&hlh);
 
 			bytes_evicted += evicted;
 
@@ -5204,11 +5244,11 @@ arc_free_data_impl(arc_buf_hdr_t *hdr, uint64_t size, void *tag)
  * NOTE: the hash lock is dropped in this function.
  */
 static void
-arc_access(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
+arc_access(arc_buf_hdr_t *hdr, hash_lock_hold_t *hlh)
 {
 	clock_t now;
 
-	ASSERT(MUTEX_HELD(hash_lock));
+	ASSERT(hash_lock_held(hlh));
 	ASSERT(HDR_HAS_L1HDR(hdr));
 
 	if (hdr->b_l1hdr.b_state == arc_anon) {
@@ -5221,7 +5261,7 @@ arc_access(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 		ASSERT0(hdr->b_l1hdr.b_arc_access);
 		hdr->b_l1hdr.b_arc_access = ddi_get_lbolt();
 		DTRACE_PROBE1(new_state__mru, arc_buf_hdr_t *, hdr);
-		arc_change_state(arc_mru, hdr, hash_lock);
+		arc_change_state(arc_mru, hdr, hlh);
 
 	} else if (hdr->b_l1hdr.b_state == arc_mru) {
 		now = ddi_get_lbolt();
@@ -5266,7 +5306,7 @@ arc_access(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 			 */
 			hdr->b_l1hdr.b_arc_access = now;
 			DTRACE_PROBE1(new_state__mfu, arc_buf_hdr_t *, hdr);
-			arc_change_state(arc_mfu, hdr, hash_lock);
+			arc_change_state(arc_mfu, hdr, hlh);
 		}
 		ARCSTAT_BUMP(arcstat_mru_hits);
 	} else if (hdr->b_l1hdr.b_state == arc_mru_ghost) {
@@ -5294,7 +5334,7 @@ arc_access(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 		}
 
 		hdr->b_l1hdr.b_arc_access = ddi_get_lbolt();
-		arc_change_state(new_state, hdr, hash_lock);
+		arc_change_state(new_state, hdr, hlh);
 
 		ARCSTAT_BUMP(arcstat_mru_ghost_hits);
 	} else if (hdr->b_l1hdr.b_state == arc_mfu) {
@@ -5327,7 +5367,7 @@ arc_access(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 
 		hdr->b_l1hdr.b_arc_access = ddi_get_lbolt();
 		DTRACE_PROBE1(new_state__mfu, arc_buf_hdr_t *, hdr);
-		arc_change_state(new_state, hdr, hash_lock);
+		arc_change_state(new_state, hdr, hlh);
 
 		ARCSTAT_BUMP(arcstat_mfu_ghost_hits);
 	} else if (hdr->b_l1hdr.b_state == arc_l2c_only) {
@@ -5337,7 +5377,7 @@ arc_access(arc_buf_hdr_t *hdr, kmutex_t *hash_lock)
 
 		hdr->b_l1hdr.b_arc_access = ddi_get_lbolt();
 		DTRACE_PROBE1(new_state__mfu, arc_buf_hdr_t *, hdr);
-		arc_change_state(arc_mfu, hdr, hash_lock);
+		arc_change_state(arc_mfu, hdr, hlh);
 	} else {
 		ASSERT(!"invalid arc state");
 	}
@@ -5363,11 +5403,12 @@ arc_buf_access(arc_buf_t *buf)
 		return;
 	}
 
-	kmutex_t *hash_lock = HDR_LOCK(hdr);
-	mutex_enter(hash_lock);
+	hash_lock_hold_t hlh = hash_lock_hold_init();
+	hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
+	hash_lock_hold_enter(&hlh);
 
 	if (hdr->b_l1hdr.b_state == arc_anon || HDR_EMPTY(hdr)) {
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 		mutex_exit(&buf->b_evict_lock);
 		ARCSTAT_BUMP(arcstat_access_skip);
 		return;
@@ -5379,8 +5420,8 @@ arc_buf_access(arc_buf_t *buf)
 	    hdr->b_l1hdr.b_state == arc_mfu);
 
 	DTRACE_PROBE1(arc__hit, arc_buf_hdr_t *, hdr);
-	arc_access(hdr, hash_lock);
-	mutex_exit(hash_lock);
+	arc_access(hdr, &hlh);
+	hash_lock_hold_exit(&hlh);
 
 	ARCSTAT_BUMP(arcstat_hits);
 	ARCSTAT_CONDSTAT(!HDR_PREFETCH(hdr),
@@ -5482,7 +5523,7 @@ arc_read_done(zio_t *zio)
 {
 	blkptr_t	*bp = zio->io_bp;
 	arc_buf_hdr_t	*hdr = zio->io_private;
-	kmutex_t	*hash_lock = NULL;
+	hash_lock_hold_t hlh = hash_lock_hold_init();
 	arc_callback_t	*callback_list;
 	arc_callback_t	*acb;
 	boolean_t	freeable = B_FALSE;
@@ -5503,12 +5544,12 @@ arc_read_done(zio_t *zio)
 		    BP_IDENTITY(zio->io_bp)->dva_word[1]);
 
 		arc_buf_hdr_t *found = buf_hash_find(hdr->b_spa, zio->io_bp,
-		    &hash_lock);
+		    &hlh);
 
 		ASSERT((found == hdr &&
 		    DVA_EQUAL(&hdr->b_dva, BP_IDENTITY(zio->io_bp))) ||
 		    (found == hdr && HDR_L2_READING(hdr)));
-		ASSERT3P(hash_lock, !=, NULL);
+		ASSERT3P(hlh.hlh_hash_lock, !=, NULL);
 	}
 
 	if (BP_IS_PROTECTED(bp)) {
@@ -5550,7 +5591,7 @@ arc_read_done(zio_t *zio)
 	callback_list = hdr->b_l1hdr.b_acb;
 	ASSERT3P(callback_list, !=, NULL);
 
-	if (hash_lock && zio->io_error == 0 &&
+	if (hlh.hlh_hash_lock != NULL && zio->io_error == 0 &&
 	    hdr->b_l1hdr.b_state == arc_anon) {
 		/*
 		 * Only call arc_access on anonymous buffers.  This is because
@@ -5558,7 +5599,7 @@ arc_read_done(zio_t *zio)
 		 * called arc_access (to prevent any simultaneous readers from
 		 * getting confused).
 		 */
-		arc_access(hdr, hash_lock);
+		arc_access(hdr, &hlh);
 	}
 
 	/*
@@ -5630,7 +5671,7 @@ arc_read_done(zio_t *zio)
 	 * callbacks, the hdr is not anonymous.  If it were anonymous,
 	 * we couldn't use arc_buf_destroy() in the error case below.
 	 */
-	ASSERT(callback_cnt < 2 || hash_lock != NULL);
+	ASSERT(callback_cnt < 2 || hlh.hlh_hash_lock != NULL);
 
 	hdr->b_l1hdr.b_acb = NULL;
 	arc_hdr_clear_flags(hdr, ARC_FLAG_IO_IN_PROGRESS);
@@ -5645,7 +5686,7 @@ arc_read_done(zio_t *zio)
 	} else {
 		arc_hdr_set_flags(hdr, ARC_FLAG_IO_ERROR);
 		if (hdr->b_l1hdr.b_state != arc_anon)
-			arc_change_state(arc_anon, hdr, hash_lock);
+			arc_change_state(arc_anon, hdr, &hlh);
 		if (HDR_IN_HASH_TABLE(hdr))
 			buf_hash_remove(hdr);
 		freeable = zfs_refcount_is_zero(&hdr->b_l1hdr.b_refcnt);
@@ -5658,8 +5699,8 @@ arc_read_done(zio_t *zio)
 	 */
 	cv_broadcast(&hdr->b_l1hdr.b_cv);
 
-	if (hash_lock != NULL) {
-		mutex_exit(hash_lock);
+	if (hlh.hlh_hash_lock != NULL) {
+		hash_lock_hold_enter(&hlh);
 	} else {
 		/*
 		 * This block was freed while we waited for the read to
@@ -5725,7 +5766,7 @@ arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp, arc_read_done_func_t *done,
     arc_flags_t *arc_flags, const zbookmark_phys_t *zb)
 {
 	arc_buf_hdr_t *hdr = NULL;
-	kmutex_t *hash_lock = NULL;
+	hash_lock_hold_t hlh = hash_lock_hold_init();
 	zio_t *rzio;
 	uint64_t guid = spa_load_guid(spa);
 	boolean_t compressed_read = (zio_flags & ZIO_FLAG_RAW_COMPRESS) != 0;
@@ -5744,7 +5785,7 @@ top:
 		 * Embedded BP's have no DVA and require no I/O to "read".
 		 * Create an anonymous arc buf to back it.
 		 */
-		hdr = buf_hash_find(guid, bp, &hash_lock);
+		hdr = buf_hash_find(guid, bp, &hlh);
 	}
 
 	/*
@@ -5781,8 +5822,8 @@ top:
 			}
 
 			if (*arc_flags & ARC_FLAG_WAIT) {
-				cv_wait(&hdr->b_l1hdr.b_cv, hash_lock);
-				mutex_exit(hash_lock);
+				cv_wait(&hdr->b_l1hdr.b_cv, hlh.hlh_hash_lock);
+				hash_lock_hold_exit(&hlh);
 				goto top;
 			}
 			ASSERT(*arc_flags & ARC_FLAG_NOWAIT);
@@ -5806,10 +5847,10 @@ top:
 				acb->acb_zio_head = head_zio;
 				acb->acb_next = hdr->b_l1hdr.b_acb;
 				hdr->b_l1hdr.b_acb = acb;
-				mutex_exit(hash_lock);
+				hash_lock_hold_exit(&hlh);
 				return (0);
 			}
-			mutex_exit(hash_lock);
+			hash_lock_hold_exit(&hlh);
 			return (0);
 		}
 
@@ -5862,8 +5903,7 @@ top:
 				}
 			}
 			if (rc != 0) {
-				(void) remove_reference(hdr, hash_lock,
-				    private);
+				(void) remove_reference(hdr, &hlh, private);
 				arc_buf_destroy_impl(buf);
 				buf = NULL;
 			}
@@ -5879,12 +5919,12 @@ top:
 				l2arc_hdr_arcstats_increment_state(hdr);
 		}
 		DTRACE_PROBE1(arc__hit, arc_buf_hdr_t *, hdr);
-		arc_access(hdr, hash_lock);
+		arc_access(hdr, &hlh);
 		if (*arc_flags & ARC_FLAG_PRESCIENT_PREFETCH)
 			arc_hdr_set_flags(hdr, ARC_FLAG_PRESCIENT_PREFETCH);
 		if (*arc_flags & ARC_FLAG_L2CACHE)
 			arc_hdr_set_flags(hdr, ARC_FLAG_L2CACHE);
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 		ARCSTAT_BUMP(arcstat_hits);
 		ARCSTAT_CONDSTAT(!HDR_PREFETCH(hdr),
 		    demand, prefetch, !HDR_ISTYPE_METADATA(hdr),
@@ -5914,11 +5954,12 @@ top:
 			if (!BP_IS_EMBEDDED(bp)) {
 				hdr->b_dva = *BP_IDENTITY(bp);
 				hdr->b_birth = BP_PHYSICAL_BIRTH(bp);
-				exists = buf_hash_insert(hdr, &hash_lock);
+				exists = buf_hash_insert(hdr, &hlh);
 			}
 			if (exists != NULL) {
 				/* somebody beat us to the hash insert */
-				mutex_exit(hash_lock);
+				hash_lock_hold_exit(&hlh);
+				hash_lock_hold_clear(&hlh);
 				buf_discard_identity(hdr);
 				arc_hdr_destroy(hdr);
 				goto top; /* restart the IO request */
@@ -5953,8 +5994,8 @@ top:
 				 * and so the performance impact shouldn't
 				 * matter.
 				 */
-				cv_wait(&hdr->b_l1hdr.b_cv, hash_lock);
-				mutex_exit(hash_lock);
+				cv_wait(&hdr->b_l1hdr.b_cv, hlh.hlh_hash_lock);
+				hash_lock_hold_exit(&hlh);
 				goto top;
 			}
 
@@ -5969,7 +6010,7 @@ top:
 			 * avoid hitting an assert in remove_reference().
 			 */
 			arc_adapt(arc_hdr_size(hdr), hdr->b_l1hdr.b_state);
-			arc_access(hdr, hash_lock);
+			arc_access(hdr, &hlh);
 			arc_hdr_alloc_pabd(hdr, alloc_flags);
 		}
 
@@ -6136,8 +6177,7 @@ top:
 				    ZIO_FLAG_DONT_RETRY, B_FALSE);
 				acb->acb_zio_head = rzio;
 
-				if (hash_lock != NULL)
-					mutex_exit(hash_lock);
+				hash_lock_hold_exit(&hlh);
 
 				DTRACE_PROBE2(l2arc__read, vdev_t *, vd,
 				    zio_t *, rzio);
@@ -6154,8 +6194,7 @@ top:
 					return (0);
 
 				/* l2arc read error; goto zio_read() */
-				if (hash_lock != NULL)
-					mutex_enter(hash_lock);
+				hash_lock_hold_enter_maybe(&hlh);
 			} else {
 				DTRACE_PROBE1(l2arc__miss,
 				    arc_buf_hdr_t *, hdr);
@@ -6178,8 +6217,7 @@ top:
 		    arc_read_done, hdr, priority, zio_flags, zb);
 		acb->acb_zio_head = rzio;
 
-		if (hash_lock != NULL)
-			mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 
 		if (*arc_flags & ARC_FLAG_WAIT)
 			return (zio_wait(rzio));
@@ -6197,12 +6235,13 @@ void
 arc_freed(spa_t *spa, const blkptr_t *bp)
 {
 	arc_buf_hdr_t *hdr;
+	hash_lock_hold_t hlh = hash_lock_hold_init();
 	kmutex_t *hash_lock;
 	uint64_t guid = spa_load_guid(spa);
 
 	ASSERT(!BP_IS_EMBEDDED(bp));
 
-	hdr = buf_hash_find(guid, bp, &hash_lock);
+	hdr = buf_hash_find(guid, bp, &hlh);
 	if (hdr == NULL)
 		return;
 
@@ -6230,11 +6269,11 @@ arc_freed(spa_t *spa, const blkptr_t *bp)
 	 */
 	if (!HDR_HAS_L1HDR(hdr) || (!HDR_IO_IN_PROGRESS(hdr) &&
 	    zfs_refcount_is_zero(&hdr->b_l1hdr.b_refcnt))) {
-		arc_change_state(arc_anon, hdr, hash_lock);
+		arc_change_state(arc_anon, hdr, &hlh);
 		arc_hdr_destroy(hdr);
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 	} else {
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 	}
 
 }
@@ -6294,8 +6333,9 @@ arc_release(arc_buf_t *buf, void *tag)
 		return;
 	}
 
-	kmutex_t *hash_lock = HDR_LOCK(hdr);
-	mutex_enter(hash_lock);
+	hash_lock_hold_t hlh = hash_lock_hold_init();
+	hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
+	hash_lock_hold_enter(&hlh);
 
 	/*
 	 * Wait for any other IO for this hdr, as additional
@@ -6304,7 +6344,7 @@ arc_release(arc_buf_t *buf, void *tag)
 	 */
 	while (HDR_IO_IN_PROGRESS(hdr)) {
 		DTRACE_PROBE1(arc_release__io, arc_buf_hdr_t *, hdr);
-		cv_wait(&hdr->b_l1hdr.b_cv, hash_lock);
+		cv_wait(&hdr->b_l1hdr.b_cv, hlh.hlh_hash_lock);
 	}
 
 	/*
@@ -6313,7 +6353,7 @@ arc_release(arc_buf_t *buf, void *tag)
 	 * b_state field after dropping the lock.
 	 */
 	arc_state_t *state = hdr->b_l1hdr.b_state;
-	ASSERT3P(hash_lock, ==, HDR_LOCK(hdr));
+	ASSERT3P(hlh.hlh_hash_lock, ==, HDR_LOCK(hdr));
 	ASSERT3P(state, !=, arc_anon);
 
 	/* this buffer is not on any list */
@@ -6350,7 +6390,7 @@ arc_release(arc_buf_t *buf, void *tag)
 		VERIFY3U(hdr->b_type, ==, type);
 
 		ASSERT(hdr->b_l1hdr.b_buf != buf || buf->b_next != NULL);
-		(void) remove_reference(hdr, hash_lock, tag);
+		(void) remove_reference(hdr, &hlh, tag);
 
 		if (arc_buf_is_shared(buf) && !ARC_BUF_COMPRESSED(buf)) {
 			ASSERT3P(hdr->b_l1hdr.b_buf, !=, buf);
@@ -6430,7 +6470,7 @@ arc_release(arc_buf_t *buf, void *tag)
 		if (!arc_hdr_has_uncompressed_buf(hdr))
 			arc_cksum_free(hdr);
 
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 
 		/*
 		 * Allocate a new hdr. The new hdr will contain a b_pabd
@@ -6460,10 +6500,10 @@ arc_release(arc_buf_t *buf, void *tag)
 		/* protected by hash lock, or hdr is on arc_anon */
 		ASSERT(!multilist_link_active(&hdr->b_l1hdr.b_arc_node));
 		ASSERT(!HDR_IO_IN_PROGRESS(hdr));
-		arc_change_state(arc_anon, hdr, hash_lock);
+		arc_change_state(arc_anon, hdr, &hlh);
 		hdr->b_l1hdr.b_arc_access = 0;
 
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 		buf_discard_identity(hdr);
 		arc_buf_thaw(buf);
 	}
@@ -6697,13 +6737,13 @@ arc_write_done(zio_t *zio)
 	 */
 	if (!HDR_EMPTY(hdr)) {
 		arc_buf_hdr_t *exists;
-		kmutex_t *hash_lock;
+		hash_lock_hold_t hlh = hash_lock_hold_init();
 
 		ASSERT3U(zio->io_error, ==, 0);
 
 		arc_cksum_verify(buf);
 
-		exists = buf_hash_insert(hdr, &hash_lock);
+		exists = buf_hash_insert(hdr, &hlh);
 		if (exists != NULL) {
 			/*
 			 * This can only happen if we overwrite for
@@ -6716,10 +6756,11 @@ arc_write_done(zio_t *zio)
 					    (void *)hdr, (void *)exists);
 				ASSERT(zfs_refcount_is_zero(
 				    &exists->b_l1hdr.b_refcnt));
-				arc_change_state(arc_anon, exists, hash_lock);
+				arc_change_state(arc_anon, exists, &hlh);
 				arc_hdr_destroy(exists);
-				mutex_exit(hash_lock);
-				exists = buf_hash_insert(hdr, &hash_lock);
+				hash_lock_hold_exit(&hlh);
+				hash_lock_hold_clear(&hlh);
+				exists = buf_hash_insert(hdr, &hlh);
 				ASSERT3P(exists, ==, NULL);
 			} else if (zio->io_flags & ZIO_FLAG_NOPWRITE) {
 				/* nopwrite */
@@ -6738,8 +6779,8 @@ arc_write_done(zio_t *zio)
 		arc_hdr_clear_flags(hdr, ARC_FLAG_IO_IN_PROGRESS);
 		/* if it's not anon, we are doing a scrub */
 		if (exists == NULL && hdr->b_l1hdr.b_state == arc_anon)
-			arc_access(hdr, hash_lock);
-		mutex_exit(hash_lock);
+			arc_access(hdr, &hlh);
+		hash_lock_hold_exit(&hlh);
 	} else {
 		arc_hdr_clear_flags(hdr, ARC_FLAG_IO_IN_PROGRESS);
 	}
@@ -8274,7 +8315,7 @@ l2arc_evict(l2arc_dev_t *dev, uint64_t distance, boolean_t all)
 {
 	list_t *buflist;
 	arc_buf_hdr_t *hdr, *hdr_prev;
-	kmutex_t *hash_lock;
+	hash_lock_hold_t hlh = hash_lock_hold_init();
 	uint64_t taddr;
 	l2arc_lb_ptr_buf_t *lb_ptr_buf, *lb_ptr_buf_prev;
 	boolean_t rerun;
@@ -8367,21 +8408,22 @@ retry:
 		hdr_prev = list_prev(buflist, hdr);
 
 		ASSERT(!HDR_EMPTY(hdr));
-		hash_lock = HDR_LOCK(hdr);
+		hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
 
 		/*
 		 * We cannot use mutex_enter or else we can deadlock
 		 * with l2arc_write_buffers (due to swapping the order
 		 * the hash lock and l2ad_mtx are taken).
 		 */
-		if (!mutex_tryenter(hash_lock)) {
+		if (!hash_lock_hold_tryenter(&hlh)) {
 			/*
 			 * Missed the hash lock.  Retry.
 			 */
 			ARCSTAT_BUMP(arcstat_l2_evict_lock_retry);
 			mutex_exit(&dev->l2ad_mtx);
-			mutex_enter(hash_lock);
-			mutex_exit(hash_lock);
+			hash_lock_hold_enter(&hlh);
+			hash_lock_hold_exit(&hlh);
+			hash_lock_hold_clear(&hlh);
 			goto retry;
 		}
 
@@ -8400,7 +8442,7 @@ retry:
 			 * We've evicted to the target address,
 			 * or the end of the device.
 			 */
-			mutex_exit(hash_lock);
+			hash_lock_hold_exit(&hlh);
 			break;
 		}
 
@@ -8411,7 +8453,7 @@ retry:
 			 * arc_hdr_destroy() will call list_remove()
 			 * and decrement arcstat_l2_lsize.
 			 */
-			arc_change_state(arc_anon, hdr, hash_lock);
+			arc_change_state(arc_anon, hdr, &hlh);
 			arc_hdr_destroy(hdr);
 		} else {
 			ASSERT(hdr->b_l1hdr.b_state != arc_l2c_only);
@@ -8428,7 +8470,7 @@ retry:
 
 			arc_hdr_l2hdr_destroy(hdr);
 		}
-		mutex_exit(hash_lock);
+		hash_lock_hold_exit(&hlh);
 	}
 	mutex_exit(&dev->l2ad_mtx);
 
@@ -9752,7 +9794,7 @@ static void
 l2arc_hdr_restore(const l2arc_log_ent_phys_t *le, l2arc_dev_t *dev)
 {
 	arc_buf_hdr_t		*hdr, *exists;
-	kmutex_t		*hash_lock;
+	hash_lock_hold_t	hlh = hash_lock_hold_init();
 	arc_buf_contents_t	type = L2BLK_GET_TYPE((le)->le_prop);
 	uint64_t		asize;
 
@@ -9783,7 +9825,7 @@ l2arc_hdr_restore(const l2arc_log_ent_phys_t *le, l2arc_dev_t *dev)
 	(void) zfs_refcount_add_many(&dev->l2ad_alloc, arc_hdr_size(hdr), hdr);
 	mutex_exit(&dev->l2ad_mtx);
 
-	exists = buf_hash_insert(hdr, &hash_lock);
+	exists = buf_hash_insert(hdr, &hlh);
 	if (exists) {
 		/* Buffer was already cached, no need to restore it. */
 		arc_hdr_destroy(hdr);
@@ -9810,7 +9852,7 @@ l2arc_hdr_restore(const l2arc_log_ent_phys_t *le, l2arc_dev_t *dev)
 		ARCSTAT_BUMP(arcstat_l2_rebuild_bufs_precached);
 	}
 
-	mutex_exit(hash_lock);
+	hash_lock_hold_exit(&hlh);
 }
 
 /*
