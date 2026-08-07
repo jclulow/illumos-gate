@@ -822,14 +822,20 @@ static void l2arc_hdr_arcstats_update(arc_buf_hdr_t *hdr, boolean_t incr,
 	l2arc_hdr_arcstats_update((hdr), B_FALSE, B_TRUE)
 
 static hash_lock_hold_t
-hash_lock_hold_init()
+hash_lock_hold_init_with(kmutex_t *hash_lock)
 {
 	hash_lock_hold_t hlh = {
-		.hlh_hash_lock = NULL,
+		.hlh_hash_lock = hash_lock,
 		.hlh_set_pushpage = B_FALSE,
 	};
 
 	return (hlh);
+}
+
+static hash_lock_hold_t
+hash_lock_hold_init()
+{
+	return (hash_lock_hold_init_with(NULL));
 }
 
 static int
@@ -897,7 +903,8 @@ hash_lock_hold_select(hash_lock_hold_t *hlh, kmutex_t *hash_lock)
 
 /*
  * Release the hash bucket lock and disable pushpage if we originally enabled
- * it while taking the lock.
+ * it while taking the lock.  Keeps the previously selected hash lock so that
+ * we can enter the lock again later.
  */
 static void
 hash_lock_hold_exit(hash_lock_hold_t *hlh)
@@ -908,26 +915,26 @@ hash_lock_hold_exit(hash_lock_hold_t *hlh)
 
 	mutex_exit(hlh->hlh_hash_lock);
 	hash_lock_pushpage_disable(hlh);
-
-	/* XXX clear hash lock pointer here? */
 }
 
+/*
+ * Take the previously selected hash lock.  Enables pushpage if not already
+ * enabled.
+ */
 static void
 hash_lock_hold_enter(hash_lock_hold_t *hlh)
 {
-	//VERIFY3U(hlh->hlh_hash_lock, ==, NULL);
-	//hlh->hlh_hash_lock = BUF_HASH_LOCK(idx);
-
 	mutex_enter(hlh->hlh_hash_lock);
 	hash_lock_pushpage_enable(hlh);
 }
 
+/*
+ * Takes the hash lock if it is not already held.  If the lock was not
+ * available, returns 0 and no action is taken.
+ */
 static int
 hash_lock_hold_tryenter(hash_lock_hold_t *hlh)
 {
-	//VERIFY3U(hlh->hlh_hash_lock, ==, NULL);
-	//hlh->hlh_hash_lock = BUF_HASH_LOCK(idx);
-
 	int r = mutex_tryenter(hlh->hlh_hash_lock);
 
 	if (r) {
@@ -937,6 +944,10 @@ hash_lock_hold_tryenter(hash_lock_hold_t *hlh)
 	return (r);
 }
 
+/*
+ * Enters the hash lock if one has been selected.  If no lock has been
+ * selected, no action is taken.
+ */
 static void
 hash_lock_hold_enter_maybe(hash_lock_hold_t *hlh)
 {
@@ -946,6 +957,9 @@ hash_lock_hold_enter_maybe(hash_lock_hold_t *hlh)
 	}
 }
 
+/*
+ * Clear a previous hash lock selection.  The lock have been released already.
+ */
 static void
 hash_lock_hold_clear(hash_lock_hold_t *hlh)
 {
@@ -956,11 +970,7 @@ hash_lock_hold_clear(hash_lock_hold_t *hlh)
 	VERIFY(!MUTEX_HELD(hlh->hlh_hash_lock));
 	VERIFY(!hlh->hlh_set_pushpage);
 
-	//VERIFY3U(hlh->hlh_hash_lock, ==, NULL);
 	hlh->hlh_hash_lock = NULL;
-
-	//mutex_enter(hlh->hlh_hash_lock);
-	//hash_lock_pushpage_enable(hlh);
 }
 
 /*
@@ -2028,10 +2038,8 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 	 */
 	if (HDR_PROTECTED(hdr)) {
 		hash_lock_hold_enter_maybe(&hlh);
-
 		error = arc_fill_hdr_crypt(hdr, spa,
 		    zb, !!(flags & ARC_FILL_NOAUTH));
-
 		hash_lock_hold_exit(&hlh);
 
 		if (error == EACCES && (flags & ARC_FILL_IN_PLACE) != 0) {
@@ -5407,8 +5415,7 @@ arc_buf_access(arc_buf_t *buf)
 		return;
 	}
 
-	hash_lock_hold_t hlh = hash_lock_hold_init();
-	hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
+	hash_lock_hold_t hlh = hash_lock_hold_init_with(HDR_LOCK(hdr));
 	hash_lock_hold_enter(&hlh);
 
 	if (hdr->b_l1hdr.b_state == arc_anon || HDR_EMPTY(hdr)) {
@@ -5704,7 +5711,7 @@ arc_read_done(zio_t *zio)
 	cv_broadcast(&hdr->b_l1hdr.b_cv);
 
 	if (hlh.hlh_hash_lock != NULL) {
-		hash_lock_hold_enter(&hlh);
+		hash_lock_hold_exit(&hlh);
 	} else {
 		/*
 		 * This block was freed while we waited for the read to
@@ -5784,6 +5791,7 @@ arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp, arc_read_done_func_t *done,
 	    BPE_GET_ETYPE(bp) == BP_EMBEDDED_TYPE_DATA);
 
 top:
+	hash_lock_hold_clear(&hlh);
 	if (!BP_IS_EMBEDDED(bp)) {
 		/*
 		 * Embedded BP's have no DVA and require no I/O to "read".
@@ -5963,7 +5971,6 @@ top:
 			if (exists != NULL) {
 				/* somebody beat us to the hash insert */
 				hash_lock_hold_exit(&hlh);
-				hash_lock_hold_clear(&hlh);
 				buf_discard_identity(hdr);
 				arc_hdr_destroy(hdr);
 				goto top; /* restart the IO request */
@@ -6337,8 +6344,7 @@ arc_release(arc_buf_t *buf, void *tag)
 		return;
 	}
 
-	hash_lock_hold_t hlh = hash_lock_hold_init();
-	hash_lock_hold_select(&hlh, HDR_LOCK(hdr));
+	hash_lock_hold_t hlh = hash_lock_hold_init_with(HDR_LOCK(hdr));
 	hash_lock_hold_enter(&hlh);
 
 	/*
