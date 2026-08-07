@@ -28,6 +28,7 @@
  * Copyright (c) 2020, George Amanakis. All rights reserved.
  * Copyright (c) 2020, The FreeBSD Foundation [1]
  * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
+ * Copyright 2026 Oxide Computer Company
  *
  * [1] Portions of this software were developed by Allan Jude
  *     under sponsorship from the FreeBSD Foundation.
