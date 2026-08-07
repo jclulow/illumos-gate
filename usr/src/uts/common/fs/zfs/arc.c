@@ -842,6 +842,7 @@ hash_lock_held(hash_lock_hold_t *hlh)
 static void
 hash_lock_pushpage_enable(hash_lock_hold_t *hlh)
 {
+#ifdef _KERNEL
 	/*
 	 * Not all ARC operations are part of the machinery reponsible for
 	 * evacuation of memory pages to disk, and some ARC operations retain
@@ -863,16 +864,19 @@ hash_lock_pushpage_enable(hash_lock_hold_t *hlh)
 		curthread->t_flag |= T_PUSHPAGE;
 		hlh->hlh_set_pushpage = B_TRUE;
 	}
+#endif
 }
 
 static void
 hash_lock_pushpage_disable(hash_lock_hold_t *hlh)
 {
+#ifdef _KERNEL
 	if (hlh->hlh_set_pushpage) {
 		VERIFY(curthread->t_flag & T_PUSHPAGE);
 		curthread->t_flag &= ~T_PUSHPAGE;
 		hlh->hlh_set_pushpage = B_FALSE;
 	}
+#endif
 }
 
 /*
@@ -885,7 +889,7 @@ static void
 hash_lock_hold_select(hash_lock_hold_t *hlh, kmutex_t *hash_lock)
 {
 	VERIFY3P(hlh->hlh_hash_lock, ==, NULL);
-	VERIFY(MUTEX_HELD(hash_lock));
+	VERIFY(!MUTEX_HELD(hash_lock));
 	hlh->hlh_hash_lock = hash_lock;
 
 	hash_lock_pushpage_enable(hlh);
@@ -3887,7 +3891,7 @@ arc_buf_destroy(arc_buf_t *buf, void *tag)
 
 	ASSERT3P(hdr, ==, buf->b_hdr);
 	ASSERT(hdr->b_l1hdr.b_bufcnt > 0);
-	ASSERT3P(hlh->hlh_hash_lock, ==, HDR_LOCK(hdr));
+	ASSERT3P(hlh.hlh_hash_lock, ==, HDR_LOCK(hdr));
 	ASSERT3P(hdr->b_l1hdr.b_state, !=, arc_anon);
 	ASSERT3P(buf->b_data, !=, NULL);
 
@@ -4103,7 +4107,7 @@ arc_evict_state_impl(multilist_t *ml, int idx, arc_buf_hdr_t *marker,
 		 * below (e.g. if the code changed such that we called
 		 * this function with a hash lock held).
 		 */
-		ASSERT(!MUTEX_HELD(hlh->hlh_hash_lock));
+		ASSERT(!MUTEX_HELD(hlh.hlh_hash_lock));
 
 		if (hash_lock_hold_tryenter(&hlh)) {
 			uint64_t evicted = arc_evict_hdr(hdr, &hlh);
